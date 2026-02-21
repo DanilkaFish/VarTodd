@@ -6,8 +6,7 @@ project(vartodd
     DESCRIPTION "Implementation of FastTodd algorithm for finding minimal rank of tensor decomposition"
 )
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
-option(BUILD_TESTS "Build tests" OFF)
-option(BUILD_BENCHMARKS "Build benchmarks" ON)
+option(BUILD_DEMONSTRATION "Build benchmarks" ON)
 option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
 option(BUILD_EXAMPLES "Build examples" ON)
 
@@ -35,25 +34,20 @@ else()
 endif()
 
 # Output directories
-# set(EXTERNAL_DEPS_DIR "${CMAKE_SOURCE_DIR}/external_deps" CACHE PATH "Directory for external dependencies")
 set(EXTERNAL_DEPS_DIR "${CMAKE_SOURCE_DIR}/build/_deps/" CACHE PATH "Directory for external dependencies")
-# file(MAKE_DIRECTORY ${EXTERNAL_DEPS_DIR})
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_PYTHON_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/gf2lib)
+set(CMAKE_PYTHON_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/vartoddlib)
 
 # Include helper modules
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/cmake)
 
 # Add subdirectories
 add_subdirectory(external)      # Dependencies first
 add_subdirectory(src)           # Main library
 
-if(BUILD_TESTS)
-    add_subdirectory(tests)
-endif()
 
-if(BUILD_BENCHMARKS)
-    add_subdirectory(benchmarks)
+if(BUILD_DEMONSTRATION)
+    add_subdirectory(demos)
 endif()
