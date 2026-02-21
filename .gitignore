@@ -2,7 +2,7 @@
 *.so
 *.pyi
 
-build*
+*build*
 
 # Configs
 *.nix

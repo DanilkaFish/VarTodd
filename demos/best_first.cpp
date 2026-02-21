@@ -10,7 +10,7 @@
 #include "nullspace.hpp"
 #include "random.hpp"
 
-namespace gf2 {
+namespace todd {
 
 	// Simple Node equivalent to the Python Node for this search
 	struct Node {

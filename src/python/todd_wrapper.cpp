@@ -22,7 +22,7 @@
 #endif
 
 namespace py = pybind11;
-using namespace gf2;
+using namespace todd;
 
 template <class T> static std::string to_string_stream(const T& x) {
 	std::ostringstream oss;
@@ -71,7 +71,7 @@ struct PyToddGenerator {
 	const Matrix& P() const noexcept { return data->P(); }
 };
 
-PYBIND11_MODULE(gf2lib, m) {
+PYBIND11_MODULE(pyvartodd, m) {
 
 	py::class_<Row>(m, "BitVec")
 		.def(py::init<std::size_t>(), py::arg("n"))
@@ -304,7 +304,7 @@ PYBIND11_MODULE(gf2lib, m) {
 
 	m.def(
 		"gauss_elimination_inplace",
-		[](Matrix& A, Matrix& aug, pivot_map& pivots) { gf2::gauss_elimination_inplace(A, aug, pivots); },
+		[](Matrix& A, Matrix& aug, pivot_map& pivots) { gauss_elimination_inplace(A, aug, pivots); },
 		py::arg("A"),
 		py::arg("aug"),
 		py::arg("pivots") = pivot_map());
@@ -542,43 +542,43 @@ PYBIND11_MODULE(gf2lib, m) {
     py::class_<PolicyConfig>(m, "PolicyConfig")
         .def(py::init<>())
         .def(py::init<
-            Int,
-            Int,
-            Int,
-            std::string,
-            float,
-            float,
-            Int,
-            Int,
-            Int,
-            Int,
-            Int,
-            float,
 			ExplorationScore,
 			FinalizationScore,
+            std::string,
+			float,
+            float,
+            float,
             Int,
             Int,
-            bool,
-            Int
+            Int,
+            Int,
+            Int,
+            Int,
+            size_t,
+            Int,
+            Int,
+            Int,
+            Int,
+            bool
         >(),
-            py::arg("num_samples") = 64,
-            py::arg("num_candidates") = 1,
-            py::arg("top_pool") = 1,
+			py::arg("ExplorationScore") = ExplorationScore(),
+            py::arg("FinalizationScore") = FinalizationScore(),
             py::arg("selection") = "greedy",
             py::arg("temperature") = 0.0f,
             py::arg("non_improving_prob") = 0.0f,
+            py::arg("max_z_to_research_fraction") = 1.0f,
+            py::arg("num_samples") = 64,
+            py::arg("num_candidates") = 1,
+            py::arg("top_pool") = 1,
             py::arg("max_from_single_ns") = 10,
             py::arg("min_reduction") = 0,
             py::arg("max_reduction") = k_single_sentinel<Int>(),
             py::arg("max_z_to_research") = 1<<30,
             py::arg("min_pool_size") = 1,
-            py::arg("max_z_to_research_fraction") = 1.0f,
-            py::arg("ExplorationScore") = ExplorationScore(),
-            py::arg("FinalizationScore") = FinalizationScore(),
             py::arg("max_tohpe") = 1,
             py::arg("threads") = 1,
-            py::arg("try_only_tohpe") = true,
-            py::arg("tohpe_sample") = 1
+            py::arg("tohpe_sample") = 1,
+            py::arg("try_only_tohpe") = true
         )
         .def_readwrite("num_samples", &PolicyConfig::num_samples)
         .def_readwrite("num_candidates", &PolicyConfig::num_candidates)

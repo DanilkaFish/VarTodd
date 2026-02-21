@@ -1,19 +1,12 @@
-BasedOnStyle: LLVM
+# .clang-format
+BasedOnStyle: LLVM  # or Google, Chromium, Mozilla, WebKit
+ColumnLimit: 120
 IndentWidth: 4
 TabWidth: 4
-UseTab: Always
-ColumnLimit: 150
-BreakBeforeBraces: Attach
-AllowShortFunctionsOnASingleLine: true
+AlignAfterOpenBracket: Align
+
+AlignTrailingComments: true
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+PenaltyExcessCharacter: 120
 PointerAlignment: Left
-AlignConsecutiveAssignments: false
-AlignConsecutiveDeclarations: false
-SortIncludes: true
-IncludeBlocks: Regroup
-NamespaceIndentation: All
-AccessModifierOffset: -2
-SpaceBeforeParens: ControlStatements
-BinPackArguments: false
-BinPackParameters: false
-ReflowComments: true
-IncludeIsMainRegex: '.*'

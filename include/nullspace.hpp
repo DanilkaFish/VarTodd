@@ -4,180 +4,150 @@
 #include "todd_index.hpp"
 #include "typedef.hpp"
 
-#include <ankerl/unordered_dense.h>
+// #include <ankerl/unordered_dense.h>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
 
-namespace gf2 {
+namespace todd {
 
-	struct CountWS {
-		std::vector<index_t> cnt;
-		std::vector<std::uint32_t> tag;
-		std::vector<std::uint32_t> used;
-		std::uint32_t epoch = 1;
-		bool parity;
-		void reset(std::size_t K) {
-			if (cnt.size() < K) {
-				cnt.resize(K);
-				tag.resize(K, 0);
-			}
-			++epoch;
-			if (epoch == 0) {
-				std::fill(tag.begin(), tag.end(), 0);
-				epoch = 1;
-			}
-			used.clear();
-		}
+struct CountWS {
+    std::vector<index_t> cnt;
+    std::vector<index_t> tag;
+    std::vector<index_t> used;
+    index_t              epoch = 1;
+    bool                 parity;
 
-		void add(std::uint32_t id, index_t delta) {
-			if (tag[id] != epoch) {
-				tag[id] = epoch;
-				cnt[id] = delta - parity;
-				used.push_back(id);
-			} else
-				cnt[id] += delta;
-		}
+    auto argmax_n(std::size_t n) const -> std::vector<index_t>;
+    auto argmax() const -> index_t;
+    void reset(std::size_t K);
+    void add(index_t id, index_t delta);
+};
 
-		std::uint32_t argmax() const {
-			std::uint32_t best = used[0];
-			for (auto id : used)
-				if (cnt[id] > cnt[best])
-					best = id;
-			return best;
-		}
+// object with precacluated data used to build nullspaces and new ranks
+class MatrixWithData {
+  public:
+    MatrixWithData(Matrix&& P);
 
-		std::vector<std::uint32_t> argmax_n(std::size_t n) const {
-			if (used.empty()) return {};
-			
-			std::vector<std::uint32_t> candidates(used.begin(), used.end());
-			n = std::min(n, candidates.size());
-			
-			std::nth_element(candidates.begin(), candidates.begin() + n, candidates.end(),
-				[this](auto a, auto b) { return cnt[a] > cnt[b]; });
-			
-			candidates.resize(n);
-			return candidates;
-		}
-	};
+    const ToddIndex& index() const noexcept { return index_; }
+    const Matrix&    P() const noexcept { return P_; }
+    const Matrix&    tohpe_basis() const noexcept { return tohpe_basis_; }
 
-	class MatrixWithData {
-	  public:
-		// explicit MatrixWithData(const Matrix& P);
-		MatrixWithData(Matrix&& P);
+    // keeps linear independent columns of (L|Y) system
+    struct FullToddData {
+        Matrix                     LY_nonpivot;
+        std::vector<std::uint64_t> offset;
+        std::vector<std::int64_t>  pivot_row_of_col;
+        std::vector<std::int64_t>  nonpivot_index;
+        std::vector<bool>          is_zero;
+        index_t                    nonpiv_cols{};
+    };
 
-		const Matrix& P() const noexcept { return P_; }
-		const ToddIndex& index() const noexcept { return index_; }
+    const FullToddData& full_todd() const noexcept { return full_todd_; }
 
-		const Matrix& tohpe_basis() const noexcept { return tohpe_basis_; }
+  private:
+    Matrix       P_;
+    Matrix       tohpe_basis_;
+    ToddIndex    index_;
+    FullToddData full_todd_;
+};
 
-		struct FullToddData {
-			Matrix LY_nonpivot;
-			std::vector<std::uint64_t> offset;
-			std::vector<std::int64_t> pivot_row_of_col;
-			std::vector<std::int64_t> nonpivot_index;
-			std::vector<bool> is_zero;
-			index_t nonpiv_cols{};
-		};
+// base object for prediction of rank divergence
+class Witness {
+  public:
+    virtual ~Witness()                          = default;
+    virtual auto get_Y() const -> const Matrix& = 0;
 
-		const FullToddData& full_todd() const noexcept { return full_todd_; }
+    auto vector() const -> const auto& { return z_; }
+    auto rank_divergence(RowCView y) const -> int;
+    auto get_special() const -> int { return special_; }
+    auto get_pairs() const -> const std::vector<std::pair<int, int>>& { return pairs_; }
 
-	  private:
-		Matrix P_;
-		ToddIndex index_;
+  protected:
+    explicit Witness(std::shared_ptr<MatrixWithData> M, Row z);
+    std::shared_ptr<MatrixWithData>  M_;
+    std::vector<std::pair<int, int>> pairs_;
 
-		Matrix tohpe_basis_;
-		FullToddData full_todd_;
-	};
+    Row z_;
+    int special_ = -1;
+};
 
-	class Witness {
-	  public:
-		virtual ~Witness() = default;
-		const auto vector() const { return z_; }
-		int rank_divergence(RowCView y) const;
-		int get_special() const { return special_; }
-		const std::vector<std::pair<int, int>>& get_pairs() const { return pairs_; }
-		virtual const Matrix& get_Y() const = 0;
+class TohpeWitness final : public Witness {
+  public:
+    TohpeWitness(std::shared_ptr<MatrixWithData> M, Row z);
+    const Matrix& get_Y() const override { return M_->tohpe_basis(); }
+};
 
-	  protected:
-		explicit Witness(std::shared_ptr<MatrixWithData> M, Row z);
-		std::shared_ptr<MatrixWithData> M_;
-		Row z_;
-		int special_ = -1;
-		std::vector<std::pair<int, int>> pairs_;
-	};
+class ToddWitness final : public Witness {
+  public:
+    ToddWitness(std::shared_ptr<MatrixWithData> M, Row z, Matrix&& Y);
+    const Matrix& get_Y() const override { return Y_; }
 
-	class TohpeWitness final : public Witness {
-	  public:
-		TohpeWitness(std::shared_ptr<MatrixWithData> M, Row z);
-		const Matrix& get_Y() const override { return M_->tohpe_basis(); }
-	};
+  private:
+    Matrix Y_;
+};
 
-	class ToddWitness final : public Witness {
-	  public:
-		ToddWitness(std::shared_ptr<MatrixWithData> M, Row z, Matrix&& Y);
-		const Matrix& get_Y() const override { return Y_; }
+class NullSpace {
+  public:
+    NullSpace(std::shared_ptr<MatrixWithData> M, std::unique_ptr<Witness>&& w) : M_{M}, w_{std::move(w)} {}
 
-	  private:
-		Matrix Y_;
-	};
+    Matrix        apply(RowCView y) const;
+    int           rank_divergence(RowCView y) const { return w_->rank_divergence(y); }
+    Row           linear_combination(RowCView coefs) const;
+    const Matrix& basis() const noexcept { return w_->get_Y(); }
+    const Matrix& P() const noexcept { return M_->P(); }
+    const auto    vector() const noexcept { return w_->vector(); }
 
-	class NullSpace {
-	  public:
-		NullSpace(std::shared_ptr<MatrixWithData> M, std::unique_ptr<Witness>&& w) : M_{M}, w_{std::move(w)} {}
+    NullSpace(NullSpace&&) noexcept = default;
+    NullSpace& operator=(NullSpace&& other) noexcept {
+        if (this != &other) {
+            w_ = std::move(other.w_);
+        }
+        return *this;
+    }
 
-		[[nodiscard]] Matrix apply(RowCView y) const;
-		[[nodiscard]] int rank_divergence(RowCView y) const { return w_->rank_divergence(y); }
-		[[nodiscard]] Row linear_combination(RowCView coefs) const;
-		[[nodiscard]] const Matrix& basis() const noexcept { return w_->get_Y(); }
-		[[nodiscard]] const Matrix& P() const noexcept { return M_->P(); }
-		[[nodiscard]] const auto vector() const noexcept { return w_->vector(); }
+    NullSpace(const NullSpace&)            = delete;
+    NullSpace& operator=(const NullSpace&) = delete;
 
-		NullSpace(NullSpace&&) noexcept = default;
-		NullSpace& operator=(NullSpace&& other) noexcept {
-			if (this != &other) {
-				w_ = std::move(other.w_);
-			}
-			return *this;
-		}
+  private:
+    std::shared_ptr<MatrixWithData> M_;
+    std::unique_ptr<Witness>        w_;
+};
 
-		NullSpace(const NullSpace&) = delete;
-		NullSpace& operator=(const NullSpace&) = delete;
+class TohpeGenerator {
+  public:
+    TohpeGenerator(std::shared_ptr<MatrixWithData> M);
+    auto best_z_n(RowCView y, index_t num_samples) const -> std::vector<std::pair<Row, index_t>>;
 
-	  private:
-		std::shared_ptr<MatrixWithData> M_;
-		std::unique_ptr<Witness> w_;
-	};
+    auto make(RowCView z) const -> NullSpace;
+    auto make(index_t row) const -> NullSpace;
+    auto make(index_t row1, index_t row2) const -> NullSpace;
+    Row  best_z(RowCView y) const;
 
-	class TohpeGenerator {
-	  public:
-		TohpeGenerator(std::shared_ptr<MatrixWithData> M);
-		std::vector<std::pair<Row, index_t>> best_z_n(RowCView y, index_t num_samples) const;
-		[[nodiscard]] NullSpace make(RowCView z) const;
-		[[nodiscard]] NullSpace make(index_t row) const;
-		[[nodiscard]] NullSpace make(index_t row1, index_t row2) const;
-		[[nodiscard]] const Matrix& P() const noexcept { return M_->P(); }
-		[[nodiscard]] Row best_z(RowCView y) const;
+    const Matrix& P() const noexcept { return M_->P(); }
 
-	  private:
-		std::shared_ptr<MatrixWithData> M_;
-		mutable CountWS ws_;
-	};
+  private:
+    std::shared_ptr<MatrixWithData> M_;
 
-	class FullToddGenerator {
-	  public:
-		FullToddGenerator(std::shared_ptr<MatrixWithData> M);
-		[[nodiscard]] NullSpace make(RowCView z) const;
-		[[nodiscard]] NullSpace make(index_t row) const;
-		[[nodiscard]] NullSpace make(index_t row1, index_t row2) const;
-		[[nodiscard]] const Matrix& P() const noexcept { return M_->P(); }
-		Matrix full_todd_kernel(RowCView z) const;
+    mutable CountWS ws_;
+};
 
-	  private:
-		std::shared_ptr<MatrixWithData> M_;
-		mutable Matrix R_and_AUG_nonpivot_scratch_;
-	};
+class FullToddGenerator {
+  public:
+    FullToddGenerator(std::shared_ptr<MatrixWithData> M);
+    auto make(RowCView z) const -> NullSpace;
+    auto make(index_t row) const -> NullSpace;
+    auto make(index_t row1, index_t row2) const -> NullSpace;
+    auto full_todd_kernel(RowCView z) const -> Matrix;
 
-} // namespace gf2
+    const Matrix& P() const noexcept { return M_->P(); }
+
+  private:
+    std::shared_ptr<MatrixWithData> M_;
+
+    mutable Matrix R_and_AUG_nonpivot_scratch_;
+};
+
+} // namespace todd

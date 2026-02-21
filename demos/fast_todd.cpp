@@ -5,10 +5,10 @@
 #include <iostream>
 #include <memory>
 
-using namespace gf2;
+using namespace todd;
 
 int main() {
-	auto name = "../npy_corrected/gf2^16_mult.qc.matrix.npy";
+	auto name = "../npy_corrected/todd^16_mult.qc.matrix.npy";
 	// auto name = "/home/danilkaf/projects/GF2LIB/npy_corrected/mod_adder_1024.qc.matrix.npy";
 	auto init_matrix = Matrix::from_npy(name);
 	auto finit_matrix = init_matrix;
