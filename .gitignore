@@ -1,0 +1,11 @@
+# Libs
+*.so
+*.pyi
+
+build*
+
+# Configs
+*.nix
+*.envrc
+*.vscode
+*.direnv*
