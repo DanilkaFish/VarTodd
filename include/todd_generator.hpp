@@ -196,8 +196,8 @@ struct PolicyConfig {
     Int    min_pool_size              = 1;
     Int    max_tohpe                  = 1;
     Int    threads                    = 1;
-    bool   try_only_tohpe             = true;
     Int    tohpe_sample               = 1;
+    bool   try_only_tohpe             = true;
 };
 
 auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyConfig config, index_t seed = 1,

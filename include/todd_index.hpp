@@ -23,9 +23,9 @@ class SumEntry {
   public:
     SumEntry(index_t a, index_t b) : a{a}, b{b} {}
     SumEntry(index_t a) : a{a}, b{k_single_sentinel<index_t>()} {}
-    bool is_pair() { return b != k_single_sentinel<index_t>(); }
+    bool is_pair() const { return b != k_single_sentinel<index_t>(); }
 
-//   private:
+    //   private:
     index_t a;
     index_t b;
 };

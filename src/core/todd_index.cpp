@@ -73,7 +73,8 @@ void ToddIndex::build_sum_buckets_() {
                 tmp[(std::size_t)k] = ri.data()[k] ^ rj.data()[k];
             if (nb)
                 tmp.back() &= tail_mask_bits(n_bits_);
-            RowCView            sumv(tmp.data(), n_bits_, nb);
+            RowCView sumv(tmp.data(), n_bits_, nb);
+
             const std::uint32_t id = get_bucket_id_(hk, sumv);
             ++buckets_[(std::size_t)id].len;
             pair_id_[pair_index(i, j, n)] = id;
@@ -89,7 +90,7 @@ void ToddIndex::build_sum_buckets_() {
     for (index_t i = 0; i < n; ++i) {
         const std::uint32_t id                       = single_id_[(std::size_t)i];
         auto&               b                        = buckets_[(std::size_t)id];
-        sum_entries_[(std::size_t)(b.off + b.cur++)] = SumEntry{i, k_single_sentinel<index_t>()};
+        sum_entries_[(std::size_t)(b.off + b.cur++)] = SumEntry{i};
     }
     for (index_t i = 0; i < n; ++i) {
         for (index_t j = i + 1; j < n; ++j) {

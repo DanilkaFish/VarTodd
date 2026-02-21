@@ -153,7 +153,7 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move
     for (index_t t = 0; t < len; ++t) {
         const index_t a = ptr[t].a;
         const index_t b = ptr[t].b;
-        if (b != k_single_sentinel<decltype(b)>())
+        if (ptr->is_pair())
             continue;
         if (P[a] == z_) {
             special_ = (int)a;
@@ -167,7 +167,7 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move
     for (index_t t = 0; t < len; ++t) {
         const index_t a = ptr[t].a;
         const index_t b = ptr[t].b;
-        if (b == k_single_sentinel<decltype(b)>())
+        if (!ptr->is_pair())
             continue;
         if (is_used(a) || is_used(b))
             continue;
