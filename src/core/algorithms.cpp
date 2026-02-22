@@ -350,15 +350,6 @@ std::ostream& operator<<(std::ostream& os, const pivot_map& m) {
     return os << '}';
 }
 
-// std::ostream& operator<<(std::ostream& os, const Matrix& mat) {
-// 	os << "[" << std::endl;
-// 	for (index_t i=0; i < mat.cols(); i++) {
-// 		os << mat[i];
-// 		os << "\n";
-// 	}
-// 	return os << "]";
-// }
-
 index_t PyRNG::rand_int(index_t low, index_t high) {
     std::uniform_int_distribution<index_t> dist(low, high);
     return dist(rng);
@@ -401,14 +392,7 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
         remap[t]    = y;
         out.push_back(mask_to_bv(dim, x));
     }
-    // for (index_t i = 0; i < dim; i++) {
-    // 	auto itT = remap.find(1 << i);
-    // 	if (itT == remap.end()) {
-    // 		Row v(dim);
-    // 		v.set(i);
-    // 		out.push_back(v);
-    // 	}
-    // }
+
     return out;
     // if (j != k_single_sentinel<decltype(j)>()) {
     // 	std::vector<index_t> i11;
@@ -507,12 +491,12 @@ std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_
     if (dim > 15) {
         out.reserve(num_samples);
         std::vector<Row> bvs;
-        for (index_t i = 0; i < dim; i++) {
-            Row v(dim);
-            v.set(i);
-            bvs.push_back(v);
-        }
-        for (index_t i = 0; i + dim < num_samples; i++) {
+        // for (index_t i = 0; i < dim; i++) {
+        //     Row v(dim);
+        //     v.set(i);
+        //     bvs.push_back(v);
+        // }
+        for (index_t i = 0; i < num_samples; i++) {
             bvs.push_back(sample_bitvector(dim));
         }
         return bvs;
