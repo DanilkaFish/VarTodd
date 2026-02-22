@@ -2,8 +2,6 @@
 #include "typedef.hpp"
 #include <algorithm>
 #include <bitset>
-#include <boost/dynamic_bitset.hpp>
-#include <boost/functional/hash.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -308,6 +306,7 @@ class Matrix {
     static Matrix identity(index_t n);
     static Matrix from_rows(const std::vector<Row>& rows);
     static Matrix from_npy(const std::string& npy_path);
+	void save_npy(const std::string& npy_path) const;
 
     Matrix& operator=(const Matrix&) = default;
 

@@ -137,6 +137,39 @@ Matrix Matrix::from_npy(const std::string& npy_path) {
     return mat;
 }
 
+void Matrix::save_npy(const std::string& npy_path) const {
+    // Get matrix dimensions
+    const index_t n_rows = this->rows();
+    const index_t n_cols = this->cols();
+    
+    // Create a buffer for the uint8 data (row-major layout)
+    std::vector<std::uint8_t> data(static_cast<std::size_t>(n_rows * n_cols), 0);
+    
+    // Fill the buffer with matrix data (assuming row-major layout)
+    for (index_t i = 0; i < n_rows; ++i) {
+        const auto& row = (*this)[i];
+        for (index_t j = 0; j < n_cols; ++j) {
+            if (row.test(j)) {
+                // Convert to column-major indexing if that's what from_npy expects
+                // data[j * n_rows + i] = 1;
+                
+                // Or use row-major if that's your preferred format
+                data[static_cast<std::size_t>(i * n_cols + j)] = 1;
+            }
+        }
+    }
+    
+    // Save as .npy file with shape [n_cols, n_rows] to match from_npy's expected layout
+    std::vector<std::size_t> shape = {static_cast<std::size_t>(n_cols), 
+                                      static_cast<std::size_t>(n_rows)};
+    
+    // If you want row-major storage in the file, use shape [n_rows, n_cols] instead
+    // std::vector<std::size_t> shape = {static_cast<std::size_t>(n_rows), 
+    //                                   static_cast<std::size_t>(n_cols)};
+    
+    cnpypp::npy_save(npy_path, data.data(), shape, "w");
+}
+
 void Matrix::reset() { std::ranges::fill(data_, 0); }
 
 RowCView Matrix::operator[](index_t i) const noexcept {
