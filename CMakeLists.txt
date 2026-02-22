@@ -38,13 +38,13 @@ set(EXTERNAL_DEPS_DIR "${CMAKE_SOURCE_DIR}/build/_deps/" CACHE PATH "Directory f
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_PYTHON_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/vartoddlib)
+set(CMAKE_PYTHON_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/pyvartodd)
 
 # Include helper modules
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/cmake)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/src/external/cmake)
 
 # Add subdirectories
-add_subdirectory(external)      # Dependencies first
+add_subdirectory(src/external)      # Dependencies first
 add_subdirectory(src)           # Main library
 
 
