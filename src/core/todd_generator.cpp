@@ -234,13 +234,15 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     auto       min_pool           = std::max(1, config.min_pool_size);
     auto       escore             = config.escore;
     auto       fscore             = config.fscore;
+
     auto       max_z_to_research_fraction = config.max_z_to_research_fraction;
-    auto       max_z_to_research          = config.max_z_to_research;
+    auto       max_z_to_research          = index_t(std::max(0,config.max_z_to_research));
     auto       max_tohpe                  = config.max_tohpe;
     auto       max_from_single_ns         = config.max_from_single_ns;
     auto       tohpe_sample               = config.tohpe_sample;
-    const auto threads                    = config.threads;
     auto       try_only_tohpe             = config.try_only_tohpe;
+    
+    const auto threads                    = config.threads;
 #ifdef __OPENMP
     if (threads > 0)
         omp_set_num_threads(threads);
@@ -282,8 +284,9 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
 
             PyRNG local_rng(base_seed);
             auto  beyond        = [&](const auto red) { return (red < min_reduction || red > max_reduction); };
+            // TODO
             auto  accept_anyway = [&](auto red) {
-                return red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
+                return false && red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
             };
 
             auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples);
@@ -381,8 +384,9 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
 
                     PyRNG local_rng(base_seed + k + l);
                     auto  beyond        = [&](const auto red) { return (red < min_reduction || red > max_reduction); };
+                    // TODO
                     auto  accept_anyway = [&](auto red) {
-                        return red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
+                        return false && red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
                     };
 
                     auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples);
@@ -399,12 +403,13 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
 
                         if (beyond(red)) {
                             if (accept_anyway(red) || (red > 0)) {
-                                global_stats.accepted_non_improving++;
+                                stats.accepted_non_improving++;
                             } else {
-                                global_stats.rejected++;
+                                stats.rejected++;
                                 continue;
                             }
                         }
+                        stats.accepted++;
                         stats.nonzero++;
                         Candidate c(0, (Int)red, k, l, std::move(vec), (Int)dim, (Int)bucket_size, ns);
                         auto [score, tohpe] =
@@ -441,6 +446,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                     global_stats.mean_reduction =
                         (global_stats.mean_reduction * gnz + stats.mean_reduction * lnz) / (gnz + lnz);
                     global_stats.accepted_non_improving += stats.accepted_non_improving;
+                    global_stats.rejected += stats.rejected;
                     global_stats.accepted += stats.accepted;
                     global_stats.total += stats.total;
                     global_stats.nonzero += stats.nonzero;

@@ -370,7 +370,7 @@ PYBIND11_MODULE(pyvartodd, m) {
         });
     // ---------------- Result ----------------
     py::class_<ExplorationScore>(m, "ExplorationScore")
-        .def(py::init<float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0, py::arg("wbucket") = 1.0)
+        // .def(py::init<float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0, py::arg("wbucket") = 1.0)
         .def(py::init<float, float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
              py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0)
         .def("__repr__",
@@ -410,27 +410,27 @@ PYBIND11_MODULE(pyvartodd, m) {
              })
         .def(py::pickle([](const ExplorationScore& r) { return py::make_tuple(r.wred, r.wdim, r.wbucket, r.wvw); },
                         [](py::tuple t) {
-                            if (t.size() != 4 && t.size() != 3)
+                            if (t.size() != 4 )
                                 throw std::runtime_error("Invalid state for ExplorationScore!");
 
                             float wred    = t[0].cast<float>();
                             float wdim    = t[1].cast<float>();
                             float wbucket = t[2].cast<float>();
-                            float wvw     = (t.size() == 4) ? t[3].cast<float>() : 0.0f;
+                            float wvw = t[2].cast<float>();
 
                             return ExplorationScore(wred, wdim, wbucket, wvw);
                         }));
 
     py::class_<FinalizationScore>(m, "FinalizationScore")
-        .def(py::init<float, float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
-             py::arg("wbucket") = 1.0, py::arg("wtohpe") = 1.0)
+        // .def(py::init<float, float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
+        //      py::arg("wbucket") = 1.0, py::arg("wtohpe") = 1.0)
         .def(py::init<float, float, float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
              py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0, py::arg("wtohpe") = 1.0)
         .def("__repr__",
              [](const FinalizationScore& r) {
                  return "FinalizationScore(wdim=" + std::to_string(r.wdim) + "wbucket=" + std::to_string(r.wbucket) +
-                        "wred=" + std::to_string(r.wred) + "wtohpe=" + std::to_string(r.wtohpe_dim) +
-                        "wvw=" + std::to_string(r.wvw) + ")";
+                        "wred=" + std::to_string(r.wred) +  "wvw=" + std::to_string(r.wvw) + "wtohpe=" + std::to_string(r.wtohpe_dim) + ")" 
+                        ;
              })
         .def("__str__",
              [](const FinalizationScore& r) {
@@ -463,16 +463,16 @@ PYBIND11_MODULE(pyvartodd, m) {
         .def(py::pickle(
             [](const FinalizationScore& r) { return py::make_tuple(r.wred, r.wdim, r.wbucket, r.wtohpe_dim, r.wvw); },
             [](py::tuple t) {
-                if (t.size() != 4 && t.size() != 5)
+                if (t.size() != 5)
                     throw std::runtime_error("Invalid state for FinalizationScore!");
 
                 float wred    = t[0].cast<float>();
                 float wdim    = t[1].cast<float>();
                 float wbucket = t[2].cast<float>();
-                float wtohpe  = t[3].cast<float>();
-                float wvw     = (t.size() == 5) ? t[4].cast<float>() : 0.0f;
+                float wvw     = t[3].cast<float>();
+                float wtohpe  = t[4].cast<float>();
 
-                return FinalizationScore(wred, wdim, wbucket, wtohpe, wvw);
+                return FinalizationScore(wred, wdim, wbucket, wvw, wtohpe);
             }));
 
     // ---------------- Result ----------------
@@ -492,14 +492,25 @@ PYBIND11_MODULE(pyvartodd, m) {
     py::class_<PolicyConfig>(m, "PolicyConfig")
         .def(py::init<>())
         .def(py::init<ExplorationScore, FinalizationScore, std::string, float, float, float, Int, Int, Int, Int, Int,
-                      Int, size_t, Int, Int, Int, Int, bool>(),
-             py::arg("ExplorationScore") = ExplorationScore(), py::arg("FinalizationScore") = FinalizationScore(),
-             py::arg("selection") = "greedy", py::arg("temperature") = 0.0f, py::arg("non_improving_prob") = 0.0f,
-             py::arg("max_z_to_research_fraction") = 1.0f, py::arg("num_samples") = 64, py::arg("num_candidates") = 1,
-             py::arg("top_pool") = 1, py::arg("max_from_single_ns") = 10, py::arg("min_reduction") = 0,
-             py::arg("max_reduction") = k_single_sentinel<Int>(), py::arg("max_z_to_research") = 1 << 30,
-             py::arg("min_pool_size") = 1, py::arg("max_tohpe") = 1, py::arg("threads") = 1,
-             py::arg("tohpe_sample") = 1, py::arg("try_only_tohpe") = true)
+                      Int, Int, Int, Int, Int, Int, bool>(),
+             py::arg("ExplorationScore") = ExplorationScore(), 
+             py::arg("FinalizationScore") = FinalizationScore(),
+             py::arg("selection") = "greedy",
+             py::arg("temperature") = 0.0f, 
+             py::arg("non_improving_prob") = 0.0f,
+             py::arg("max_z_to_research_fraction") = 1.0f, 
+             py::arg("num_samples") = 64, 
+             py::arg("num_candidates") = 1,
+             py::arg("top_pool") = 1, 
+             py::arg("max_from_single_ns") = 10, 
+             py::arg("min_reduction") = 0,
+             py::arg("max_reduction") = k_single_sentinel<Int>(), 
+             py::arg("max_z_to_research") = 1 << 30,
+             py::arg("min_pool_size") = 1, 
+             py::arg("max_tohpe") = 1, 
+             py::arg("threads") = 1,
+             py::arg("tohpe_sample") = 1, 
+             py::arg("try_only_tohpe") = true)
         .def_readwrite("num_samples", &PolicyConfig::num_samples)
         .def_readwrite("num_candidates", &PolicyConfig::num_candidates)
         .def_readwrite("top_pool", &PolicyConfig::top_pool)

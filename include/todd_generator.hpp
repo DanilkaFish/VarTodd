@@ -140,7 +140,6 @@ struct ExplorationScore {
     ExplorationScore(index_t bn, index_t wvwn, index_t dn) : bn{bn}, wvwn{wvwn}, dn{dn} {};
     ExplorationScore(float wred, float wdim, float wbucket, float wvw)
         : wred{wred}, wdim{wdim}, wbucket{wbucket}, wvw{wvw} {}
-    ExplorationScore(float wred, float wdim, float wbucket) : wred{wred}, wdim{wdim}, wbucket{wbucket}, wvw{0} {}
 
     auto operator()(Candidate& cand) {
         cand.pool_score = cand.reduction / float(bn) / 2 * wred + cand.basis_dim / float(dn) * wdim +
@@ -161,13 +160,11 @@ struct FinalizationScore {
 
     explicit FinalizationScore() = default;
     FinalizationScore(index_t bn, index_t wvwn, index_t dn) : bn{bn}, wvwn{wvwn}, dn{dn} {};
-    FinalizationScore(float wred, float wdim, float wbucket, float wtohpe_dim)
-        : wred{wred}, wtohpe_dim{wtohpe_dim}, wdim{wdim}, wbucket{wbucket}, wvw{0} {}
-    FinalizationScore(float wred, float wdim, float wbucket, float wtohpe_dim, float wvw)
+    FinalizationScore(float wred, float wdim, float wbucket, float wvw, float wtohpe_dim)
         : wred{wred}, wtohpe_dim{wtohpe_dim}, wdim{wdim}, wbucket{wbucket}, wvw{wvw} {}
     auto operator()(Candidate& cand) {
-        cand.pool_score = wred * cand.reduction / bn / 2 + wdim * cand.basis_dim / dn +
-                          wbucket * cand.bucket_size / bn + wvw * cand.vec.count() / wvwn;
+        cand.pool_score = wred * cand.reduction / float(bn) / 2 + wdim * cand.basis_dim / float(dn) +
+                          wbucket * cand.bucket_size / float(bn) + wvw * cand.vec.count() / float(wvwn);
         if (wtohpe_dim != 0) {
             auto next_mat  = cand.nsptr->apply(cand.vec);
             auto tohpe_dim = get_tohpe_basis(next_mat).rows();
@@ -180,7 +177,7 @@ struct FinalizationScore {
 
 struct PolicyConfig {
     ExplorationScore  escore{1.0, 0., 0., 0.};
-    FinalizationScore fscore{1.0, 0., 0., 0., 0.};
+    FinalizationScore fscore{1.0, 0., 0., 0., 0.0};
     std::string       selection = "softmax";
 
     float  temperature                = 0.0f;
@@ -192,7 +189,7 @@ struct PolicyConfig {
     Int    max_from_single_ns         = 100;
     Int    min_reduction              = 0;
     Int    max_reduction              = k_single_sentinel<Int>();
-    size_t max_z_to_research          = 1 << 20;
+    Int max_z_to_research          = 1 << 20;
     Int    min_pool_size              = 1;
     Int    max_tohpe                  = 1;
     Int    threads                    = 1;

@@ -41,7 +41,7 @@ option(WITH_PY_STUBS
     ${WITH_PY_STUBS_DEFAULT})
 
 if (WITH_PY_STUBS)
-    include(${CMAKE_SOURCE_DIR}/external/cmake/Pybind11Stubgen.cmake)
+    include(${CMAKE_SOURCE_DIR}/src/external/cmake/Pybind11Stubgen.cmake)
     message(STATUS "Stubgen for ${PY_BUILD_CMAKE_IMPORT_NAME}")
     # if (USE_LOCAL_BUILDING)
         if (NOT DEFINED Python3_EXECUTABLE)
