@@ -14,6 +14,7 @@ int main(int argc, char* argv[]) {
     desc.add_options()
         ("help,h", "produce help message")
         ("file,f", po::value<std::string>()->required(), "input matrix file")
+        ("output_file,o", po::value<std::string>()->default_value(""), "output matrix file")
         ("num-samples,ns", po::value<int>()->default_value(40), "number of samples")
         ("max-z,mz", po::value<int>()->default_value(10000), "max Z to research")
         ("max-z-fraction", po::value<double>()->default_value(1.0), "max Z fraction")
@@ -72,7 +73,10 @@ int main(int argc, char* argv[]) {
 		finit_matrix = result.states.front();
 		result = policy_iteration_impl(std::make_shared<MatrixWithData>(MatrixWithData(std::move(result.states.back()))), policy_cfg, vm["seed"].as<int>());
 	}
+    std::string output = vm["output_file"].as<std::string>();
+    if (!output.empty()) {}
+        finit_matrix.save_npy(output);
 	if (Tensor3D(init_matrix) != Tensor3D(finit_matrix)) {
-		throw std::runtime_error("wtf : wrong final tensor");
+		throw std::runtime_error("CORE LINALG ERROR");
 	}
 }

@@ -9,3 +9,4 @@
 *.envrc
 *.vscode
 *.direnv*
+*pyvartodd*
