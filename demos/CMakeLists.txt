@@ -1,6 +1,9 @@
-add_executable(fast_todd fast_todd.cpp)
-target_compile_options(fast_todd PRIVATE
+add_executable(vartodd_demo vartodd.cpp)
+target_compile_options(vartodd_demo PRIVATE
     $<$<CONFIG:Release>:-O3 -march=native>
 )
-target_link_libraries(fast_todd PRIVATE vartodd)
-target_include_directories(fast_todd INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+        
+FIND_PACKAGE( Boost 1.70 COMPONENTS program_options REQUIRED )
+INCLUDE_DIRECTORIES( ${Boost_INCLUDE_DIR} )
+target_link_libraries(vartodd_demo PRIVATE vartodd ${Boost_LIBRARIES})
+target_include_directories(vartodd_demo INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
