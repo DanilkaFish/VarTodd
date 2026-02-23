@@ -241,7 +241,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     auto       max_from_single_ns         = config.max_from_single_ns;
     auto       tohpe_sample               = config.tohpe_sample;
     auto       try_only_tohpe             = config.try_only_tohpe;
-    
+    auto       gen_part = config.max_z_to_research_fraction;
     const auto threads                    = config.threads;
 #ifdef __OPENMP
     if (threads > 0)
@@ -250,7 +250,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     num_samples                = std::max(num_samples, (Int)1);
     num_candidates             = std::max(num_candidates, (Int)1);
     top_pool                   = std::max(num_candidates, top_pool);
-    max_z_to_research_fraction = max_z_to_research_fraction < 0 ? 0 : max_z_to_research_fraction;
+    max_z_to_research_fraction = 1.0;
     max_reduction              = max_reduction > 0 ? max_reduction : k_single_sentinel<decltype(max_reduction)>();
     min_reduction              = std::max(min_reduction, (Int)0);
     non_improving_prob         = std::min(std::max(0.0f, non_improving_prob), 1.0f);
@@ -289,11 +289,10 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                 return false && red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
             };
 
-            auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples);
+            auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples, gen_part);
             for (auto const& coefs : coefs_list) {
                 auto vec = ns->linear_combination(coefs);
                 for (auto [z, red] : gen.best_z_n(vec, tohpe_sample)) {
-                    auto nsptr = std::make_shared<NullSpace>(gen.make(z));
                     if (beyond(red)) {
                         if (accept_anyway(red) || (red > 0)) {
                             global_stats.accepted_non_improving++;
@@ -302,6 +301,8 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                             continue;
                         }
                     }
+                    auto nsptr = std::make_shared<NullSpace>(gen.make(z));
+                    // auto z = nsptr->vector()
                     global_stats.nonzero++;
                     global_stats.accepted_tohpe++;
                     auto      bucket_size = data->index().get_size_from_z(z);
@@ -389,7 +390,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                         return false && red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
                     };
 
-                    auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples);
+                    auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples, gen_part);
                     // auto coefs_list = (len > 1) ? local_rng.sample_small_unique_bitvectors(dim, num_samples):
                     // local_rng.sample_special_bitvec(ns->basis(), ptr->a, ptr->b, num_samples);
                     stats.max_bucket = std::max(stats.max_bucket, (Int)bucket_size);

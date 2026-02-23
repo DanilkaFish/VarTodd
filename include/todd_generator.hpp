@@ -132,18 +132,19 @@ struct ExplorationScore {
     float   wdim    = 0;
     float   wbucket = 0;
     float   wvw     = 0;
+    float   wz     = 0;
     index_t bn      = 1;
     index_t wvwn    = 1;
     index_t dn      = 1;
 
     explicit ExplorationScore() = default;
     ExplorationScore(index_t bn, index_t wvwn, index_t dn) : bn{bn}, wvwn{wvwn}, dn{dn} {};
-    ExplorationScore(float wred, float wdim, float wbucket, float wvw)
-        : wred{wred}, wdim{wdim}, wbucket{wbucket}, wvw{wvw} {}
+    ExplorationScore(float wred, float wdim, float wbucket, float wvw, float wz)
+        : wred{wred}, wdim{wdim}, wbucket{wbucket}, wvw{wvw}, wz{wz} {}
 
     auto operator()(Candidate& cand) {
         cand.pool_score = cand.reduction / float(bn) / 2 * wred + cand.basis_dim / float(dn) * wdim +
-                          cand.bucket_size / float(bn) * wbucket + cand.vec.count() * wvw / float(wvwn);
+                          cand.bucket_size / float(bn) * wbucket + cand.vec.count() * wvw / float(wvwn) + (cand.nsptr->vector().count())/float(cand.nsptr->vector().size()) * wz;
         return std::make_pair(cand.pool_score, 0);
     }
 };
@@ -153,6 +154,7 @@ struct FinalizationScore {
     float   wdim       = 0;
     float   wbucket    = 0;
     float   wvw        = 0;
+    float   wz     = 0;
     float   wtohpe_dim = 0;
     index_t bn         = 1;
     index_t wvwn       = 1;
@@ -160,11 +162,11 @@ struct FinalizationScore {
 
     explicit FinalizationScore() = default;
     FinalizationScore(index_t bn, index_t wvwn, index_t dn) : bn{bn}, wvwn{wvwn}, dn{dn} {};
-    FinalizationScore(float wred, float wdim, float wbucket, float wvw, float wtohpe_dim)
-        : wred{wred}, wtohpe_dim{wtohpe_dim}, wdim{wdim}, wbucket{wbucket}, wvw{wvw} {}
+    FinalizationScore(float wred, float wdim, float wbucket, float wvw, float wz, float wtohpe_dim)
+        : wred{wred}, wtohpe_dim{wtohpe_dim}, wdim{wdim}, wbucket{wbucket}, wvw{wvw}, wz{wz} {}
     auto operator()(Candidate& cand) {
         cand.pool_score = wred * cand.reduction / float(bn) / 2 + wdim * cand.basis_dim / float(dn) +
-                          wbucket * cand.bucket_size / float(bn) + wvw * cand.vec.count() / float(wvwn);
+                          wbucket * cand.bucket_size / float(bn) + wvw * cand.vec.count() / float(wvwn) + (cand.nsptr->vector().count())/float(cand.nsptr->vector().size()) * wz;
         if (wtohpe_dim != 0) {
             auto next_mat  = cand.nsptr->apply(cand.vec);
             auto tohpe_dim = get_tohpe_basis(next_mat).rows();
@@ -176,8 +178,8 @@ struct FinalizationScore {
 };
 
 struct PolicyConfig {
-    ExplorationScore  escore{1.0, 0., 0., 0.};
-    FinalizationScore fscore{1.0, 0., 0., 0., 0.0};
+    ExplorationScore  escore{1.0, 0., 0., 0., 0.};
+    FinalizationScore fscore{1.0, 0., 0., 0., 0.0, 0.};
     std::string       selection = "softmax";
 
     float  temperature                = 0.0f;

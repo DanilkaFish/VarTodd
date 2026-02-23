@@ -371,27 +371,27 @@ PYBIND11_MODULE(pyvartodd, m) {
     // ---------------- Result ----------------
     py::class_<ExplorationScore>(m, "ExplorationScore")
         // .def(py::init<float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0, py::arg("wbucket") = 1.0)
-        .def(py::init<float, float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
-             py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0)
+        .def(py::init<float, float, float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
+             py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0, py::arg("wz") = 1.0)
         .def("__repr__",
              [](const ExplorationScore& r) {
                  return "ExplorationScore(wdim=" + std::to_string(r.wdim) + "wbucket=" + std::to_string(r.wbucket) +
-                        "wred=" + std::to_string(r.wred) + "wvw=" + std::to_string(r.wvw) + ")";
+                        "wred=" + std::to_string(r.wred) + "wvw=" + std::to_string(r.wz) + "wvw=" + std::to_string(r.wz) + ")";
              })
         .def("__str__",
              [](const ExplorationScore& r) {
                  return "(" + std::to_string(r.wdim) + ", " + std::to_string(r.wbucket) + ", " +
-                        std::to_string(r.wred) + ", " + std::to_string(r.wvw) + ")";
+                        std::to_string(r.wred) + ", " + std::to_string(r.wvw) + ", " + std::to_string(r.wz) + ")";
              })
         .def("__len__",
              [](const ExplorationScore& r) {
                  // Check if wvw has been set (you need a way to detect this)
                  // For simplicity, always return 4 or add a member variable to track
-                 return 4;
+                 return 5;
              })
         .def("__getitem__",
              [](const ExplorationScore& r, py::ssize_t index) {
-                 if (index < 0 || index >= 4) {
+                 if (index < 0 || index >= 5) {
                      throw py::index_error("ExplorationScore index out of range");
                  }
                  switch (index) {
@@ -404,44 +404,48 @@ PYBIND11_MODULE(pyvartodd, m) {
                  case 3: {
                      return py::float_(r.wvw);
                  }
+                case 4: {
+                     return py::float_(r.wz);
+                 }
                  default:
                      return py::float_(0.0f);
                  }
              })
-        .def(py::pickle([](const ExplorationScore& r) { return py::make_tuple(r.wred, r.wdim, r.wbucket, r.wvw); },
+        .def(py::pickle([](const ExplorationScore& r) { return py::make_tuple(r.wred, r.wdim, r.wbucket, r.wvw, r.wz); },
                         [](py::tuple t) {
-                            if (t.size() != 4 )
+                            if (t.size() != 5 )
                                 throw std::runtime_error("Invalid state for ExplorationScore!");
 
                             float wred    = t[0].cast<float>();
                             float wdim    = t[1].cast<float>();
                             float wbucket = t[2].cast<float>();
-                            float wvw = t[2].cast<float>();
+                            float wvw = t[3].cast<float>();
+                            float wz = t[4].cast<float>();
 
-                            return ExplorationScore(wred, wdim, wbucket, wvw);
+                            return ExplorationScore(wred, wdim, wbucket, wvw, wz);
                         }));
 
     py::class_<FinalizationScore>(m, "FinalizationScore")
         // .def(py::init<float, float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
         //      py::arg("wbucket") = 1.0, py::arg("wtohpe") = 1.0)
-        .def(py::init<float, float, float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
-             py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0, py::arg("wtohpe") = 1.0)
+        .def(py::init<float, float, float, float, float, float>(), py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
+             py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0, py::arg("wz") = 1.0, py::arg("wtohpe") = 1.0)
         .def("__repr__",
              [](const FinalizationScore& r) {
                  return "FinalizationScore(wdim=" + std::to_string(r.wdim) + "wbucket=" + std::to_string(r.wbucket) +
-                        "wred=" + std::to_string(r.wred) +  "wvw=" + std::to_string(r.wvw) + "wtohpe=" + std::to_string(r.wtohpe_dim) + ")" 
+                        "wred=" + std::to_string(r.wred) +  "wvw=" + std::to_string(r.wvw) +  "wz=" + std::to_string(r.wz) + "wtohpe=" + std::to_string(r.wtohpe_dim) + ")" 
                         ;
              })
         .def("__str__",
              [](const FinalizationScore& r) {
                  return "(" + std::to_string(r.wdim) + ", " + std::to_string(r.wbucket) + ", " +
-                        std::to_string(r.wred) + ", " + std::to_string(r.wtohpe_dim) + ", " + std::to_string(r.wvw) +
+                        std::to_string(r.wred) + ", " + std::to_string(r.wtohpe_dim) + ", " + std::to_string(r.wvw) + std::to_string(r.wz) +
                         ")";
              })
         .def("__len__", [](const FinalizationScore& r) { return 5; })
         .def("__getitem__",
              [](const FinalizationScore& r, py::ssize_t index) {
-                 if (index < 0 || index >= 5) {
+                 if (index < 0 || index >= 6) {
                      throw py::index_error("FinalizationScore index out of range");
                  }
                  switch (index) {
@@ -453,7 +457,9 @@ PYBIND11_MODULE(pyvartodd, m) {
                      return py::float_(r.wbucket);
                  case 3:
                      return py::float_(r.wvw);
-                 case 4: {
+                 case 4:
+                     return py::float_(r.wz);
+                 case 5: {
                      return py::float_(r.wtohpe_dim);
                  }
                  default:
@@ -461,18 +467,19 @@ PYBIND11_MODULE(pyvartodd, m) {
                  }
              })
         .def(py::pickle(
-            [](const FinalizationScore& r) { return py::make_tuple(r.wred, r.wdim, r.wbucket, r.wtohpe_dim, r.wvw); },
+            [](const FinalizationScore& r) { return py::make_tuple(r.wred, r.wdim, r.wbucket, r.wvw, r.wz, r.wtohpe_dim ); },
             [](py::tuple t) {
-                if (t.size() != 5)
+                if (t.size() != 6)
                     throw std::runtime_error("Invalid state for FinalizationScore!");
 
                 float wred    = t[0].cast<float>();
                 float wdim    = t[1].cast<float>();
                 float wbucket = t[2].cast<float>();
                 float wvw     = t[3].cast<float>();
-                float wtohpe  = t[4].cast<float>();
+                float wz     = t[4].cast<float>();
+                float wtohpe  = t[5].cast<float>();
 
-                return FinalizationScore(wred, wdim, wbucket, wvw, wtohpe);
+                return FinalizationScore(wred, wdim, wbucket, wvw, wz, wtohpe);
             }));
 
     // ---------------- Result ----------------

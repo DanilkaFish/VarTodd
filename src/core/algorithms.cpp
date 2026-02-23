@@ -482,24 +482,35 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
     // }
 }
 
-std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_samples) {
+std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_samples, float generator_part) {
     if (dim == 0 || num_samples == 0)
         return {};
 
     std::vector<Row> out;
 
     if (dim > 15) {
-        out.reserve(num_samples);
-        std::vector<Row> bvs;
+        // index_t init = rand_int(dim)
+        for (index_t j = dim - int(dim * generator_part); j < dim; ++j) {
+            std::unordered_map<uint64_t, uint64_t> remap;
+            index_t t   = rand_int(0, j); // <- your RNG: inclusive range
+            auto    itT = remap.find(t);
+            index_t x   = (itT == remap.end()) ? t : itT->second;
+            auto    itJ = remap.find(j);
+            index_t y   = (itJ == remap.end()) ? j : itJ->second;
+
+            remap[t]    = y;
+            Row v(dim);
+            v.set(x);
+            out.push_back(v);
+        }   
         // for (index_t i = 0; i < dim; i++) {
-        //     Row v(dim);
-        //     v.set(i);
-        //     bvs.push_back(v);
+            // Row v(dim);
+            // bvs.push_back(v);
         // }
         for (index_t i = 0; i < num_samples; i++) {
-            bvs.push_back(sample_bitvector(dim));
+            out.push_back(sample_bitvector(dim));
         }
-        return bvs;
+        return out;
     }
 
     const index_t N = 1ULL << dim;
@@ -523,14 +534,14 @@ std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_
         remap[t]    = y;
         out.push_back(mask_to_bv(dim, x));
     }
-    // for (index_t i = 0; i < dim; i++) {
-    // 	auto itT = remap.find(1 << i);
-    // 	if (itT == remap.end()) {
-    // 		Row v(dim);
-    // 		v.set(i);
-    // 		out.push_back(v);
-    // 	}
-    // }
+    for (index_t i = 0; i < dim; i++) {
+    	auto itT = remap.find(1 << i);
+    	if (itT == remap.end()) {
+    		Row v(dim);
+    		v.set(i);
+    		out.push_back(v);
+    	}
+    }
     return out;
 }
 
