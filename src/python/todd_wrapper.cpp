@@ -505,7 +505,7 @@ PYBIND11_MODULE(pyvartodd, m) {
              py::arg("selection") = "greedy",
              py::arg("temperature") = 0.0f, 
              py::arg("non_improving_prob") = 0.0f,
-             py::arg("max_z_to_research_fraction") = 1.0f, 
+             py::arg("gen_part") = 1.0f, 
              py::arg("num_samples") = 64, 
              py::arg("num_candidates") = 1,
              py::arg("top_pool") = 1, 
@@ -529,7 +529,7 @@ PYBIND11_MODULE(pyvartodd, m) {
         .def_readwrite("max_reduction", &PolicyConfig::max_reduction)
         .def_readwrite("min_pool_size", &PolicyConfig::min_pool_size)
         .def_readwrite("max_z_to_research", &PolicyConfig::max_z_to_research)
-        .def_readwrite("max_z_to_research_fraction", &PolicyConfig::max_z_to_research_fraction)
+        .def_readwrite("gen_part", &PolicyConfig::gen_part)
         .def_readwrite("max_tohpe", &PolicyConfig::max_tohpe)
         .def_readwrite("threads", &PolicyConfig::threads)
         .def_readwrite("try_only_tohpe", &PolicyConfig::try_only_tohpe)
@@ -545,7 +545,7 @@ PYBIND11_MODULE(pyvartodd, m) {
                    ", max_reduction=" + std::to_string((long long)c.max_reduction) +
                    ", min_pool_size=" + std::to_string((long long)c.min_pool_size) +
                    ", max_z_to_research=" + std::to_string((long long)c.max_z_to_research) +
-                   ", max_z_to_research_fraction=" + std::to_string((long long)c.max_z_to_research_fraction) +
+                   ", gen_part=" + std::to_string((long long)c.gen_part) +
                    ", max_tohpe=" + std::to_string((long long)c.max_tohpe) +
                    ", threads=" + std::to_string((long long)c.threads) +
                    ", try_only_tohpe=" + std::to_string((long long)c.try_only_tohpe) +

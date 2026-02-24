@@ -16,6 +16,8 @@ def softmin(xs, beta=6.0):
     xs = np.asarray(xs, dtype=float)
     m = xs.min()
     return float(m - (1.0/beta) * np.log(np.exp(-beta*(xs - m)).sum()))
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-x))
 
 class Evaluator(BaseEvaluator):
     seeds = [random.randint(1, 10000) for _ in range(4)]
@@ -37,20 +39,20 @@ class Evaluator(BaseEvaluator):
                                   ) for r in ranks]
         self.set_pool_weights(ranks, w_pool)
         self.set_final_weights(ranks, w_final)
-        self.set_min_pool_size(2)
-        self.set_min_z_to_research(500)
+        self.set_min_pool_size(3)
+        self.set_min_z_to_research(self.map_par(lambda x: 100 + 1500*sigmoid(x), 0))
         self.set_temperature(0.5)
-        self.set_num_samples(300)
-        self.set_top_pool(4)
+        self.set_num_samples(self.map_par(lambda x: 1 + 100*sigmoid(x), 0))
+        self.set_top_pool(20)
         self.set_max_tohpe(4)
         self.set_try_only_tohpe(1)
-        self.set_max_reduction(10)
+        self.set_max_reduction(30)
         self.set_min_reduction(1)
-        self.set_max_from_single_ns(2)
-        self.set_tohpe_num_best(5)
-        self.set_gen_part(1.0)
-        self.set_todd_width(2)
-        self.set_beamsearch_width(3)
+        self.set_max_from_single_ns(4)
+        self.set_tohpe_num_best(7)
+        self.set_gen_part(self.map_par(lambda x: sigmoid(x), 0))
+        self.set_todd_width(3)
+        self.set_beamsearch_width(4)
 
     def __call__(self, params: Iterable):
         tcounts = self.run(params, self.seeds)
@@ -64,18 +66,36 @@ def run_opt(fun: Evaluator, num_eval: int=10) -> Evaluator:
     n_params = len(x)
     lb = [-2.2] * n_params
     ub = [ 2.2] * n_params
-    xopt, fopt = pso(fun, lb, ub, swarmsize=10, maxiter=num_eval, debug=True)
+    xopt, fopt = pso(fun, lb, ub, swarmsize=20, maxiter=num_eval, debug=True)
     return xopt
 
+def run_cma(fun: Evaluator) -> Evaluator:
+    x0 = fun.extract_active()
+    sigma0 = 0.1
+    cma_opts = {
+        "seed": 42,
+        "verbose": 1,
+        "maxfevals": 220,
+        "popsize": 8,
+        "CMA_active": True,
+    }
+    x_cma, f_cma = cma.fmin2(fun, x0, sigma0, options=cma_opts)
+    return x_cma
+
         
-def entrypoint():
-    fun = Evaluator(mat=get_matrix(), fin_rank=170, max_depth=100)
-    x0 = run_opt(fun, 10)
-    ranks = [280, 220]
+def entrypoint(mat: Matrix):
+    fun = Evaluator(mat=mat, fin_rank=170, max_depth=100)
+    num_eval = 20
+    x0 = run_opt(fun, num_eval)
+    fun.insert(x0)
+    x0 = run_cma(fun)
+    ranks = [mat.rows - 10*i for i in range(100)]
     for r in ranks:
         new_mat = find_rank(fun.best_pathes[0], rank=r)
         if new_mat is None:
             break
         fun.set_up_new_init(new_mat, xopt=x0)
-        x0 = run_opt(fun, 10)
+        x0 = run_opt(fun, num_eval)
+        fun.insert(x0)
+        x0 = run_cma(fun)
     return fun.get_best()

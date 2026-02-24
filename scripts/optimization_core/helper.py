@@ -19,7 +19,7 @@ def find_rank(path, rank):
     for i, mat in enumerate(path):
         if mat.rows < rank:
             return path[max(i-1, 0)]
-    return path[-1]
+    return None
         
 def get_matrix(name:str=None) -> Matrix:
     if name is None:

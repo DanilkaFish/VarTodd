@@ -235,13 +235,12 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     auto       escore             = config.escore;
     auto       fscore             = config.fscore;
 
-    auto       max_z_to_research_fraction = config.max_z_to_research_fraction;
     auto       max_z_to_research          = index_t(std::max(0,config.max_z_to_research));
     auto       max_tohpe                  = config.max_tohpe;
     auto       max_from_single_ns         = config.max_from_single_ns;
     auto       tohpe_sample               = config.tohpe_sample;
     auto       try_only_tohpe             = config.try_only_tohpe;
-    auto       gen_part = config.max_z_to_research_fraction;
+    auto       gen_part = config.gen_part;
     const auto threads                    = config.threads;
 #ifdef __OPENMP
     if (threads > 0)
@@ -250,7 +249,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     num_samples                = std::max(num_samples, (Int)1);
     num_candidates             = std::max(num_candidates, (Int)1);
     top_pool                   = std::max(num_candidates, top_pool);
-    max_z_to_research_fraction = 1.0;
+    gen_part = 1.0;
     max_reduction              = max_reduction > 0 ? max_reduction : k_single_sentinel<decltype(max_reduction)>();
     min_reduction              = std::max(min_reduction, (Int)0);
     non_improving_prob         = std::min(std::max(0.0f, non_improving_prob), 1.0f);

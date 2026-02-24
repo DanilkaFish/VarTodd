@@ -184,7 +184,7 @@ struct PolicyConfig {
 
     float  temperature                = 0.0f;
     float  non_improving_prob         = 0.0f;
-    float  max_z_to_research_fraction = 1.0;
+    float  gen_part = 1.0;
     Int    num_samples                = 64;
     Int    num_candidates             = 1;
     Int    top_pool                   = 1;
