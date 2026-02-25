@@ -5,7 +5,7 @@ from helper import Matrix, Tensor3D, get_matrix
 from importlib import import_module
 
 def get_matrix(name:str=None) -> Matrix:
-    return Matrix.from_numpy(np.load(f"data/init_npy/{name}.matrix.npy") )
+    return Matrix.from_numpy(np.load(f"data/init_npy/{name}.npy") )
 
 def validate(
     result: Tuple[np.ndarray, str],
@@ -24,11 +24,22 @@ if __name__ == "__main__":
     module_path = sys.argv[1].replace('/', '.').replace('.py', '')
     entrypoint = import_module(module_path).entrypoint
     names = [
+        "gf_mult_Khoroshii_best/gf2^3",
+        "gf_mult_Khoroshii_best/gf2^4",
+        "gf_mult_Khoroshii_best/gf2^5",
+        "gf_mult_Khoroshii_best/gf2^6",
+        "gf_mult_Khoroshii_best/gf2^7",
+        "gf_mult_Khoroshii_best/gf2^8",
+        "gf_mult_Khoroshii_best/gf2^9",
+        "gf_mult_Khoroshii_best/gf2^10",
+        # "gf2^3_mult_fr_310",
+        # "gf2^3_mult_fr_310",
+
         # "gf2^3_mult_fr_310",
         # "gf2^4_mult_fr_410",
         # "gf2^5_mult_fr_54320",
-        "gf2^6_mult_fr_610",
-        # "gf2^7_mult_fr_730",
+        # "gf2^6_mult_fr_610",
+        # "gf_mult_Vandaele_wo_ancilla/gf2^10_1030",
         # "gf2^8_mult_fr_84310",
         # "gf2^9_mult_fr_940",
         # "gf2^10_mult_fr_1030",
@@ -37,7 +48,6 @@ if __name__ == "__main__":
         # # "1731init129-00168"
 
     ]
-        # "gf2^10_mult_1030.qc.matrix.npy").T )
     results = []
     aux_info = {}
     tcounts = []
@@ -48,20 +58,4 @@ if __name__ == "__main__":
         results.append(res["result"])
         output_filename = f"data/baseline_npy/{name}-{res["result"].shape[0]}"
         np.save(output_filename, res["result"])
-        print(f"Results for {name} saved to {output_filename}: Final rank = {res["result"].shape[0]}")
-        # print(f"Results for {name} saved to {output_filename}")
-
-    # if r is None:
-    #     output_filename = f"{module_path.replace(".", "/")}.txt"
-    # else:
-    #     output_filename = f"{module_path.replace(".", "/")}{r=}.txt"
-    # with open(output_filename, 'w') as f:
-    #     f.write(f"{results}\n")
-
-    #     for name, fitness, tcount in zip(names, results, tcounts):
-    #         f.write(f"{name}: {fitness} {tcount}\n")
-    #     f.write(f"{aux_info}\n")
-    
-    # print(f"Results saved to {output_filename}")
-    # res = validate(entrypoint())
-    # print(res["mcts info"])
+        print(f"Results for {name} saved to {output_filename}:\n\tFinal rank = {res["result"].shape[0]}")
