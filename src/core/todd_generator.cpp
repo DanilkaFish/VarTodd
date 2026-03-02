@@ -1,12 +1,12 @@
 #include "todd_generator.hpp"
 
-#include "algorithms.hpp"
 #include "nullspace.hpp"
 
 #include <algorithm>
 #include <numeric>
 #include <random.hpp>
-#include <ranges>
+#include <stdexcept>
+//TODO
 #ifdef __OPENMP
 #include <omp.h>
 #endif
@@ -290,6 +290,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
 
             auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples, gen_part);
             for (auto const& coefs : coefs_list) {
+                assert(coefs.count() != 0);
                 auto vec = ns->linear_combination(coefs);
                 for (auto [z, red] : gen.best_z_n(vec, tohpe_sample)) {
                     if (beyond(red)) {
@@ -300,7 +301,8 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                             continue;
                         }
                     }
-                    auto nsptr = std::make_shared<NullSpace>(gen.make(z));
+                    auto nsptr = std::make_shared<NullSpace>(gen.make(Row(z)));
+
                     // auto z = nsptr->vector()
                     global_stats.nonzero++;
                     global_stats.accepted_tohpe++;
@@ -329,12 +331,9 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
             };
 
             auto buckets = data->index().sum_key_sizes();
-            // auto above_min = [&](auto const& kv) { return (min_reduction > 1 && 2 * kv.second < min_reduction); };
-            // std::erase_if(buckets, above_min);
             max_z_to_research = static_cast<int>(std::min(buckets.size(), max_z_to_research));
             if (buckets.size() > max_z_to_research) {
                 std::ranges::nth_element(buckets, buckets.begin() + max_z_to_research, cmp);
-                // buckets.resize(max_z_to_research);
             }
 
 #ifdef __OPENMP

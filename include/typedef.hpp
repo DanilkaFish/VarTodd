@@ -1,13 +1,7 @@
 #pragma once
 
-// #include <bitvector.hpp>
-// #include <boost/dynatim_bitset>
-#include <bit>
 #include <cassert>
-#include <iostream>
 #include <map>
-#include <set>
-#include <vector>
 
 namespace todd {
 using index_t   = long unsigned int;

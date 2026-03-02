@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional
-from pyvartodd.Release.pyvartodd import Matrix, CandidateExport, Stats, Result,  PolicyConfig, ExplorationScore, FinalizationScore, policy_iteration, Tensor3D
+from pyvartodd.Release.pyvartodd import Matrix, CandidateExport, Stats, Result,  PolicyConfig, ExplorationScore, FinalizationScore, policy_iteration, Tensor3D, ScoringConfig, ScoringFunction
 
 
 @dataclass(slots=True)
@@ -34,7 +34,7 @@ class Node:
     parent: Optional["Node"] = None
     incoming: Optional[ActionInfo] = None
     depth: int = 0
-
+    init_rank: int = 1000000
     expanded: bool = False
     exhausted: bool = False
     active: bool = True
@@ -82,6 +82,7 @@ class Node:
         prior: float,
         frozen_until: int = 0,
         active: bool = True,
+        init_rank: int = 1000000
     ) -> "Node":
         child = Node(
             state=state,
@@ -91,6 +92,7 @@ class Node:
             active=active,
             frozen_until=frozen_until,
             prior=float(prior),
+            init_rank=init_rank
         )
         self.children.append(child)
         return child

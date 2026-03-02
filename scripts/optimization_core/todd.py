@@ -7,9 +7,8 @@ from typing import Any, Callable, Dict, Optional, Tuple, List
 
 import numpy as np
 
-from mcts_dao import Dao
+from mcts_dao import Dao, Path
 from node import Node, ActionInfo, Matrix, Result, Stats, policy_iteration
-from format import build_context, make_report
 
 import heapq
 class Todd:
@@ -17,8 +16,8 @@ class Todd:
         self.dao: Dao = dao
         self.depth = depth
 
-    def run(self, init: Matrix, width, todd_width, with_report=False, seed=1):
-        root = Node(init)
+    def run(self, path: Path, width, todd_width, with_report=False, seed=1):
+        root = path.final_node
         # root = displ
         node = root
         best_node = root
@@ -59,7 +58,7 @@ class Todd:
             # print(len(nodes))
             nodes = heapq.nlargest(width.at(best_node.state.rows), new_nodes, lambda x : x.incoming.cand.final_score)
         if with_report:
-            s, mats = make_report(root=root, best_node=best_node, tdepth=counter)
-            return best_node.state.to_numpy(), (s, [node.state for node in mats]), (counter, best_counter)
+            best_counter = min(counter, best_counter)
+            return best_node, (counter, best_counter)
         else:
             return node.state.to_numpy()

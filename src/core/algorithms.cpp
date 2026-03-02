@@ -3,7 +3,6 @@
 #include "random.hpp"
 
 #include <algorithm>
-#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -383,8 +382,8 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
     std::vector<Row>                       out;
     std::unordered_map<uint64_t, uint64_t> remap;
     remap.reserve((size_t)num_samples * 2);
-    for (index_t j = N - num_samples; j < N; ++j) {
-        index_t t   = rand_int(0, j); // <- your RNG: inclusive range
+    for (index_t j = std::max(N - num_samples, (index_t)1); j < N; ++j) {
+        index_t t   = rand_int(1, j); // <- your RNG: inclusive range
         auto    itT = remap.find(t);
         index_t x   = (itT == remap.end()) ? t : itT->second;
         auto    itJ = remap.find(j);
@@ -394,92 +393,6 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
     }
 
     return out;
-    // if (j != k_single_sentinel<decltype(j)>()) {
-    // 	std::vector<index_t> i11;
-    // 	std::vector<index_t> i00;
-    // 	std::vector<index_t> i10;
-    // 	std::vector<index_t> i01;
-    // 	for (index_t k=0; k<basis.rows(); k++ ){
-    // 		switch (basis[k].test(i) << 1 + basis[k].test(j))
-    // 		{
-    // 		case 0:
-    // 			i00.push_back(k);
-    // 			break;
-    // 		case 1:
-    // 			i01.push_back(k);
-    // 			break;
-    // 		case 2:
-    // 			i10.push_back(k);
-    // 			break;
-    // 		case 3:
-    // 			i11.push_back(k);
-    // 			break;
-    // 		}
-    // 	}
-    // 	std::vector<Row> out;
-    // 	for (auto k: i01) {
-    // 		Row y(dim);
-    // 		y.set(k);
-    // 		out.push_back(y);
-    // 		for (auto l: i00) {
-    // 			Row y(dim);
-    // 			y.set(k);
-    // 			y.set(l);
-    // 			out.push_back(y);
-    // 		}
-    // 		for (auto l: i11) {
-    // 			Row y(dim);
-    // 			y.set(k);
-    // 			y.set(l);
-    // 			out.push_back(y);
-    // 		}
-    // 	}
-    // 	for (auto k: i10) {
-    // 		Row y(dim);
-    // 		y.set(k);
-    // 		out.push_back(y);
-    // 		for (auto l: i00) {
-    // 			Row y(dim);
-    // 			y.set(k);
-    // 			y.set(l);
-    // 			out.push_back(y);
-    // 		}
-    // 		for (auto l: i11) {
-    // 			Row y(dim);
-    // 			y.set(k);
-    // 			y.set(l);
-    // 			out.push_back(y);
-    // 		}
-    // 	}
-    // 	return out;
-    // } else {
-    // 	std::vector<index_t> i1;
-    // 	std::vector<index_t> i0;
-    // 	for (index_t k=0; k<basis.rows(); k++ ){
-    // 		switch (basis[k].test(i))
-    // 		{
-    // 		case 0:
-    // 			i0.push_back(k);
-    // 			break;
-    // 		case 1:
-    // 			i1.push_back(k);
-    // 			break;
-    // 		}
-    // 	}
-    // 	std::vector<Row> out;
-    // 	for (auto k: i1) {
-    // 		Row y(dim);
-    // 		y.set(k);
-    // 		out.push_back(y);
-    // 		for (auto l: i0) {
-    // 			Row y(dim);
-    // 			y.set(k);
-    // 			y.set(l);
-    // 			out.push_back(y);
-    // 		}
-    // 	}
-    // 	return out;
-    // }
 }
 
 std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_samples, float generator_part) {
@@ -489,10 +402,9 @@ std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_
     std::vector<Row> out;
 
     if (dim > 15) {
-        // index_t init = rand_int(dim)
-        for (index_t j = dim - int(dim * generator_part); j < dim; ++j) {
+        for (index_t j = std::max(dim - int(dim * generator_part), (index_t) 1); j < dim; ++j) {
             std::unordered_map<uint64_t, uint64_t> remap;
-            index_t t   = rand_int(0, j); // <- your RNG: inclusive range
+            index_t t   = rand_int(1, j); // <- your RNG: inclusive range
             auto    itT = remap.find(t);
             index_t x   = (itT == remap.end()) ? t : itT->second;
             auto    itJ = remap.find(j);
@@ -503,10 +415,6 @@ std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_
             v.set(x);
             out.push_back(v);
         }   
-        // for (index_t i = 0; i < dim; i++) {
-            // Row v(dim);
-            // bvs.push_back(v);
-        // }
         for (index_t i = 0; i < num_samples; i++) {
             out.push_back(sample_bitvector(dim));
         }
@@ -525,8 +433,8 @@ std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_
 
     std::unordered_map<uint64_t, uint64_t> remap;
     remap.reserve((size_t)num_samples * 2);
-    for (index_t j = N - num_samples; j < N; ++j) {
-        index_t t   = rand_int(0, j); // <- your RNG: inclusive range
+    for (index_t j = std::max(N - num_samples, (index_t)1); j < N; ++j) {
+        index_t t   = rand_int(1, j); // <- your RNG: inclusive range
         auto    itT = remap.find(t);
         index_t x   = (itT == remap.end()) ? t : itT->second;
         auto    itJ = remap.find(j);
@@ -561,6 +469,17 @@ Row PyRNG::sample_bitvector(index_t dim) {
     const index_t rem = dim & 63;
     if (rem != 0) {
         dst[nb - 1] &= ((1ULL << rem) - 1ULL);
+    }
+    if (r.count() == 0) {
+        for (index_t i = 0; i < nb; ++i) {
+            dst[i] = -1;
+        }
+
+        const index_t rem = dim & 63;
+        if (rem != 0) {
+            dst[nb - 1] &= ((1ULL << rem) - 1ULL);
+        }
+        return r;
     }
     return r;
 }

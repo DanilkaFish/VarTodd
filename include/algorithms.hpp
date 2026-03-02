@@ -14,7 +14,7 @@ struct RrefResult {
     index_t              rank{};
 };
 void          gauss_elimination_inplace(Matrix& A, Matrix& aug, pivot_map& pivots);
-Matrix        solve_and_build_solution_basis(Matrix& A, Matrix& aug);
+// Matrix        solve_and_build_solution_basis(Matrix& A, Matrix& aug);
 Matrix        solve_and_build_solution_basis(Matrix& A, index_t divider);
 Matrix        get_tohpe_basis(const Matrix& P);
 Matrix        solution_gaussian_elimination(Matrix& A, Matrix& aug);

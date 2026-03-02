@@ -4,7 +4,6 @@
 #include "matrix.hpp"
 
 #include <algorithm>
-#include <random>
 #include <ranges>
 #include <stdexcept>
 
@@ -32,6 +31,7 @@ void CountWS::add(index_t id, index_t delta) {
 }
 
 index_t CountWS::argmax() const {
+    assert(used.size() > 0);
     index_t best = used[0];
     for (auto id : used)
         if (cnt[id] > cnt[best])
@@ -139,10 +139,6 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move
     const index_t    m   = P.rows();
     pairs_.reserve((std::size_t)(m / 2));
 
-    std::vector<std::uint32_t> used_tag(m, 0);
-
-    auto is_used   = [&](index_t i) -> bool { return used_tag[(std::size_t)i] == 1; };
-    auto mark_used = [&](index_t i) { used_tag[(std::size_t)i] = 1; };
 
     const SumEntry* ptr = nullptr;
     index_t         len = 0;
@@ -151,34 +147,21 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move
     }
 
     for (index_t t = 0; t < len; ++t) {
-        const index_t a = ptr[t].a;
-        const index_t b = ptr[t].b;
-        if (ptr->is_pair())
+        if (ptr[t].is_pair())
             continue;
-        if (P[a] == z_) {
-            special_ = (int)a;
-            mark_used(a);
-            break;
-        }
+        const index_t a = ptr[t].a;
+        special_ = (int)a;
+        break;
     }
 
     Row buf(P.cols());
 
     for (index_t t = 0; t < len; ++t) {
+        if (!ptr[t].is_pair())
+            continue;
         const index_t a = ptr[t].a;
         const index_t b = ptr[t].b;
-        if (!ptr->is_pair())
-            continue;
-        if (is_used(a) || is_used(b))
-            continue;
-
-        assign(buf, P[a]);
-        buf ^= P[b];
-        if (buf == z_) {
-            pairs_.emplace_back((int)a, (int)b);
-            mark_used(a);
-            mark_used(b);
-        }
+        pairs_.emplace_back((int)a, (int)b);
     }
 }
 
@@ -322,6 +305,7 @@ Row TohpeGenerator::best_z(RowCView y) const {
 }
 
 std::vector<std::pair<Row, index_t>> TohpeGenerator::best_z_n(RowCView y, index_t num_samples) const {
+    assert(y.count() != 0);
     const Matrix&    P   = M_->P();
     const ToddIndex& idx = M_->index();
     const index_t    n   = P.rows();
@@ -347,11 +331,12 @@ std::vector<std::pair<Row, index_t>> TohpeGenerator::best_z_n(RowCView y, index_
     }
     if (ws_.parity) {
         for (index_t i : zeros) {
-            ws_.add(idx.single_id()[(std::size_t)i], 1);
+            ws_.add(idx.single_id()[(std::size_t)i], 2);
         }
     }
     std::vector<Row> out{};
 
+    // return {{Row(idx.key_of(ws_.argmax())), ws_.cnt[ws_.argmax()]}};
     return ws_.argmax_n(num_samples) | std::views::all | std::views::transform([&](auto id) {
                return std::pair{Row(idx.key_of(id)), index_t(ws_.cnt[id])};
            }) |

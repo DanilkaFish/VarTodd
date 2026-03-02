@@ -7,7 +7,11 @@ set(VARTODD_CORE_SOURCES
 )
 
 find_package(Boost 1.70 REQUIRED )
-add_library(vartodd STATIC ${VARTODD_CORE_SOURCES})
+# Create an object library with PIC
+add_library(vartodd OBJECT ${VARTODD_CORE_SOURCES})
+set_target_properties(vartodd PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
 
 # target_compile_features(vartodd PUBLIC cxx_std_20)
 target_link_libraries(vartodd

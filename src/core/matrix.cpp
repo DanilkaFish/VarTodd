@@ -1,13 +1,11 @@
 #include "matrix.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <boost/dynamic_bitset.hpp>
 #include <boost/functional/hash.hpp>
 
 #include <cnpy++.hpp>
 #include <cstdint>
-#include <iterator>
 #include <stdexcept>
 
 namespace todd {
@@ -116,18 +114,16 @@ Matrix Matrix::from_npy(const std::string& npy_path) {
         throw std::runtime_error("build_context: expected 2D array in .npy");
     }
 
-    const std::size_t n_rows = arr.shape[1];
-    const std::size_t n_cols = arr.shape[0];
+    const std::size_t n_rows = arr.shape[0];
+    const std::size_t n_cols = arr.shape[1];
 
     const std::uint8_t* data = arr.data<std::uint8_t>();
 
-    // Construct GF(2) Matrix of size n_rows x n_cols
     Matrix mat(static_cast<index_t>(n_rows), static_cast<index_t>(n_cols));
 
-    // Assuming row-major layout in the .npy file:
     for (std::size_t i = 0; i < n_rows; ++i) {
         for (std::size_t j = 0; j < n_cols; ++j) {
-            std::uint8_t v = data[j * n_rows + i];
+            std::uint8_t v = data[i * n_cols + j];
             if (v & 1u) {
                 mat[static_cast<index_t>(i)].set(static_cast<index_t>(j));
             }
@@ -138,34 +134,22 @@ Matrix Matrix::from_npy(const std::string& npy_path) {
 }
 
 void Matrix::save_npy(const std::string& npy_path) const {
-    // Get matrix dimensions
     const index_t n_rows = this->rows();
     const index_t n_cols = this->cols();
     
-    // Create a buffer for the uint8 data (row-major layout)
     std::vector<std::uint8_t> data(static_cast<std::size_t>(n_rows * n_cols), 0);
     
-    // Fill the buffer with matrix data (assuming row-major layout)
     for (index_t i = 0; i < n_rows; ++i) {
         const auto& row = (*this)[i];
         for (index_t j = 0; j < n_cols; ++j) {
             if (row.test(j)) {
-                // Convert to column-major indexing if that's what from_npy expects
-                // data[j * n_rows + i] = 1;
-                
-                // Or use row-major if that's your preferred format
                 data[static_cast<std::size_t>(i * n_cols + j)] = 1;
             }
         }
     }
     
-    // Save as .npy file with shape [n_cols, n_rows] to match from_npy's expected layout
-    std::vector<std::size_t> shape = {static_cast<std::size_t>(n_cols), 
-                                      static_cast<std::size_t>(n_rows)};
-    
-    // If you want row-major storage in the file, use shape [n_rows, n_cols] instead
-    // std::vector<std::size_t> shape = {static_cast<std::size_t>(n_rows), 
-    //                                   static_cast<std::size_t>(n_cols)};
+    std::vector<std::size_t> shape = {static_cast<std::size_t>(n_rows), 
+                                      static_cast<std::size_t>(n_cols)};
     
     cnpypp::npy_save(npy_path, data.data(), shape, "w");
 }

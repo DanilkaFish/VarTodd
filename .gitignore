@@ -2,11 +2,16 @@
 *.so
 *.pyi
 
+# cache
+*pycache*
 *build*
+outcmaes*
 
 # Configs
 *.nix
 *.envrc
 *.vscode
 *.direnv*
+
 *pyvartodd*
+*.venv*

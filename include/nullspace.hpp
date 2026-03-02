@@ -4,9 +4,7 @@
 #include "todd_index.hpp"
 #include "typedef.hpp"
 
-// #include <ankerl/unordered_dense.h>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -50,7 +48,7 @@ class MatrixWithData {
   private:
     Matrix       P_;
     Matrix       tohpe_basis_;
-    ToddIndex    index_;
+    const ToddIndex    index_;
     FullToddData full_todd_;
 };
 
