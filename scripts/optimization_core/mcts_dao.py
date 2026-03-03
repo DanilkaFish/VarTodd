@@ -252,8 +252,8 @@ class ModeDao:
     max_tohpe: DepthSchedule[int] = field(default_factory=lambda: DepthSchedule.constant(1))
     gen_part: DepthSchedule[float] = field(default_factory=lambda: DepthSchedule.constant(1.0))
     max_z_to_research: DepthSchedule[float] = field(default_factory=lambda: DepthSchedule.constant(5000))
-    pool_weights: DepthSchedule[ExplorationScore] = field(default_factory=lambda: DepthSchedule.constant(ExplorationScore([0.5, 0.5, 0.0, 0.0, 0])))
-    final_weights: DepthSchedule[FinalizationScore] = field(default_factory=lambda: DepthSchedule.constant(FinalizationScore([0.5, 0.5, 0.0, 0.0, 0, 0])))
+    pool_scores: DepthSchedule[ExplorationScore] = field(default_factory=lambda: DepthSchedule.constant(ExplorationScore([0.5, 0.5, 0.0, 0.0, 0])))
+    final_scores: DepthSchedule[FinalizationScore] = field(default_factory=lambda: DepthSchedule.constant(FinalizationScore([0.5, 0.5, 0.0, 0.0, 0, 0])))
     try_only_tohpe: DepthSchedule[bool] = field(default_factory=lambda: DepthSchedule.constant(True))
     max_from_single_ns: DepthSchedule[int] = field(default_factory=lambda: DepthSchedule.constant(5))
     min_reduction: DepthSchedule[int] = field(default_factory=lambda: DepthSchedule.constant(0))
@@ -273,8 +273,8 @@ class ModeDao:
             temperature=DepthSchedule.from_any(d.get("temperature", 0.0)),
             max_tohpe=DepthSchedule.from_any(d.get("max_tohpe", 5)),
             max_z_to_research=DepthSchedule.from_any(mz),
-            pool_weights=DepthSchedule.from_any(d.get("weights", ExplorationScore(0.5, 0.5, 0.0,  0.0))),
-            final_weights=DepthSchedule.from_any(d.get("weights", FinalizationScore(0.5, 0.5, 0.0,  0.0, 1.0))),
+            pool_scores=DepthSchedule.from_any(d.get("weights", ExplorationScore(0.5, 0.5, 0.0,  0.0))),
+            final_scores=DepthSchedule.from_any(d.get("weights", FinalizationScore(0.5, 0.5, 0.0,  0.0, 1.0))),
             try_only_tohpe=DepthSchedule.from_any(d.get("try_only_tohpe", True)),
             max_from_single_ns=DepthSchedule.from_any(d.get("max_from_single_ns", 100)),
             max_reduction=DepthSchedule.from_any(d.get("max_reduction", 100)),
@@ -293,8 +293,8 @@ class ModeDao:
             "gen_part": _as_float(self.gen_part.at(depth)),
             "max_z_to_research": _as_int(self.max_z_to_research.at(depth)),
             "min_pool_size": _as_int(self.min_pool_size.at(depth)),
-            "ExplorationScore": self.pool_weights.at(depth),
-            "FinalizationScore": self.final_weights.at(depth),
+            "ExplorationScore": self.pool_scores.at(depth),
+            "FinalizationScore": self.final_scores.at(depth),
             "try_only_tohpe": _as_bool(self.try_only_tohpe.at(depth)),
             "non_improving_prob": _as_float(self.non_improving_prob.at(depth)),
             "max_from_single_ns": _as_int(self.max_from_single_ns.at(depth)),

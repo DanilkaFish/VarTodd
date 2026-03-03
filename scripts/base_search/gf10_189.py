@@ -36,8 +36,8 @@ class Evaluator(BaseEvaluator):
                                    wz=self.map_par(_w_tanh, r),
                                    wtohpe=self.map_par(_w_tanh, r)) for r in ranks]
         
-        self.set_pool_weights(ranks, w_pool)
-        self.set_final_weights(ranks, w_final)
+        self.set_pool_scores(ranks, w_pool)
+        self.set_final_scores(ranks, w_final)
         self.set_min_pool_size(2)
         self.set_min_z_to_research(150) 
         self.set_temperature(0.5)

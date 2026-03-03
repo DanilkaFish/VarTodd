@@ -36,7 +36,7 @@ class Evaluator(BaseEvaluator):
                                   self.map_par(sigmoid, r), 
                                   self.map_par(sigmoid, r),
                                   self.map_par(sigmoid, r)],
-                                  sc=ScoringFunction(Function.POLYNOM, self.map_par(_w_tanh, r))) for r in  ranks]
+                                  sc=ScoringFunction(Function.POLYNOM, 2)) for r in  ranks]
         w_final = [FinalizationScore([self.map_par(_w_tanh, r), 
                                   self.map_par(_w_tanh, r), 
                                   self.map_par(_w_tanh, r), 
@@ -45,8 +45,8 @@ class Evaluator(BaseEvaluator):
                                   self.map_par(_w_tanh, r)],
                                   sc=ScoringFunction(Function.POLYNOM, 1)
                                   ) for r in ranks]
-        self.set_pool_weights(ranks, w_pool)
-        self.set_final_weights(ranks, w_final)
+        self.set_pool_scores(ranks, w_pool)
+        self.set_final_scores(ranks, w_final)
         self.set_min_pool_size(4)
         self.set_min_z_to_research(500)
         self.set_temperature(0.5)
@@ -59,8 +59,8 @@ class Evaluator(BaseEvaluator):
         self.set_max_from_single_ns(4)
         self.set_tohpe_num_best(20)
         self.set_gen_part(1.0)
-        self.set_todd_width(3)
-        self.set_beamsearch_width(4)
+        self.set_todd_width(1)
+        self.set_beamsearch_width(1)
 
     def __call__(self, params: Iterable):
         tcounts = self.run(params, self.seeds, max_workers=4)
@@ -74,7 +74,7 @@ def run_opt(fun: Evaluator, num_eval: int=10) -> Evaluator:
     n_params = len(x)
     lb = [-2.0] * n_params
     ub = [ 2.0] * n_params
-    xopt, fopt = pso(fun, lb, ub, swarmsize=20, maxiter=num_eval, debug=True)
+    xopt, fopt = pso(fun, lb, ub, swarmsize=40, maxiter=num_eval, debug=True)
     return xopt
 
 def run_cma(fun: Evaluator) -> Evaluator:
@@ -93,17 +93,18 @@ def run_cma(fun: Evaluator) -> Evaluator:
         
 def entrypoint(mat: Matrix):
     fun = Evaluator(mat=mat, fin_rank=170, max_depth=100)
-    num_eval = 20
+    num_eval = 5
     x0 = run_opt(fun, num_eval)
     fun.insert(x0)
-    x0 = run_cma(fun)
+    # x0 = run_cma(fun)
     ranks = [mat.rows - 30*i for i in range(1,100)]
     for r in ranks:
         x_active = fun.set_up_new_init(0, rank_thr=r, xopt=None)
+        print(f"{fun(x_active)=}")
         print(x_active)
         if x_active is None:
             break
         x0 = run_opt(fun, 20)
     return fun.get_best()
 
-# {'num_samples': [(334, 314, 215, 0), (20, 20, 20, 20)], 'top_pool': [(334, 314, 215, 0), (20, 20, 20, 20)], 'try_only_tohpe': [(334, 314, 215, 0), (1, 1, 1, 1)], 'max_tohpe': [(334, 314, 215, 0), (4, 4, 4, 4)], 'num_tohpe_sample': [(334, 314, 215, 0), (7, 7, 7, 7)], 'max_from_single_ns': [(334, 314, 215, 0), (4, 4, 4, 4)], 'min_reduction': [(334, 314, 215, 0), (1, 1, 1, 1)], 'max_reduction': [(334, 314, 215, 0), (30, 30, 30, 30)], 'pool_weights': [(334, 314, 215, 0), ([3.05, 1.258, -2.704, -2.543, 0.314], [1.226, -1.352, -3.112, -1.762, 2.803], [1.812, 0.338, 2.59, -2.568, 2.969], [-0.881, -1.023, 1.808, 0.775, -1.525])], 'final_weights': [(334, 314, 215, 0), ([3.078, -3.078, -3.375, -3.294, -3.423, 3.562], [2.785, -1.552, -1.13, 1.885, -0.178, 2.001], [-0.007, 0.871, -0.217, 2.643, 2.897, 0.343], [2.131, -1.467, -0.018, 2.591, -1.914, -1.241])], 'max_z_to_research': [(334, 314, 215, 0), (300.0, 300.0, 300.0, 300.0)], 'gen_part': [(334, 314, 215, 0), (1.0, 1.0, 1.0, 1.0)], 'temperature': [(334, 314, 215, 0), (0.5, 0.5, 0.5, 0.5)]}
+# {'num_samples': [(334, 314, 215, 0), (20, 20, 20, 20)], 'top_pool': [(334, 314, 215, 0), (20, 20, 20, 20)], 'try_only_tohpe': [(334, 314, 215, 0), (1, 1, 1, 1)], 'max_tohpe': [(334, 314, 215, 0), (4, 4, 4, 4)], 'num_tohpe_sample': [(334, 314, 215, 0), (7, 7, 7, 7)], 'max_from_single_ns': [(334, 314, 215, 0), (4, 4, 4, 4)], 'min_reduction': [(334, 314, 215, 0), (1, 1, 1, 1)], 'max_reduction': [(334, 314, 215, 0), (30, 30, 30, 30)], 'pool_scores': [(334, 314, 215, 0), ([3.05, 1.258, -2.704, -2.543, 0.314], [1.226, -1.352, -3.112, -1.762, 2.803], [1.812, 0.338, 2.59, -2.568, 2.969], [-0.881, -1.023, 1.808, 0.775, -1.525])], 'final_scores': [(334, 314, 215, 0), ([3.078, -3.078, -3.375, -3.294, -3.423, 3.562], [2.785, -1.552, -1.13, 1.885, -0.178, 2.001], [-0.007, 0.871, -0.217, 2.643, 2.897, 0.343], [2.131, -1.467, -0.018, 2.591, -1.914, -1.241])], 'max_z_to_research': [(334, 314, 215, 0), (300.0, 300.0, 300.0, 300.0)], 'gen_part': [(334, 314, 215, 0), (1.0, 1.0, 1.0, 1.0)], 'temperature': [(334, 314, 215, 0), (0.5, 0.5, 0.5, 0.5)]}

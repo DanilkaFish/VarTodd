@@ -23,8 +23,8 @@ class Evaluator(BaseEvaluator):
         w_pool = [ExplorationScore(*w_par) for w_par in  w_pars]
         w_final = [FinalizationScore(*w_par, 1) for r, w_par in zip(ranks, w_pars)]
 
-        self.set_pool_weights(ranks, w_pool)
-        self.set_final_weights(ranks, w_final)
+        self.set_pool_scores(ranks, w_pool)
+        self.set_final_scores(ranks, w_final)
         self.set_min_pool_size(4)
         
         #order correspond to grid dict

@@ -1,6 +1,6 @@
 from typing import List
 import numpy as np
-from node import Matrix, Node, FinalizationScore, ExplorationScore, Tensor3D, Function, ScoringFunction
+from node import Matrix, Node, FinalizationScore, ExplorationScore, Tensor3D
 from mcts_dao import Dao, RankSchedule, Path
 from todd import Todd
 from typing import Iterable, Sequence, Any, Tuple
@@ -24,8 +24,8 @@ def find_rank(path, rank):
         
 def get_matrix(name:str=None) -> Matrix:
     if name is None:
-        return Matrix.from_numpy(np.load("npy/gf2^16_1612310.npy") )
-        # return Matrix.from_numpy(np.load("npy/gf2^9_mult_fr_940.matrix.npy") )
+        # return Matrix.from_numpy(np.load("npy/gf2^16_1612310.npy") )
+        return Matrix.from_numpy(np.load("npy/gf2^10_mult_fr_1030.matrix.npy") )
     return Matrix.from_numpy(np.load(f"npy/{name}.npy") )
 
 
@@ -124,16 +124,31 @@ def score_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
         down = ranks[i]
         up = ranks[i-1] if i > 0 else 1000000            
         for r, v in ds.points:
-            if v.sc.type == ScoringFunction.POLYNOM:
-                addit = [f"(polynom: pow={v.sc.pow})"]
-            else:
-                addit = [f"(sigmoid: pow={v.sc.pow}, sigmoid_threshold={v.sc.sigmoid_threshold})"]
             if r < up and r >= down:
                 output_r.append(r)
-                output_v.append([float(f"{v[i]:.3f}") for i in range(len(v))] + addit)
+                weights = [float(f"{v[i]:.3f}") for i in range(len(v))]
+                centers = [float(f"{v[i+len(v)]:.3f}") for i in range(len(v))]
+                pow = float(f"{v.pow():.3f}")
+                output = "("
+                if any(weights):
+                    output = output + f"{weights=},"
+                if any(centers):
+                    output = output + f"{centers=},"  
+                output = output + f"{pow=})"  
+                output_v.append(output)
+                # output_v.append(f"{weights=}, {centers=}, {pow=}")
             elif r < down:
                 output_r.append(down)
-                output_v.append([float(f"{v[i]:.3f}") for i in range(len(v))] + addit) 
+                weights = [float(f"{v[i]:.3f}") for i in range(len(v))]
+                centers = [float(f"{v[i+len(v)]:.3f}") for i in range(len(v))]
+                pow = float(f"{v.pow():.3f}")
+                output = "("
+                if any(weights):
+                    output = output + f"{weights=},"
+                if any(centers):
+                    output = output + f"{centers=},"  
+                output = output + f"{pow=})"  
+                output_v.append(output)
                 break
     return [tuple(output_r), tuple(output_v)]
     
@@ -147,8 +162,8 @@ def dao_rank_to_str(daos: List[Dao], ranks: List[int]):
     # dict["max_from_single_ns"] = int_rank_shedule_to_str([dao.mode.max_from_single_ns for dao in daos], ranks)
     # dict["min_reduction"] = int_rank_shedule_to_str([dao.mode.min_reduction for dao in daos], ranks)
     # dict["max_reduction"] = int_rank_shedule_to_str([dao.mode.max_reduction for dao in daos], ranks)
-    dict["pool_weights"] = score_rank_shedule_to_str([dao.mode.pool_weights for dao in daos], ranks)
-    dict["final_weights"] = score_rank_shedule_to_str([dao.mode.final_weights for dao in daos], ranks)
+    dict["pool_scores"] = score_rank_shedule_to_str([dao.mode.pool_scores for dao in daos], ranks)
+    dict["final_scores"] = score_rank_shedule_to_str([dao.mode.final_scores for dao in daos], ranks)
     dict["max_z_to_research"] = float_rank_shedule_to_str([dao.mode.max_z_to_research for dao in daos], ranks)
     dict["gen_part"] = float_rank_shedule_to_str([dao.mode.gen_part for dao in daos], ranks)
     # dict["temperature"] = float_rank_shedule_to_str([dao.mode.temperature for dao in daos], ranks)
@@ -344,23 +359,23 @@ class BaseEvaluator:
         return (
             self.best_pathes[0].final_node.state.to_numpy(), 
             self.best_pathes[0].format_path_stats_tiny(),
-            "best_policy:\n" +
+            "\nbest_policy:\n" +
             str(dao_rank_to_str(self.best_pathes[0].daos, self.best_pathes[0].ranks_thr + [0])) + "\nsearch_stat:\n" +
             f"rank 0.9q={np.quantile(self.tcount, 0.9)} \n" +
             f"rank 0.1q={np.quantile(self.tcount, 0.1)} \n" +
             print_uniform_by_rank(self.best_ranks, self.best_evals, 8) +
             f"total_evals: {self.total_eval}" +
-            f"\nbest_seen: {self.best_seen}"
+            f"\nbest_seen_times: {self.best_seen}"
             )
-    def set_final_weights(self, x: Any, vals=None):
+    def set_final_scores(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
-        self.dao.mode.final_weights = _to_frank_schedule(x)
+        self.dao.mode.final_scores = _to_frank_schedule(x)
         
-    def set_pool_weights(self, x: Any, vals=None):
+    def set_pool_scores(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
-        self.dao.mode.pool_weights = _to_erank_schedule(x)
+        self.dao.mode.pool_scores = _to_erank_schedule(x)
 
     def set_num_samples(self, x: Any, vals=None):
         if vals is not None:

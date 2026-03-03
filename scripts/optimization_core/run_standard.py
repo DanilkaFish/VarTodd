@@ -27,7 +27,7 @@ if __name__ == "__main__":
         # "gf_mult_Khoruzhii_best/gf2^3",
         # "gf_mult_Khoruzhii_best/gf2^4",
         # "gf_mult_Khoruzhii_best/gf2^5",
-        # "gf_mult_Khoruzhii_best/gf2^6",
+        "gf_mult_Khoruzhii_best/gf2^6",
         # "gf_mult_Khoruzhii_best/gf2^7",
         # "gf_mult_Khoruzhii_best/gf2^8",
         # "gf_mult_Khoruzhii_best/gf2^9",
@@ -39,7 +39,7 @@ if __name__ == "__main__":
         # "gf_mult_Vandaele_wo_ancilla/gf2^7",
         # "gf_mult_Vandaele_wo_ancilla/gf2^8",
         # "gf_mult_Vandaele_wo_ancilla/gf2^9_940",
-        "gf_mult_Vandaele_wo_ancilla/gf2^10_1030",
+        # "gf_mult_Vandaele_wo_ancilla/gf2^10_1030",
         # "gf2^3_mult_fr_310",
         # "gf2^3_mult_fr_310",
 
