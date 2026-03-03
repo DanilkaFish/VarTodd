@@ -54,8 +54,8 @@ int main(int argc, char* argv[]) {
     policy_cfg.num_samples = vm["num-samples"].as<int>();
     policy_cfg.max_z_to_research = vm["max-z"].as<int>();
     policy_cfg.gen_part = vm["max-z-fraction"].as<double>();
-    policy_cfg.escore.wred = vm["escore-wred"].as<int>();
-    policy_cfg.fscore.wred = vm["fscore-wred"].as<int>();
+    // policy_cfg.escore.wred = vm["escore-wred"].as<int>();
+    // policy_cfg.fscore.wred = vm["fscore-wred"].as<int>();
     policy_cfg.min_reduction = vm["min-reduction"].as<int>();
     policy_cfg.threads = vm["threads"].as<int>();
 	
