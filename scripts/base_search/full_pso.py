@@ -17,28 +17,28 @@ def softmin(xs, beta=6.0):
     m = xs.min()
     return float(m - (1.0/beta) * np.log(np.exp(-beta*(xs - m)).sum()))
 def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
+    return 2.0 / (1.0 + np.exp(-x))
 def exp(x):
     return np.exp(x)
 class Evaluator(BaseEvaluator):
-    seeds = [random.randint(1, 10000) for _ in range(2)]
+    seeds = [random.randint(1, 10000) for _ in range(4)]
 
     def policy_mapping(self):
         lr = 0
         ranks = [lr]
-        w_pool = [ExplorationScore(wred=self.map_par(_w_tanh, r), 
-                                  wdim=self.map_par(_w_tanh, r), 
-                                  wbucket=self.map_par(_w_tanh, r), 
-                                  wvw=self.map_par(_w_tanh, r),
-                                  wz=self.map_par(_w_tanh, r), 
-                                  sc=ScoringConfig(ScoringFunction.SIGMOID, 1, 1, self.map_par(_w_tanh, 0))) for r in  ranks]
-        w_final = [FinalizationScore(wred=self.map_par(_w_tanh, r), 
-                                  wdim=self.map_par(_w_tanh, r), 
-                                  wbucket=self.map_par(_w_tanh, r), 
-                                  wvw=self.map_par(_w_tanh, r), 
-                                  wz=self.map_par(_w_tanh, r),
-                                  wtohpe=self.map_par(_w_tanh, r),
-                                  sc=ScoringConfig(ScoringFunction.POLYNOM, 2, 0,0)
+        w_pool = [ExplorationScore(wred=self.map_par(sigmoid, r), 
+                                  wdim=self.map_par(sigmoid, r), 
+                                  wbucket=self.map_par(sigmoid, r), 
+                                  wvw=self.map_par(sigmoid, r),
+                                  wz=self.map_par(sigmoid, r), 
+                                  sc=ScoringConfig(ScoringFunction.DISTANCE, 2)) for r in  ranks]
+        w_final = [FinalizationScore(wred=self.map_par(sigmoid, r), 
+                                  wdim=self.map_par(sigmoid, r), 
+                                  wbucket=self.map_par(sigmoid, r), 
+                                  wvw=self.map_par(sigmoid, r), 
+                                  wz=self.map_par(sigmoid, r),
+                                  wtohpe=self.map_par(sigmoid, r),
+                                  sc=ScoringConfig(ScoringFunction.DISTANCE, 2, 0)
                                   ) for r in ranks]
         self.set_pool_weights(ranks, w_pool)
         self.set_final_weights(ranks, w_final)
@@ -58,7 +58,7 @@ class Evaluator(BaseEvaluator):
         self.set_beamsearch_width(4)
 
     def __call__(self, params: Iterable):
-        tcounts = self.run(params, self.seeds)
+        tcounts = self.run(params, self.seeds, max_workers=4)
         bestish = softmin(tcounts, beta=6.0)
         spread = float(np.std(tcounts)) if len(tcounts) > 1 else 0.0
         return bestish + 0.02 * spread

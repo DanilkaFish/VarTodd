@@ -31,15 +31,15 @@ class Evaluator(BaseEvaluator):
                                      wbucket=self.map_par(_w_tanh, r), 
                                      wvw=self.map_par(_w_tanh, r), 
                                      wz=self.map_par(_w_tanh, r), 
-                                   wtohpe=self.map_par(_w_tanh, r),
+                                     wtohpe=self.map_par(_w_tanh, r)*0,
                                     sc=ScoringConfig(ScoringFunction.LINEAR, pow=1)
                                    ) for r in ranks]
         
         self.set_pool_weights(ranks, w_pool)
         self.set_final_weights(ranks, w_final)
         
-        self.set_min_pool_size(24)
-        self.set_max_pool_size(ranks, [32, 48, 64, 64])
+        self.set_min_pool_size(2)
+        self.set_max_pool_size(ranks, [32, 48, 64, 10])
         self.set_min_z_to_research(ranks, [300, 200, 120, 80])
         self.set_temperature(0.12)
         
@@ -51,10 +51,10 @@ class Evaluator(BaseEvaluator):
         self.set_max_reduction(20)
         self.set_min_reduction(1)
         self.set_max_from_single_ns(8)
-        self.set_tohpe_num_best(100)
+        self.set_tohpe_num_best(1)
         self.set_gen_part(1.0)
-        self.set_todd_width(ranks, [4, 8, 12, 16])  
-        self.set_beamsearch_width(ranks, [2, 4, 6, 8])
+        self.set_todd_width(ranks, [4, 8, 12, 2])  
+        self.set_beamsearch_width(ranks, [2, 4, 6, 2])
 
     def __call__(self, params: Iterable):
         tcounts = self.run(params, self.seeds, max_workers=4)

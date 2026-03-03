@@ -24,8 +24,8 @@ def find_rank(path, rank):
         
 def get_matrix(name:str=None) -> Matrix:
     if name is None:
-        # return Matrix.from_numpy(np.load("npy/gf2^16_1612310.npy") )
-        return Matrix.from_numpy(np.load("npy/gf2^10_mult_fr_1030.matrix.npy") )
+        return Matrix.from_numpy(np.load("npy/gf2^16_1612310.npy") )
+        # return Matrix.from_numpy(np.load("npy/gf2^9_mult_fr_940.matrix.npy") )
     return Matrix.from_numpy(np.load(f"npy/{name}.npy") )
 
 
@@ -124,12 +124,16 @@ def score_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
         down = ranks[i]
         up = ranks[i-1] if i > 0 else 1000000            
         for r, v in ds.points:
+            if v.sc.type == ScoringFunction.POLYNOM:
+                addit = [f"(polynom: pow={v.sc.pow})"]
+            else:
+                addit = [f"(sigmoid: pow={v.sc.pow}, sigmoid_threshold={v.sc.sigmoid_threshold})"]
             if r < up and r >= down:
                 output_r.append(r)
-                output_v.append([float(f"{v[i]:.3f}") for i in range(len(v))])
+                output_v.append([float(f"{v[i]:.3f}") for i in range(len(v))] + addit)
             elif r < down:
                 output_r.append(down)
-                output_v.append([float(f"{v[i]:.3f}") for i in range(len(v))])
+                output_v.append([float(f"{v[i]:.3f}") for i in range(len(v))] + addit) 
                 break
     return [tuple(output_r), tuple(output_v)]
     
@@ -151,9 +155,65 @@ def dao_rank_to_str(daos: List[Dao], ranks: List[int]):
     # dict["non_improving_prob"] = float_rank_shedule_to_str(dao.mode.non_improving_prob)
     return dict
 
+def print_uniform_by_rank(best_ranks, best_evals, max_lines=10):
+    """
+    Print entries with uniformly spaced rank values, always including the last entry.
+    """
+    s = ""
+    n = len(best_ranks)
+    if n <= max_lines:
+        for i, (rank, eval_step) in enumerate(zip(best_ranks, best_evals)):
+            if i == n - 1:
+                s += "Final "
+            s += f"Rank={rank} at eval={eval_step}\n"
+        return s
+    
+    # Get unique ranks and their first occurrence
+    rank_to_step = {}
+    for i, rank in enumerate(best_ranks):
+        if rank not in rank_to_step:  # Keep first occurrence
+            rank_to_step[rank] = i
+    
+    # Sort ranks in ascending order (better ranks first if lower is better)
+    unique_ranks = sorted(rank_to_step.keys())
+    
+    if len(unique_ranks) <= max_lines:
+        # If we have few unique ranks, print them all plus last
+        selected_steps = set()
+        for rank in unique_ranks:
+            selected_steps.add(rank_to_step[rank])
+        selected_steps.add(n - 1)  # Always include last step
+        selected_steps = sorted(selected_steps)
+    else:
+        selected_steps = []
+        
+        first_rank = unique_ranks[0]
+        selected_steps.append(rank_to_step[first_rank])
+        step_size = (len(unique_ranks) - 1) / (max_lines - 2)  # -2 for first and last
+        
+        for i in range(1, max_lines - 1):
+            rank_idx = int(i * step_size)
+            if rank_idx < len(unique_ranks):
+                rank = unique_ranks[rank_idx]
+                selected_steps.append(rank_to_step[rank])
+        
+        last_step = n - 1
+        if last_step not in selected_steps:
+            selected_steps.append(last_step)
+        
+        selected_steps = sorted(set(selected_steps))
+    
+    for i, step in enumerate(selected_steps):
+        rank = best_ranks[step]
+        eval_step = best_evals[step]
+        if i == len(selected_steps) - 1:
+            s+= "Final "
+        s += "Rank={rank} at eval={eval_step}\n"
+    return s
+
 class BaseEvaluator:
     todd: Todd
-    best_rank: int=100000
+    _best_rank: int=100000
     best_matrix: np.ndarray
     best_pathes: List[Path] = field(default_factory=list)
     best_report: str
@@ -165,6 +225,8 @@ class BaseEvaluator:
     bs_width: RankSchedule = RankSchedule.constant(1)
     todd_width: RankSchedule = RankSchedule.constant(1)
     current_path: Path
+    best_ranks: List[int] = field(default_factory=list)
+    best_evals: List[int] = field(default_factory=list) 
     def __init__(self, mat: Matrix, max_depth: int, fin_rank: int = 161, shedule: str = "rank"):
         self.with_report = False
         self.current_path = Path()
@@ -176,6 +238,8 @@ class BaseEvaluator:
         self.todd = Todd(self.dao, max_depth)
         self.tcount = []
         self.best_pathes = []
+        self.best_ranks = []
+        self.best_evals = []
         self.active_params = []
         self.best_params = []
         self.x0 = [0 for i in range(200)]
@@ -204,6 +268,10 @@ class BaseEvaluator:
     def path_num(self):
         return len(self.best_pathes)
         
+    @property
+    def best_rank(self):
+        return self._best_rank
+
     def map_par(self, mapping: callable, thr: int, **kwargs):
         if self.init.rows > thr:
             self.active_params.append(self.idx)
@@ -256,13 +324,14 @@ class BaseEvaluator:
             mats_ranks.append(rank)
             self.total_eval += counters[0]
             self.tcount.append(rank)
-            if rank < self.best_rank:
-                print(f"{rank=} {self.total_eval=}")
+            if rank < self._best_rank:
                 self.best_seen = 0
+                self.best_ranks.append(rank)
+                self.best_evals.append(self.total_eval)
                 self.best_eval = self.total_eval
-                self.best_rank = rank
+                self._best_rank = rank
                 self.best_pathes = [self.current_path.branch_path(node, self.dao, self.x0)]
-            if rank == self.best_rank:
+            if rank == self._best_rank:
                 self.best_pathes.append(self.current_path.branch_path(node, self.dao, self.x0))
                 self.best_seen += counters[1]
                 self.best_seed = seed
@@ -271,11 +340,14 @@ class BaseEvaluator:
     def get_best(self):
         return (
             self.best_pathes[0].final_node.state.to_numpy(), 
-            self.best_pathes[0].format_path_stats_tiny(), 
-            f"\nbest_count/best_first_at/total_todd_evals: {self.best_seen}/{self.best_eval}/{self.total_eval}\n" + 
-                f"rank 0.9q={np.quantile(self.tcount, 0.9)} \n" +
-                f"rank 0.1q={np.quantile(self.tcount, 0.1)} \n" +
-                str(dao_rank_to_str(self.best_pathes[0].daos, self.best_pathes[0].ranks_thr + [0]))
+            self.best_pathes[0].format_path_stats_tiny(),
+            "best_policy:\n" +
+            str(dao_rank_to_str(self.best_pathes[0].daos, self.best_pathes[0].ranks_thr + [0])) + "\nsearch_stat:\n" +
+            f"rank 0.9q={np.quantile(self.tcount, 0.9)} \n" +
+            f"rank 0.1q={np.quantile(self.tcount, 0.1)} \n" +
+            print_uniform_by_rank(self.best_ranks, self.best_evals, 8) +
+            f"total_evals: {self.total_eval}" +
+            f"\nbest_seen: {self.best_seen}"
             )
     def set_final_weights(self, x: Any, vals=None):
         if vals is not None:

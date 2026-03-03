@@ -30,7 +30,7 @@ class Todd:
             for node in nodes:
                 # width.at(node.state.rows)
                 pcfg = self.dao.policy_config_at(depth=node.state.rows, mode="default", num_candidates=todd_width.at(node.state.rows))
-                out: Result = policy_iteration(cur_mat=node.state, policy_cfg=pcfg, seed=seed, add_seed=i)
+                out: Result = policy_iteration(cur_mat=node.state, policy_cfg=pcfg, seed=seed, add_seed=0)
                 chosen = out.chosen
                 states = out.states
                 if not chosen or not states:

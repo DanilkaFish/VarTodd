@@ -19,7 +19,6 @@ def _q_ge(num_better: int, total: int) -> float:
         return 0.0
     return 1.0 - (num_better / total)
 
-
 @dataclass(slots=True)
 class Path:
     final_node: Node = None
@@ -64,7 +63,8 @@ class Path:
 
             cand = node.incoming.cand
             s = node.incoming.global_info
-
+            maxbucket = node.incoming.global_info.max_bucket
+            bs = node.incoming.cand.bucket_size
             n = int(_get(s, "nonzero", default=0) or 0)
 
             r = int(_get(cand, "reduction", default=0) or 0)
@@ -83,8 +83,8 @@ class Path:
             if tohpe_zero == 0 and s.accepted_tohpe == 0:
                 tohpe_zero = index
             _out.append(
-                f"bd{dim}/d{dim - max_dim}/m{mean_dim:.3g};"
-                f"r{r}/d{rd:+d}/q{rq:.2f}%;tha{s.accepted_tohpe}/tda{s.accepted}/b{int(is_beyond)}"
+                f"r{r}/d{rd:+d}/q{rq:.2f}%;bd{dim}/d{dim - max_dim}/m{mean_dim:.3g};bs{bs}/d{bs-maxbucket:+d}"
+                f"tha{s.accepted_tohpe}/tda{s.accepted}/b{int(is_beyond)}"
             )
 
         out = []

@@ -39,7 +39,7 @@ if __name__ == "__main__":
         # "gf_mult_Vandaele_wo_ancilla/gf2^7",
         # "gf_mult_Vandaele_wo_ancilla/gf2^8",
         # "gf_mult_Vandaele_wo_ancilla/gf2^9",
-        # "gf_mult_Vandaele_wo_ancilla/gf2^10_1030",
+        "gf_mult_Vandaele_wo_ancilla/gf2^10_1030",
         # "gf2^3_mult_fr_310",
         # "gf2^3_mult_fr_310",
 
@@ -48,7 +48,7 @@ if __name__ == "__main__":
         # "gf2^5_mult_fr_54320",
         # "gf2^6_mult_fr_610",
         # "gf_mult_Vandaele_wo_ancilla/gf2^10_1030",
-        "gf_mult_Vandaele_wo_ancilla/gf2^16_1612310",
+        # "gf_mult_Vandaele_wo_ancilla/gf2^16_1612310",
         # "gf2^8_mult_fr_84310",
         # "gf2^9_mult_fr_940",
         # "gf2^10_mult_fr_1030",
