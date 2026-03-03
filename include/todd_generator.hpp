@@ -129,12 +129,10 @@ static CandidateExport export_candidate(Candidate const& c) {
 }
 
 struct ScoringConfig {
-    enum Function { LINEAR, POLYNOM, EXPONENTIAL, LOGARITHMIC, SIGMOID };
+    enum Function { LINEAR, POLYNOM, DISTANCE, LOGARITHMIC, SIGMOID };
     Function type = LINEAR;
     float exponent = 2.0;
-    float scale = 1.0;
     float threshold = 0.5;
-    
     float linear_scoring(std::vector<float> w, std::vector<float> x) {
         float sum = 0.0;
         size_t n = std::min(w.size(), x.size());
@@ -153,11 +151,11 @@ struct ScoringConfig {
         return sum;
     }
     
-    float exponential_scoring(std::vector<float> w, std::vector<float> x) {
+    float distance_scoring(std::vector<float> w, std::vector<float> x) {
         float sum = 0.0;
         size_t n = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
-            sum += w[i] * std::exp(x[i]);
+            sum -= (x[i] - w[i]) * (x[i] - w[i]);
         }
         return sum;
     }
@@ -216,8 +214,8 @@ struct ExplorationScore {
             case (ScoringConfig::POLYNOM):
                 cand.pool_score = sc.polynom_scoring(weights, x);                
                 break;
-            case (ScoringConfig::EXPONENTIAL):
-                cand.pool_score = sc.exponential_scoring(weights, x);
+            case (ScoringConfig::DISTANCE):
+                cand.pool_score = sc.distance_scoring(weights, x);
                 break;
             case (ScoringConfig::SIGMOID):
                 cand.pool_score = sc.sigmoid_scoring(weights, x);
@@ -269,8 +267,8 @@ struct FinalizationScore {
             case (ScoringConfig::POLYNOM):
                 cand.final_score = sc.polynom_scoring(weights, x);                
                 break;
-            case (ScoringConfig::EXPONENTIAL):
-                cand.final_score = sc.exponential_scoring(weights, x);
+            case (ScoringConfig::DISTANCE):
+                cand.final_score = sc.distance_scoring(weights, x);
                 break;
             case (ScoringConfig::SIGMOID):
                 cand.final_score = sc.sigmoid_scoring(weights, x);
