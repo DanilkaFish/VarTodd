@@ -439,189 +439,75 @@ py::class_<Stats>(m, "Stats")
         }
     ));
     // ---------------- Result ----------------
-py::enum_<ScoringConfig::Function>(m, "ScoringFunction")
-    .value("LINEAR", ScoringConfig::Function::LINEAR)
-    .value("POLYNOM", ScoringConfig::Function::POLYNOM)
-    .value("EXPONENTIAL", ScoringConfig::Function::EXPONENTIAL)
-    .value("LOGARITHMIC", ScoringConfig::Function::LOGARITHMIC)
-    .value("SIGMOID", ScoringConfig::Function::SIGMOID)
-    .export_values();
+    py::enum_<ScoringFunction::Function>(m, "Function")
+        .value("LINEAR", ScoringFunction::LINEAR)
+        .value("POLYNOM", ScoringFunction::POLYNOM)
+        .value("DISTANCE", ScoringFunction::DISTANCE)
+        .value("LOGARITHMIC", ScoringFunction::LOGARITHMIC)
+        .value("SIGMOID", ScoringFunction::SIGMOID)
+        .export_values();
 
-py::class_<ScoringConfig>(m, "ScoringConfig")
-    .def(py::init<ScoringConfig::Function, float, float, float>(),
-        py::arg("type") = 0,
-        py::arg("pow") = 1,
-        py::arg("sigmoid_scale") = 1,
-        py::arg("sigmoid_threshold") = 0.5
-    )
-    .def_readwrite("type", &ScoringConfig::type)
-    .def_readwrite("pow", &ScoringConfig::exponent)
-    .def_readwrite("sigmoid_scale", &ScoringConfig::scale)
-    .def_readwrite("sigmoid_threshold", &ScoringConfig::threshold)
-    
-    .def("__repr__",
-         [](const ScoringConfig& sc) {
-             std::string type_str;
-             switch (sc.type) {
-                 case ScoringConfig::LINEAR: type_str = "LINEAR"; break;
-                 case ScoringConfig::POLYNOM: type_str = "POLYNOM"; break;
-                 case ScoringConfig::EXPONENTIAL: type_str = "EXPONENTIAL"; break;
-                 case ScoringConfig::LOGARITHMIC: type_str = "LOGARITHMIC"; break;
-                 case ScoringConfig::SIGMOID: type_str = "SIGMOID"; break;
-                 default: type_str = "UNKNOWN";
-             }
-             return "ScoringConfig(type=" + type_str + 
-                    ", pow=" + std::to_string(sc.exponent) +
-                    ", sigmoid_scale=" + std::to_string(sc.scale) +
-                    ", sigmoid_threshold=" + std::to_string(sc.threshold) + ")";
-         })
-    
-    .def(py::pickle(
-        [](const ScoringConfig& sc) {
-            return py::make_tuple(
-                static_cast<int>(sc.type),
-                sc.exponent,
-                sc.scale,
-                sc.threshold
-            );
-        },
-        [](py::tuple t) {
-            if (t.size() != 4)
-                throw std::runtime_error("Invalid state for ScoringConfig!");
-            
-            ScoringConfig sc;
-            sc.type = static_cast<ScoringConfig::Function>(t[0].cast<int>());
-            sc.exponent = t[1].cast<float>();
-            sc.scale = t[2].cast<float>();
-            sc.threshold = t[3].cast<float>();
-            
-            return sc;
-        }
-    ));
+    // ScoringFunction class
+    py::class_<ScoringFunction>(m, "ScoringFunction")
+        .def(py::init<>())
+        .def(py::init([](ScoringFunction::Function type, float pow) {
+            ScoringFunction sf;
+            sf.type = type;
+            sf.pow = pow;
+            return sf;
+        }), py::arg("type") = ScoringFunction::LINEAR, py::arg("pow") = 2.0f)
+        .def_readwrite("type", &ScoringFunction::type)
+        .def_readwrite("pow", &ScoringFunction::pow)
+
+        .def(py::pickle(
+            [](const ScoringFunction& sf) { return py::make_tuple(static_cast<int>(sf.type), sf.pow);; },
+            [](py::tuple t) { 
+                if (t.size() != 2) {
+                    throw std::runtime_error("Invalid state!");
+                }
+                ScoringFunction sf;
+                sf.type = static_cast<ScoringFunction::Function>(t[0].cast<int>());
+                sf.pow = t[1].cast<float>();
+                return sf; }
+            ));
 
 py::class_<ExplorationScore>(m, "ExplorationScore")
-    .def(py::init<float, float, float, float, float>(), 
-         py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
-         py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0, py::arg("wz") = 1.0,
-         "Initialize with weight parameters")
-    
-    .def(py::init([](float wred, float wdim, float wbucket, float wvw, float wz, ScoringConfig sc) {
-             ExplorationScore es(wred, wdim, wbucket, wvw, wz);
-             es.sc = sc;
-             return es;
-         }), 
-         py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
-         py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0, py::arg("wz") = 1.0,
-         py::arg("sc") = ScoringConfig(),
-         "Initialize with weight parameters and scoring configuration")
-    
-    .def_readwrite("wred", &ExplorationScore::wred, "Reduction weight")
-    .def_readwrite("wdim", &ExplorationScore::wdim, "Dimension weight")
-    .def_readwrite("wbucket", &ExplorationScore::wbucket, "Bucket weight")
-    .def_readwrite("wvw", &ExplorationScore::wvw, "Vector weight")
-    .def_readwrite("wz", &ExplorationScore::wz, "Z weight")
-    .def_readwrite("sc", &ExplorationScore::sc, "Scoring configuration")
-    
-    .def("__repr__",
-         [](const ExplorationScore& r) {
-             return "ExplorationScore(wdim=" + std::to_string(r.wdim) + 
-                    ", wbucket=" + std::to_string(r.wbucket) +
-                    ", wred=" + std::to_string(r.wred) + 
-                    ", wvw=" + std::to_string(r.wvw) + 
-                    ", wz=" + std::to_string(r.wz) + 
-                    ", type=" + std::to_string(static_cast<int>(r.sc.type)) + ")";
-         })
-    
-    .def("__str__",
-         [](const ExplorationScore& r) {
-             return "(" + std::to_string(r.wdim) + ", " + std::to_string(r.wbucket) + ", " +
-                    std::to_string(r.wred) + ", " + std::to_string(r.wvw) + ", " + 
-                    std::to_string(r.wz) + ")";
-         })
+    .def(py::init<const std::vector<float>&, const std::vector<float>&, const ScoringFunction&>(),
+             py::arg("weights") = std::vector<float>{0,0,0,0,0},
+             py::arg("centers") = std::vector<float>{0,0,0,0,0},
+             py::arg("sc") = ScoringFunction())
     
     .def("__len__", [](const ExplorationScore&) { return 5; })
     
     .def("__getitem__",
          [](const ExplorationScore& r, py::ssize_t index) {
              if (index < 0 || index >= 5) {
-                 throw py::index_error("ExplorationScore index out of range");
+                 throw py::index_error("ExplorationScore weights index out of range");
              }
-             switch (index) {
-                 case 0: return py::float_(r.wred);
-                 case 1: return py::float_(r.wdim);
-                 case 2: return py::float_(r.wbucket);
-                 case 3: return py::float_(r.wvw);
-                 case 4: return py::float_(r.wz);
-                 default: return py::float_(0.0f);
-             }
+             return py::float_(r.weights[index]);
          })
     
     .def(py::pickle(
         [](const ExplorationScore& r) { 
-            return py::make_tuple(
-                r.wred, r.wdim, r.wbucket, r.wvw, r.wz, r.sc
-            ); 
+            return py::make_tuple(r.weights, r.centers, r.sc);
         },
         [](py::tuple t) {
-            if (t.size() != 6)
+            if (t.size() != 3)
                 throw std::runtime_error("Invalid state for ExplorationScore! Expected 6 elements.");
-            
             ExplorationScore es(
-                t[0].cast<float>(),   // wred
-                t[1].cast<float>(),   // wdim
-                t[2].cast<float>(),   // wbucket
-                t[3].cast<float>(),   // wvw
-                t[4].cast<float>()    // wz
+                t[0].cast<std::vector<float>>(),
+                t[1].cast<std::vector<float>>(),
+                t[2].cast<ScoringFunction>()
             );
-            es.sc = t[5].cast<ScoringConfig>();
             return es;
         }
     ));
 
 py::class_<FinalizationScore>(m, "FinalizationScore")
-    .def(py::init<float, float, float, float, float, float>(), 
-         py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
-         py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0, 
-         py::arg("wz") = 1.0, py::arg("wtohpe") = 1.0,
-         "Initialize with weight parameters")
-    
-    .def(py::init([](float wred, float wdim, float wbucket, float wvw, float wz, float wtohpe,
-                     ScoringConfig sc) {
-             FinalizationScore fs(wred, wdim, wbucket, wvw, wz, wtohpe);
-             fs.sc = sc;
-             return fs;
-         }), 
-         py::arg("wred") = 1.0, py::arg("wdim") = 1.0,
-         py::arg("wbucket") = 1.0, py::arg("wvw") = 1.0, 
-         py::arg("wz") = 1.0, py::arg("wtohpe") = 1.0,
-         py::arg("sc") = ScoringConfig(),
-         "Initialize with weight parameters and scoring configuration")
-    
-    .def_readwrite("sc", &FinalizationScore::sc, "Scoring configuration")
-    .def_readwrite("wred", &FinalizationScore::wred, "Reduction weight")
-    .def_readwrite("wdim", &FinalizationScore::wdim, "Dimension weight")
-    .def_readwrite("wbucket", &FinalizationScore::wbucket, "Bucket weight")
-    .def_readwrite("wvw", &FinalizationScore::wvw, "Vector weight")
-    .def_readwrite("wz", &FinalizationScore::wz, "Z weight")
-    .def_readwrite("wtohpe_dim", &FinalizationScore::wtohpe_dim, "TOHPE dimension weight")
-
-    .def("__repr__",
-         [](const FinalizationScore& r) {
-             return "FinalizationScore(wdim=" + std::to_string(r.wdim) + 
-                    ", wbucket=" + std::to_string(r.wbucket) +
-                    ", wred=" + std::to_string(r.wred) + 
-                    ", wvw=" + std::to_string(r.wvw) + 
-                    ", wz=" + std::to_string(r.wz) + 
-                    ", wtohpe=" + std::to_string(r.wtohpe_dim) + 
-                    ", type=" + std::to_string(static_cast<int>(r.sc.type)) + ")";
-         })
-    
-    .def("__str__",
-         [](const FinalizationScore& r) {
-             return "(" + std::to_string(r.wdim) + ", " + std::to_string(r.wbucket) + ", " +
-                    std::to_string(r.wred) + ", " + std::to_string(r.wvw) + ", " + 
-                    std::to_string(r.wz) + ", " + std::to_string(r.wtohpe_dim) + ")";
-         })
+    .def(py::init<const std::vector<float>&, const std::vector<float>&, const ScoringFunction&>(),
+             py::arg("weights") = std::vector<float>{0,0,0,0,0,0},
+             py::arg("centers") = std::vector<float>{0,0,0,0,0,0},
+             py::arg("sc") = ScoringFunction())
     
     .def("__len__", [](const FinalizationScore&) { return 6; })
     
@@ -630,38 +516,23 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
              if (index < 0 || index >= 6) {
                  throw py::index_error("FinalizationScore index out of range");
              }
-             switch (index) {
-                 case 0: return py::float_(r.wred);
-                 case 1: return py::float_(r.wdim);
-                 case 2: return py::float_(r.wbucket);
-                 case 3: return py::float_(r.wvw);
-                 case 4: return py::float_(r.wz);
-                 case 5: return py::float_(r.wtohpe_dim);
-                 default: return py::float_(0.0f);
-             }
+             return py::float_(r.weights[index]);
          })
     
     .def(py::pickle(
         [](const FinalizationScore& r) { 
-            return py::make_tuple(
-                r.wred, r.wdim, r.wbucket, r.wvw, r.wz, r.wtohpe_dim, r.sc
-            ); 
+            return py::make_tuple(r.weights, r.centers, r.sc);
         },
         [](py::tuple t) {
-            if (t.size() == 7) {
-                float wred    = t[0].cast<float>();
-                float wdim    = t[1].cast<float>();
-                float wbucket = t[2].cast<float>();
-                float wvw     = t[3].cast<float>();
-                float wz      = t[4].cast<float>();
-                float wtohpe  = t[5].cast<float>();
-                FinalizationScore fs(wred, wdim, wbucket, wvw, wz, wtohpe);
-                fs.sc = t[6].cast<ScoringConfig>();
-                return fs;
+            if (t.size() != 3) {
+                throw std::runtime_error("Invalid state for FinalizationScore Expected 3 elements.");
             }
-            else {
-                throw std::runtime_error("Invalid state for FinalizationScore! Expected 7 elements.");
-            }
+            FinalizationScore fs(
+                t[0].cast<std::vector<float>>(),
+                t[1].cast<std::vector<float>>(),
+                t[2].cast<ScoringFunction>()
+            );
+            return fs;
         }
     ));
     // ---------------- Result ----------------

@@ -128,30 +128,54 @@ static CandidateExport export_candidate(Candidate const& c) {
     };
 }
 
-struct ScoringConfig {
+
+struct ScoringFunction {
     enum Function { LINEAR, POLYNOM, DISTANCE, LOGARITHMIC, SIGMOID };
     Function type = LINEAR;
-    float exponent = 2.0;
-    float threshold = 0.5;
-    float linear_scoring(std::vector<float> w, std::vector<float> x) {
+    float pow = 2.0;
+    float evaluate(const std::vector<float>& weights, const std::vector<float>& centers, const std::vector<float>& x) const{
+        switch (type) {
+            case (ScoringFunction::LINEAR):
+                return linear_scoring(weights, x);                
+            case (ScoringFunction::POLYNOM):
+                return polynom_scoring(weights, centers, x);                
+            case (ScoringFunction::DISTANCE):
+                return distance_scoring(weights, x);
+            case (ScoringFunction::SIGMOID):
+                return sigmoid_scoring(weights, x);
+            case (ScoringFunction::LOGARITHMIC):
+                return logarithmic_scoring(weights, x);
+            default:
+                throw std::runtime_error("Wrong function type for evaluation");
+        }
+        return 0;
+    }
+
+    float linear_scoring(std::vector<float> w, std::vector<float> x) const {
         float sum = 0.0;
         size_t n = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
             sum += w[i] * x[i];
         }
-        return sum ;
+        return sum;
     }
     
-    float polynom_scoring(std::vector<float> w, std::vector<float> x) {
+    float polynom_scoring(const std::vector<float>& w, const std::vector<float> c, const std::vector<float>& x) const {
         float sum = 0.0;
         size_t n = std::min(w.size(), x.size());
-        for (size_t i = 0; i < n; ++i) {
-            sum += w[i] * std::pow(x[i], exponent);
+        if (pow >= 0){
+            for (size_t i = 0; i < n; ++i) {
+                sum += w[i] * std::pow(std::abs(x[i] - c[i]), pow);
+            }
+        } else {
+            for (size_t i = 0; i < n; ++i) {
+                sum += w[i] * std::pow(1 / std::max(std::abs(x[i] - c[i]), 0.001f), -pow);
+            }
         }
         return sum;
     }
     
-    float distance_scoring(std::vector<float> w, std::vector<float> x) {
+    float distance_scoring(std::vector<float> w, std::vector<float> x) const {
         float sum = 0.0;
         size_t n = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
@@ -160,17 +184,17 @@ struct ScoringConfig {
         return sum;
     }
     
-    float sigmoid_scoring(std::vector<float> w, std::vector<float> x) {
+    float sigmoid_scoring(std::vector<float> w, std::vector<float> x) const {
         float sum = 0.0;
         size_t n = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
-            sum += w[i] * std::pow(x[i], exponent);
+            sum += w[i] * std::pow(x[i], pow);
         }
-        float z = sum  - threshold;
+        float z = sum;
         return 1.0f / (1.0f + std::exp(-z));
     }
     
-    float logarithmic_scoring(std::vector<float> w, std::vector<float> x) {
+    float logarithmic_scoring(std::vector<float> w, std::vector<float> x) const {
         float sum = 0.0;
         size_t n = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
@@ -182,100 +206,61 @@ struct ScoringConfig {
 };
 
 struct ExplorationScore {
-    float   wred     = 0;
-    float   wdim     = 0;
-    float   wbucket  = 0;
-    float   wvw      = 0;
-    float   wz       = 0;
-    index_t bn       = 1;
-    index_t wvwn     = 1;
-    index_t dn       = 1;
-    ScoringConfig sc = {};
+    std::vector<float> weights = {0,0,0,0,0};
+    std::vector<float> centers = {0,0,0,0,0};
+    
+    float bn       = 1;
+    float wvwn     = 1;
+    float dn       = 1;
+    ScoringFunction sc = {};
     explicit ExplorationScore() = default;
-    ExplorationScore(index_t bn, index_t wvwn, index_t dn) : bn{bn}, wvwn{wvwn}, dn{dn} {};
     ExplorationScore(float wred, float wdim, float wbucket, float wvw, float wz)
-        : wred{wred}, wdim{wdim}, wbucket{wbucket}, wvw{wvw}, wz{wz} {}
-
+        : weights{wred, wdim, wbucket, wvw, wz} {}
+    ExplorationScore(std::vector<float> weights, std::vector<float> centers, ScoringFunction sc)
+        : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
     auto operator()(Candidate& cand) {
         auto tohpe_dim = 0;
-        std::vector<float> weights = {wred, wdim, wbucket, wvw, wz};
         std::vector<float> x = {
-            cand.reduction / float(bn) / 2, 
-            cand.basis_dim / float(dn),
-            cand.bucket_size / float(bn),
-            cand.vec.count() / float(wvwn),
+            cand.reduction / bn / 2, 
+            cand.basis_dim / dn,
+            cand.bucket_size / bn,
+            cand.vec.count() / wvwn,
             (cand.nsptr->vector().count())/float(cand.nsptr->vector().size())
         };
-
-        switch (sc.type) {
-            case (ScoringConfig::LINEAR):
-                cand.pool_score = sc.linear_scoring(weights, x);                
-                break;
-            case (ScoringConfig::POLYNOM):
-                cand.pool_score = sc.polynom_scoring(weights, x);                
-                break;
-            case (ScoringConfig::DISTANCE):
-                cand.pool_score = sc.distance_scoring(weights, x);
-                break;
-            case (ScoringConfig::SIGMOID):
-                cand.pool_score = sc.sigmoid_scoring(weights, x);
-                break;
-            case (ScoringConfig::LOGARITHMIC):
-                cand.pool_score = sc.logarithmic_scoring(weights, x);
-        }
+        cand.pool_score = sc.evaluate(weights, centers, x); 
         return std::make_pair(cand.pool_score, 0);
     }
 };
 
 struct FinalizationScore {
-    float   wred       = 0;
-    float   wdim       = 0;
-    float   wbucket    = 0;
-    float   wvw        = 0;
-    float   wz         = 0;
-    float   wtohpe_dim = 0;
-    index_t bn         = 1;
-    index_t wvwn       = 1;
-    index_t dn         = 1;
-    ScoringConfig sc   = {};
+    std::vector<float> weights = {0,0,0,0,0,0};
+    std::vector<float> centers = {0,0,0,0,0,0};
+    float bn         = 1;
+    float wvwn       = 1;
+    float dn         = 1;
+    ScoringFunction sc   = {};
 
     explicit FinalizationScore() = default;
-    FinalizationScore(index_t bn, index_t wvwn, index_t dn) : bn{bn}, wvwn{wvwn}, dn{dn} {};
     FinalizationScore(float wred, float wdim, float wbucket, float wvw, float wz, float wtohpe_dim)
-        : wred{wred}, wtohpe_dim{wtohpe_dim}, wdim{wdim}, wbucket{wbucket}, wvw{wvw}, wz{wz} {}
+        : weights{wred, wdim, wbucket, wvw, wz, wtohpe_dim} {}
+    FinalizationScore(std::vector<float> weights, std::vector<float> centers, ScoringFunction sc)
+        : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
     auto operator()(Candidate& cand) {
         auto tohpe_dim = 0;
-        std::vector<float> weights = {wred, wdim, wbucket, wvw, wz};
         std::vector<float> x = {
-            cand.reduction / float(bn) / 2, 
-            cand.basis_dim / float(dn),
-            cand.bucket_size / float(bn),
-            cand.vec.count() / float(wvwn),
+            cand.reduction / bn / 2, 
+            cand.basis_dim / dn,
+            cand.bucket_size / bn,
+            cand.vec.count() / wvwn,
             (cand.nsptr->vector().count())/float(cand.nsptr->vector().size())
         };
-        if (wtohpe_dim != 0) {
+        if (weights[5] != 0) {
             tohpe_dim = get_tohpe_basis(cand.nsptr->apply(cand.vec)).rows();
-            weights.push_back(wtohpe_dim);
             x.push_back(tohpe_dim / float(dn));
             cand.tohpe_dim = tohpe_dim;
         } 
 
-        switch (sc.type) {
-            case (ScoringConfig::LINEAR):
-                cand.final_score = sc.linear_scoring(weights, x);                
-                break;
-            case (ScoringConfig::POLYNOM):
-                cand.final_score = sc.polynom_scoring(weights, x);                
-                break;
-            case (ScoringConfig::DISTANCE):
-                cand.final_score = sc.distance_scoring(weights, x);
-                break;
-            case (ScoringConfig::SIGMOID):
-                cand.final_score = sc.sigmoid_scoring(weights, x);
-                break;
-            case (ScoringConfig::LOGARITHMIC):
-                cand.final_score = sc.logarithmic_scoring(weights, x);
-        }
+        cand.final_score = sc.evaluate(weights, centers, x);
         return std::make_pair(cand.final_score, cand.tohpe_dim);
     }
 };

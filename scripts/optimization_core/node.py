@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional
-from pyvartodd.Release.pyvartodd import Matrix, CandidateExport, Stats, Result,  PolicyConfig, ExplorationScore, FinalizationScore, policy_iteration, Tensor3D, ScoringConfig, ScoringFunction
+from pyvartodd.Release.pyvartodd import Matrix, CandidateExport, Stats, Result,  PolicyConfig, ExplorationScore, FinalizationScore, policy_iteration, Tensor3D, Function, ScoringFunction
 
 
 @dataclass(slots=True)

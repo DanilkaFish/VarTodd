@@ -29,12 +29,13 @@ class Path:
     def branch_path(self, node: Node, dao: Dao, x0: List[float]):
         new_path = Path()
         new_path.final_node = node
-        new_path.daos = self.daos + [dao]
+        new_path.daos = self.daos + [deepcopy(dao)]
         new_path.x0s = self.x0s + [deepcopy(x0)]
         new_path.ranks_thr = deepcopy(self.ranks_thr)
         return new_path
         
     def branch_path_at(self, rank_thr: int):
+        print(f"{self.final_node.state.rows=}")
         node = self.final_node
         if node.state.rows > rank_thr:
             return None
@@ -251,8 +252,8 @@ class ModeDao:
     max_tohpe: DepthSchedule[int] = field(default_factory=lambda: DepthSchedule.constant(1))
     gen_part: DepthSchedule[float] = field(default_factory=lambda: DepthSchedule.constant(1.0))
     max_z_to_research: DepthSchedule[float] = field(default_factory=lambda: DepthSchedule.constant(5000))
-    pool_weights: DepthSchedule[ExplorationScore] = field(default_factory=lambda: DepthSchedule.constant(ExplorationScore(0.5, 0.5, 0.0,  0.0)))
-    final_weights: DepthSchedule[FinalizationScore] = field(default_factory=lambda: DepthSchedule.constant(FinalizationScore(0.5, 0.5, 0.0,  0.0, 1.0)))
+    pool_weights: DepthSchedule[ExplorationScore] = field(default_factory=lambda: DepthSchedule.constant(ExplorationScore([0.5, 0.5, 0.0, 0.0, 0])))
+    final_weights: DepthSchedule[FinalizationScore] = field(default_factory=lambda: DepthSchedule.constant(FinalizationScore([0.5, 0.5, 0.0, 0.0, 0, 0])))
     try_only_tohpe: DepthSchedule[bool] = field(default_factory=lambda: DepthSchedule.constant(True))
     max_from_single_ns: DepthSchedule[int] = field(default_factory=lambda: DepthSchedule.constant(5))
     min_reduction: DepthSchedule[int] = field(default_factory=lambda: DepthSchedule.constant(0))

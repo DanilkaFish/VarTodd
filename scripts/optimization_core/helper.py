@@ -1,6 +1,6 @@
 from typing import List
 import numpy as np
-from node import Matrix, Node, FinalizationScore, ExplorationScore, Tensor3D, ScoringConfig, ScoringFunction
+from node import Matrix, Node, FinalizationScore, ExplorationScore, Tensor3D, Function, ScoringFunction
 from mcts_dao import Dao, RankSchedule, Path
 from todd import Todd
 from typing import Iterable, Sequence, Any, Tuple
@@ -236,6 +236,7 @@ class BaseEvaluator:
         self.dao: Dao = Dao()
         self.dao.threads = 4
         self.todd = Todd(self.dao, max_depth)
+        self.max_depth = max_depth
         self.tcount = []
         self.best_pathes = []
         self.best_ranks = []
@@ -246,13 +247,15 @@ class BaseEvaluator:
         self.reinit()    
 
     def set_up_new_init(self, path_num:int, rank_thr:int, xopt=None):
+
         if path_num >= len(self.best_pathes):
             return None
         new_path = self.best_pathes[path_num].branch_path_at(rank_thr=rank_thr)
         if new_path is None:
             return None
         self.current_path = new_path
-        self.dao = self.current_path.daos[-1]
+        self.dao = deepcopy(self.current_path.daos[-1])
+        self.todd = Todd(self.dao, self.max_depth)
         if xopt is not None:
             self.insert(xopt)
         else:

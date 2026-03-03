@@ -38,7 +38,7 @@ if __name__ == "__main__":
         # "gf_mult_Vandaele_wo_ancilla/gf2^6",
         # "gf_mult_Vandaele_wo_ancilla/gf2^7",
         # "gf_mult_Vandaele_wo_ancilla/gf2^8",
-        # "gf_mult_Vandaele_wo_ancilla/gf2^9",
+        # "gf_mult_Vandaele_wo_ancilla/gf2^9_940",
         "gf_mult_Vandaele_wo_ancilla/gf2^10_1030",
         # "gf2^3_mult_fr_310",
         # "gf2^3_mult_fr_310",
@@ -55,7 +55,6 @@ if __name__ == "__main__":
         # "gf2^11_mult_fr_1120"
         # "1733init173-00231"
         # # "1731init129-00168"
-
     ]
     results = []
     aux_info = {}
