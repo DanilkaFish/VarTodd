@@ -476,15 +476,21 @@ py::class_<ExplorationScore>(m, "ExplorationScore")
              py::arg("weights") = std::vector<float>{0,0,0,0,0},
              py::arg("centers") = std::vector<float>{0,0,0,0,0},
              py::arg("sc") = ScoringFunction())
-    
+    .def(py::init<const std::vector<float>&, const std::vector<float>&,float>(),
+        py::arg("weights") = std::vector<float>{0,0,0,0,0},
+        py::arg("centers") = std::vector<float>{0,0,0,0,0},
+        py::arg("pow")=1.0f)
     .def("__len__", [](const ExplorationScore&) { return 5; })
+    .def("pow", [](const ExplorationScore& es) { return es.sc.pow; })
     
     .def("__getitem__",
          [](const ExplorationScore& r, py::ssize_t index) {
-             if (index < 0 || index >= 5) {
+             if (index < 0 || index >= 10) {
                  throw py::index_error("ExplorationScore weights index out of range");
              }
-             return py::float_(r.weights[index]);
+             if (index <= 4)
+                return py::float_(r.weights[index]);
+             return py::float_(r.centers[index - 5]);
          })
     
     .def(py::pickle(
@@ -508,15 +514,21 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
              py::arg("weights") = std::vector<float>{0,0,0,0,0,0},
              py::arg("centers") = std::vector<float>{0,0,0,0,0,0},
              py::arg("sc") = ScoringFunction())
-    
+    .def(py::init<const std::vector<float>&, const std::vector<float>&,float>(),
+            py::arg("weights") = std::vector<float>{0,0,0,0,0,0},
+            py::arg("centers") = std::vector<float>{0,0,0,0,0,0},
+            py::arg("pow")=1.0f)
+    .def("pow", [](const FinalizationScore& fs) { return fs.sc.pow; })
     .def("__len__", [](const FinalizationScore&) { return 6; })
     
     .def("__getitem__",
          [](const FinalizationScore& r, py::ssize_t index) {
-             if (index < 0 || index >= 6) {
+             if (index < 0 || index >= 12) {
                  throw py::index_error("FinalizationScore index out of range");
              }
-             return py::float_(r.weights[index]);
+             if (index <= 5)
+                return py::float_(r.weights[index]);
+             return py::float_(r.centers[index - 6]);
          })
     
     .def(py::pickle(

@@ -218,6 +218,8 @@ struct ExplorationScore {
         : weights{wred, wdim, wbucket, wvw, wz} {}
     ExplorationScore(std::vector<float> weights, std::vector<float> centers, ScoringFunction sc)
         : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
+    ExplorationScore(std::vector<float> weights, std::vector<float> centers, float pow)
+        : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
     auto operator()(Candidate& cand) {
         auto tohpe_dim = 0;
         std::vector<float> x = {
@@ -245,6 +247,8 @@ struct FinalizationScore {
         : weights{wred, wdim, wbucket, wvw, wz, wtohpe_dim} {}
     FinalizationScore(std::vector<float> weights, std::vector<float> centers, ScoringFunction sc)
         : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
+    FinalizationScore(std::vector<float> weights, std::vector<float> centers, float pow)
+    : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
     auto operator()(Candidate& cand) {
         auto tohpe_dim = 0;
         std::vector<float> x = {
