@@ -139,6 +139,7 @@ class FullToddGenerator {
     auto make(index_t row) const -> NullSpace;
     auto make(index_t row1, index_t row2) const -> NullSpace;
     auto full_todd_kernel(RowCView z) const -> Matrix;
+    auto full_todd_kernel(RowCView z, const SumEntry* ptr, int len) const -> Matrix;
 
     const Matrix& P() const noexcept { return M_->P(); }
 

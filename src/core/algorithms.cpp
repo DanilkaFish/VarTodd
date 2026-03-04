@@ -1,6 +1,9 @@
 #include "algorithms.hpp"
 
+#include "matrix.hpp"
 #include "random.hpp"
+#include "todd_index.hpp"
+#include "typedef.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -165,6 +168,101 @@ static inline Row extract_right(RowCView row, index_t divider, index_t nY) {
 
     return y;
 }
+
+Matrix solve_and_build_solution_basis(Matrix& A, index_t divider, const Matrix& tohpe, const SumEntry* ptr, int len) {
+    if (A.rows() == 0)
+        return Matrix();
+
+    const index_t m      = A.rows();
+    const index_t nTotal = A.cols();
+    if (divider > nTotal)
+        return Matrix();
+
+    const index_t nY = nTotal - divider;
+    if (nY == 0)
+        return Matrix();
+
+    Matrix Y_tohpe(tohpe);
+    for (index_t i = 0; i < Y_tohpe.rows(); i++){
+        for (index_t t=0; t < len; t++){
+            RowView vec = Y_tohpe[i];
+            if (ptr[t].is_pair()) {
+                if (vec.test(ptr[t].b)){
+                    vec.flip(ptr[t].a);
+                    vec.flip(ptr[t].b);
+                }
+            } else if (vec.count() % 2 == 1){
+                vec.flip(ptr[t].a);
+            }
+        }
+    }
+    for (index_t i = 0; i < m; i++){
+        for (index_t t=0; t < len; t++){
+            RowView vec = A[i];
+            if (ptr[t].is_pair()) {
+                if (vec.test(divider + ptr[t].b)){
+                    vec.flip(divider + ptr[t].a);
+                    vec.flip(divider + ptr[t].b);
+                }
+            } else if (vec.count() % 2 == 1){
+                vec.flip(divider + ptr[t].a);
+            }
+        }
+    }
+    static thread_local PivotMap pivA;
+    static thread_local PivotMap pivY;
+
+    pivA.reset((std::size_t)divider);
+    pivY.reset((std::size_t)nY);
+
+    Matrix basis(0, nY);
+
+    for (index_t i = 0; i < m; ++i) {
+        auto row = A[i];
+
+        auto p = row.find_first();
+        while (p != RowView::npos && p < divider) {
+            const int32_t prow = pivA.get((std::size_t)p);
+            if (prow < 0)
+                break;
+            row ^= A[(index_t)prow];
+            p = row.find_next(p);
+        }
+
+        p = row.find_first();
+        if (p == RowView::npos)
+            continue;
+
+        if (p < divider) {
+            pivA.set((std::size_t)p, (int32_t)i);
+            continue;
+        }
+
+        Row  y  = extract_right((RowCView)row, divider, nY);
+        auto yv = y.view();
+
+        auto q = yv.find_first();
+        while (q != RowView::npos) {
+            const int32_t brow = pivY.get((std::size_t)q);
+            if (brow < 0)
+                break;
+            yv ^= basis[(index_t)brow];
+            q = yv.find_next(q);
+        }
+
+        q = yv.find_first();
+        if (q == RowView::npos)
+            continue;
+
+        pivY.set((std::size_t)q, (int32_t)basis.rows());
+        basis.push_back(y.cview());
+        if (basis.rows() >= MAX_ROWS_IN_BASIS)
+            break;
+    }
+    basis.append_down_inplace(Y_tohpe);
+    return basis_gauss_elimination(std::move(basis));
+}
+
 Matrix solve_and_build_solution_basis(Matrix& A, index_t divider) {
     if (A.rows() == 0)
         return Matrix();
@@ -253,6 +351,7 @@ Matrix basis_gauss_elimination(Matrix&& A) {
     }
     return linear_indep;
 }
+
 void gauss_elimination_inplace(Matrix& A, Matrix& aug, pivot_map& pivots) {
     if (A.rows() != aug.rows())
         throw std::invalid_argument("gauss_elimination_inplace: row mismatch");
@@ -396,14 +495,14 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
 }
 
 std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_samples, float generator_part) {
-    if (dim == 0 || num_samples == 0)
+    if (dim == 0 )
         return {};
 
     std::vector<Row> out;
 
     if (dim > 15) {
+        std::unordered_map<uint64_t, uint64_t> remap;
         for (index_t j = std::max(dim - int(dim * generator_part), (index_t) 1); j < dim; ++j) {
-            std::unordered_map<uint64_t, uint64_t> remap;
             index_t t   = rand_int(1, j); // <- your RNG: inclusive range
             auto    itT = remap.find(t);
             index_t x   = (itT == remap.end()) ? t : itT->second;
@@ -422,15 +521,27 @@ std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_
     }
 
     const index_t N = 1ULL << dim;
-    // num_samples = std::min(num_samples, N);
     if (N <= num_samples) {
-        out.reserve(N);
+        out.reserve(N-1);
         for (index_t i = 1; i < N - 1; i++) {
             out.push_back(mask_to_bv(dim, i));
         }
         return out;
     }
+    std::unordered_map<uint64_t, uint64_t> remap_basis;
+    for (index_t j = std::max(dim - int(dim * generator_part), (index_t) 1); j < dim; ++j) {
+        index_t t   = rand_int(1, j); // <- your RNG: inclusive range
+        auto    itT = remap_basis.find(t);
+        index_t x   = (itT == remap_basis.end()) ? t : itT->second;
+        auto    itJ = remap_basis.find(j);
+        index_t y   = (itJ == remap_basis.end()) ? j : itJ->second;
 
+        remap_basis[t]    = y;
+        Row v(dim);
+        v.set(x);
+        out.push_back(v);
+    }   
+    
     std::unordered_map<uint64_t, uint64_t> remap;
     remap.reserve((size_t)num_samples * 2);
     for (index_t j = std::max(N - num_samples, (index_t)1); j < N; ++j) {
@@ -442,14 +553,7 @@ std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_
         remap[t]    = y;
         out.push_back(mask_to_bv(dim, x));
     }
-    for (index_t i = 0; i < dim; i++) {
-    	auto itT = remap.find(1 << i);
-    	if (itT == remap.end()) {
-    		Row v(dim);
-    		v.set(i);
-    		out.push_back(v);
-    	}
-    }
+
     return out;
 }
 

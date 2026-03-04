@@ -24,10 +24,12 @@ class SumEntry {
     SumEntry(index_t a) : a{a}, b{k_single_sentinel<index_t>()} {}
     bool is_pair() const { return b != k_single_sentinel<index_t>(); }
 
-    //   private:
     index_t a;
     index_t b;
 };
+
+Matrix solve_and_build_solution_basis(Matrix& A, index_t divider);
+Matrix solve_and_build_solution_basis(Matrix& A, index_t divider, const Matrix& tohpe, const SumEntry* ptr, int len);
 
 struct HashKeyHash {
     static inline std::uint64_t mix(std::uint64_t x) noexcept {

@@ -2,6 +2,7 @@
 
 #include "algorithms.hpp"
 #include "matrix.hpp"
+#include "todd_index.hpp"
 
 #include <algorithm>
 #include <ranges>
@@ -161,6 +162,9 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move
             continue;
         const index_t a = ptr[t].a;
         const index_t b = ptr[t].b;
+        assert(P[b].count() != 0);
+        assert(special_ != a);
+        assert(special_ != b);
         pairs_.emplace_back((int)a, (int)b);
     }
 }
@@ -350,7 +354,7 @@ FullToddGenerator::FullToddGenerator(std::shared_ptr<MatrixWithData> M) : M_{M} 
     R_and_AUG_nonpivot_scratch_ = Matrix(rows, nonp + M_->P().rows());
 }
 
-Matrix FullToddGenerator::full_todd_kernel(RowCView z) const {
+Matrix FullToddGenerator::full_todd_kernel(RowCView z, const SumEntry* ptr, int len) const {
     const auto&   ft = M_->full_todd();
     const index_t n  = z.size();
     Matrix&       RA = R_and_AUG_nonpivot_scratch_;
@@ -364,7 +368,6 @@ Matrix FullToddGenerator::full_todd_kernel(RowCView z) const {
     auto add_col = [&](auto ra_row, index_t col) {
         const std::int64_t prow = ft.pivot_row_of_col[(std::size_t)col];
         if (prow >= 0) {
-            // if (!ft.is_zero[prow])
             ra_row ^= ft.LY_nonpivot[prow];
         } else {
             ra_row.flip(ft.nonpivot_index[(std::size_t)col]);
@@ -393,27 +396,36 @@ Matrix FullToddGenerator::full_todd_kernel(RowCView z) const {
             }
         }
     }
-    Matrix solution = solve_and_build_solution_basis(RA, M_->full_todd().nonpiv_cols);
-    solution.append_down_inplace(M_->tohpe_basis());
+    // Matrix solution = solve_and_build_solution_basis(RA, M_->full_todd().nonpiv_cols);
+    Matrix solution = solve_and_build_solution_basis(RA, M_->full_todd().nonpiv_cols,M_->tohpe_basis(), ptr, len);
+    // solution.append_down_inplace(M_->tohpe_basis());
     return solution;
 }
 
 NullSpace FullToddGenerator::make(RowCView z) const {
-    Matrix Y = full_todd_kernel(z);
+    const SumEntry* ptr = nullptr;
+    index_t         len = 0;
+    M_->index().sum_bucket(z, ptr, len);
+    Matrix Y = full_todd_kernel(z, ptr, len);
     return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, z, std::move(Y))));
 }
 
 NullSpace FullToddGenerator::make(index_t row) const {
-
     Row    z = M_->P()[row];
-    Matrix Y = full_todd_kernel(z);
+    const SumEntry* ptr = nullptr;
+    index_t         len = 0;
+    M_->index().sum_bucket(z, ptr, len);
+    Matrix Y = full_todd_kernel(z, ptr, len);
     return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, std::move(z), std::move(Y))));
 }
 
 NullSpace FullToddGenerator::make(index_t row1, index_t row2) const {
     Row z = M_->P()[row1];
     z ^= M_->P()[row2];
-    Matrix Y = full_todd_kernel(z);
+    const SumEntry* ptr = nullptr;
+    index_t         len = 0;
+    M_->index().sum_bucket(z, ptr, len);
+    Matrix Y = full_todd_kernel(z, ptr, len);
     return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, std::move(z), std::move(Y))));
 }
 

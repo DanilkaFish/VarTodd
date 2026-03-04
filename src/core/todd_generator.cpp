@@ -246,7 +246,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     if (threads > 0)
         omp_set_num_threads(threads);
 #endif
-    num_samples                = std::max(num_samples, (Int)1);
+    num_samples                = std::max(num_samples, (Int)0);
     num_candidates             = std::max(num_candidates, (Int)1);
     top_pool                   = std::max(num_candidates, top_pool);
     gen_part = 1.0;
@@ -289,6 +289,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
             };
 
             auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples, gen_part);
+            assert(coefs_list.size() <= dim * gen_part + num_samples);
             for (auto const& coefs : coefs_list) {
                 assert(coefs.count() != 0);
                 auto vec = ns->linear_combination(coefs);
