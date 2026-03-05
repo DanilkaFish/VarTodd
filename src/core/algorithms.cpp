@@ -6,8 +6,11 @@
 #include "typedef.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
+#include <sys/types.h>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace todd {
 constexpr int MAX_ROWS_IN_BASIS = 100;
@@ -196,19 +199,9 @@ Matrix solve_and_build_solution_basis(Matrix& A, index_t divider, const Matrix& 
             }
         }
     }
-    for (index_t i = 0; i < m; i++){
-        for (index_t t=0; t < len; t++){
-            RowView vec = A[i];
-            if (ptr[t].is_pair()) {
-                if (vec.test(divider + ptr[t].b)){
-                    vec.flip(divider + ptr[t].a);
-                    vec.flip(divider + ptr[t].b);
-                }
-            } else if (vec.count() % 2 == 1){
-                vec.flip(divider + ptr[t].a);
-            }
-        }
-    }
+    // for (index_t i = 0; i < m; i++){
+
+    // }
     static thread_local PivotMap pivA;
     static thread_local PivotMap pivY;
 
@@ -239,10 +232,21 @@ Matrix solve_and_build_solution_basis(Matrix& A, index_t divider, const Matrix& 
         }
 
         Row  y  = extract_right((RowCView)row, divider, nY);
+        for (index_t t=0; t < len; t++){
+            if (ptr[t].is_pair()) {
+                if (y.test(ptr[t].b)){
+                    y.flip(ptr[t].a);
+                    y.flip(ptr[t].b);
+                }
+            } else if (y.count() % 2 == 1){
+                y.flip(ptr[t].a);
+            }
+        }
         auto yv = y.view();
 
         auto q = yv.find_first();
         while (q != RowView::npos) {
+
             const int32_t brow = pivY.get((std::size_t)q);
             if (brow < 0)
                 break;
@@ -469,10 +473,11 @@ auto& PyRNG::get_engine() { return rng; }
 
 static inline Row mask_to_bv(index_t dim, uint64_t mask) {
     Row v(dim);
-    for (index_t i = 0; i < dim; ++i) {
-        if (mask & (1ULL << i))
-            v.set(i);
-    }
+    v.data()[0] = mask;
+    // for (index_t i = 0; i < dim; ++i) {
+        // if (mask & (1ULL << i))
+            // v.set(i);
+    // }
     return v;
 }
 std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, index_t j, index_t num_samples) {
@@ -494,66 +499,114 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
     return out;
 }
 
-std::vector<Row> PyRNG::sample_small_unique_bitvectors(index_t dim, index_t num_samples, float generator_part) {
+
+
+inline std::vector<uint32_t> PyRNG::floyd_sample_0n(uint32_t n, index_t k)
+{
+    std::unordered_map<uint32_t, uint32_t> map;
+    map.reserve(k * 2);
+
+    std::vector<uint32_t> out;
+    out.reserve(k);
+
+    for (uint32_t j = (uint32_t)(n - k); j < (uint32_t)n; ++j) {
+        uint32_t t = (uint32_t)rand_int(0, j); // inclusive
+        auto itT = map.find(t);
+        uint32_t x = (itT == map.end()) ? t : itT->second;
+
+        auto itJ = map.find(j);
+        uint32_t y = (itJ == map.end()) ? j : itJ->second;
+
+        map[t] = y;
+        out.push_back(x);
+    }
+    return out;
+}
+
+// Floyd sampling without replacement from [1..n], returns k unique ints, no retries.
+inline std::vector<uint32_t> PyRNG::floyd_sample_1n(uint32_t n, index_t k)
+{
+    std::unordered_map<uint32_t, uint32_t> map;
+    map.reserve(k * 2);
+
+    std::vector<uint32_t> out;
+    out.reserve(k);
+
+    // sample k numbers from [1..n]
+    for (uint32_t j = (uint32_t)(n - k + 1); j <= n; ++j) {
+        uint32_t t = (uint32_t)rand_int(1, j);
+        auto itT = map.find(t);
+        uint32_t x = (itT == map.end()) ? t : itT->second;
+
+        auto itJ = map.find(j);
+        uint32_t y = (itJ == map.end()) ? j : itJ->second;
+
+        map[t] = y;
+        out.push_back(x);
+    }
+    return out;
+}
+
+std::vector<Row> PyRNG::sample_unique_bitvectors(index_t dim, index_t num_samples, float generator_part) {
     if (dim == 0 )
         return {};
 
     std::vector<Row> out;
+    uint32_t g = dim * generator_part;
 
-    if (dim > 15) {
-        std::unordered_map<uint64_t, uint64_t> remap;
-        for (index_t j = std::max(dim - int(dim * generator_part), (index_t) 1); j < dim; ++j) {
-            index_t t   = rand_int(1, j); // <- your RNG: inclusive range
-            auto    itT = remap.find(t);
-            index_t x   = (itT == remap.end()) ? t : itT->second;
-            auto    itJ = remap.find(j);
-            index_t y   = (itJ == remap.end()) ? j : itJ->second;
+    // For dim > 30 sample generators and neglect collisions for sampling 
+    if (dim > 30) {
+        out.reserve(g + num_samples);
 
-            remap[t]    = y;
+        auto bits = floyd_sample_0n(dim, g);
+        for (auto b : bits) {
             Row v(dim);
-            v.set(x);
-            out.push_back(v);
-        }   
+            v.set(b);
+            out.push_back(std::move(v));
+        }
         for (index_t i = 0; i < num_samples; i++) {
             out.push_back(sample_bitvector(dim));
         }
         return out;
     }
+    
+    const index_t Nminus1 = (1ULL << dim) - 1;
 
-    const index_t N = 1ULL << dim;
-    if (N <= num_samples) {
-        out.reserve(N-1);
-        for (index_t i = 1; i < N - 1; i++) {
+    // When g + num_samples greaters than number of space vectors than return all the vectors
+    if (Nminus1 <= g + num_samples) {
+        out.reserve(Nminus1);
+        for (index_t i = 1; i < Nminus1 + 1; i++) 
             out.push_back(mask_to_bv(dim, i));
-        }
         return out;
     }
-    std::unordered_map<uint64_t, uint64_t> remap_basis;
-    for (index_t j = std::max(dim - int(dim * generator_part), (index_t) 1); j < dim; ++j) {
-        index_t t   = rand_int(1, j); // <- your RNG: inclusive range
-        auto    itT = remap_basis.find(t);
-        index_t x   = (itT == remap_basis.end()) ? t : itT->second;
-        auto    itJ = remap_basis.find(j);
-        index_t y   = (itJ == remap_basis.end()) ? j : itJ->second;
 
-        remap_basis[t]    = y;
-        Row v(dim);
-        v.set(x);
-        out.push_back(v);
-    }   
-    
-    std::unordered_map<uint64_t, uint64_t> remap;
-    remap.reserve((size_t)num_samples * 2);
-    for (index_t j = std::max(N - num_samples, (index_t)1); j < N; ++j) {
-        index_t t   = rand_int(1, j); // <- your RNG: inclusive range
-        auto    itT = remap.find(t);
-        index_t x   = (itT == remap.end()) ? t : itT->second;
-        auto    itJ = remap.find(j);
-        index_t y   = (itJ == remap.end()) ? j : itJ->second;
-        remap[t]    = y;
-        out.push_back(mask_to_bv(dim, x));
+    // For dim <= 30 sample without collisions
+    out.reserve(g + num_samples);
+    // 1) sample generators
+    std::vector<uint32_t> gen_masks;
+    gen_masks.reserve(g);
+    auto bits = floyd_sample_0n(dim, g);
+    for (auto b : bits) { 
+        gen_masks.push_back(1u << b);
+        out.push_back(mask_to_bv(dim, 1u << b)); 
     }
+    std::sort(gen_masks.begin(), gen_masks.end());
 
+    // 2) sample other 
+    auto compact = floyd_sample_1n(Nminus1 - g, num_samples);
+    auto compact_to_mask = [&](uint32_t c) -> uint32_t {
+        uint32_t x = c;
+        for (uint32_t e: gen_masks) {
+            if (e <= x) x++;
+            else break;
+        }
+        return x;
+    };
+
+    for (uint32_t c: compact) {
+        uint32_t m = compact_to_mask(c);
+        out.push_back(mask_to_bv(dim, m));
+    }
     return out;
 }
 

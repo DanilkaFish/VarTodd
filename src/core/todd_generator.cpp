@@ -6,10 +6,6 @@
 #include <numeric>
 #include <random.hpp>
 #include <stdexcept>
-//TODO
-#ifdef __OPENMP
-#include <omp.h>
-#endif
 #include <atomic>
 
 namespace todd {
@@ -18,26 +14,22 @@ template <class Score> class TopKPool {
   public:
     explicit TopKPool(std::size_t limit, Score keyfn = Score{}) : limit_(limit), keyfn_(std::move(keyfn)) {}
 
-    void reserve(std::size_t n) { heap_.reserve(n); }
-
     std::size_t size() const noexcept { return heap_.size(); }
+
     bool        empty() const noexcept { return heap_.empty(); }
+    void reserve(std::size_t n) { heap_.reserve(n); }
 
     std::pair<float, float> push(Candidate&& c) {
         if (limit_ == 0)
             return {0, 0};
-
         const auto [key, tohpe] = keyfn_(c);
-
         if (heap_.size() < limit_) {
             heap_.push_back(Node{key, std::move(c)});
             std::push_heap(heap_.begin(), heap_.end(), worse_node_);
             return {key, tohpe};
         }
-
         if (worse_node_(heap_.front(), Node{key, c}))
             return {key, tohpe};
-
         std::pop_heap(heap_.begin(), heap_.end(), worse_node_);
         heap_.back() = Node{key, std::move(c)};
         std::push_heap(heap_.begin(), heap_.end(), worse_node_);
@@ -98,7 +90,6 @@ std::vector<Candidate> pick_best_view(TopKPool<FinalizationScore>& pool, std::si
         return {};
     if (n > all.size())
         n = all.size();
-
     auto better = [&](const Candidate& a, const Candidate& b) {
         if (a.final_score != b.final_score)
             return a.final_score > b.final_score;
@@ -110,7 +101,6 @@ std::vector<Candidate> pick_best_view(TopKPool<FinalizationScore>& pool, std::si
             return a.l < b.l;
         return a.vec < b.vec;
     };
-
     if (n < all.size()) {
         std::ranges::nth_element(all, all.begin() + n, better);
         all.resize(n);
@@ -126,7 +116,6 @@ std::vector<Candidate> pick_softmax_view(TopKPool<FinalizationScore>& pool, std:
         return {};
     if (n > all.size())
         n = all.size();
-
     auto better = [&](const Candidate& a, const Candidate& b) {
         if (a.final_score != b.final_score)
             return a.final_score > b.final_score;
@@ -138,7 +127,6 @@ std::vector<Candidate> pick_softmax_view(TopKPool<FinalizationScore>& pool, std:
             return a.l < b.l;
         return a.vec < b.vec;
     };
-
     if (!(temperature > 0.0f) || !std::isfinite(temperature)) {
         if (n < all.size()) {
             std::ranges::nth_element(all, all.begin() + n, better);
@@ -242,10 +230,6 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     auto       try_only_tohpe             = config.try_only_tohpe;
     auto       gen_part = config.gen_part;
     const auto threads                    = config.threads;
-#ifdef __OPENMP
-    if (threads > 0)
-        omp_set_num_threads(threads);
-#endif
     num_samples                = std::max(num_samples, (Int)0);
     num_candidates             = std::max(num_candidates, (Int)1);
     top_pool                   = std::max(num_candidates, top_pool);
@@ -283,12 +267,13 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
 
             PyRNG local_rng(base_seed);
             auto  beyond        = [&](const auto red) { return (red < min_reduction || red > max_reduction); };
+            
             // TODO
             auto  accept_anyway = [&](auto red) {
                 return false && red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
             };
 
-            auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples, gen_part);
+            auto coefs_list = local_rng.sample_unique_bitvectors(dim, num_samples, gen_part);
             assert(coefs_list.size() <= dim * gen_part + num_samples);
             for (auto const& coefs : coefs_list) {
                 assert(coefs.count() != 0);
@@ -304,7 +289,6 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                     }
                     auto nsptr = std::make_shared<NullSpace>(gen.make(Row(z)));
 
-                    // auto z = nsptr->vector()
                     global_stats.nonzero++;
                     global_stats.accepted_tohpe++;
                     auto      bucket_size = data->index().get_size_from_z(z);
@@ -327,19 +311,18 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
 
         if (!try_only_tohpe || pool.size() < min_pool) {
 
-            auto cmp = [](auto const& a, auto const& b) {
-                return std::tie(a.second, b.first) > std::tie(b.second, a.first);
-            };
-
             auto buckets = data->index().sum_key_sizes();
             max_z_to_research = static_cast<int>(std::min(buckets.size(), max_z_to_research));
             if (buckets.size() > max_z_to_research) {
-                std::ranges::nth_element(buckets, buckets.begin() + max_z_to_research, cmp);
+                std::ranges::nth_element(
+                    buckets, 
+                    buckets.begin() + max_z_to_research, 
+                    [&](auto const& a, auto const& b) {
+                        return std::tie(a.second, a.first) > std::tie(b.second, b.first);
+                    }
+                );
             }
 
-#ifdef __OPENMP
-#pragma omp parallel
-#endif
             {
                 Stats stats;
 
@@ -348,15 +331,11 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                 auto local_gen         = FullToddGenerator(data);
                 auto local_svs         = SeenValues{};
                 local_pool.reserve(top_pool);
-                // #ifdef __OPENMP
                 std::atomic<bool> stop{false};
-                // #endif
                 const SumEntry* ptr = nullptr;
                 auto            len = index_t{};
 
-#ifdef __OPENMP
-#pragma omp for schedule(dynamic)
-#endif
+                int pos = 0;
                 for (std::size_t i = 0; (i < buckets.size()); ++i) {
                     if (i >= max_z_to_research &&
                         (local_pool.size() >= min_pool || local_beyond_pool.size() >= min_pool)) {
@@ -364,6 +343,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                     }
                     if (stop.load(std::memory_order_relaxed))
                         continue;
+                    
                     auto& [key, bucket_size] = buckets[i];
                     stats.total += 1;
                     if (!data->index().sum_bucket(key, ptr, len) || len == 0)
@@ -389,14 +369,11 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                         return false && red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
                     };
 
-                    auto coefs_list = local_rng.sample_small_unique_bitvectors(dim, num_samples, gen_part);
-                    // auto coefs_list = (len > 1) ? local_rng.sample_small_unique_bitvectors(dim, num_samples):
-                    // local_rng.sample_special_bitvec(ns->basis(), ptr->a, ptr->b, num_samples);
+                    auto coefs_list = local_rng.sample_unique_bitvectors(dim, num_samples, gen_part);
                     stats.max_bucket = std::max(stats.max_bucket, (Int)bucket_size);
                     auto counter     = 0;
 
                     auto local_local_pool = TopKPool<ExplorationScore>(max_from_single_ns, escore);
-                    ;
                     for (auto& coefs : coefs_list) {
                         auto       vec = ns->linear_combination(coefs);
                         const auto red = ns->rank_divergence(vec);
@@ -425,9 +402,6 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                     local_pool.merge_from(local_local_pool);
                 }
 
-#ifdef __OPENMP
-#pragma omp critical
-#endif
                 {
                     if (local_pool.size() > 0) {
                         pool.merge_from(local_pool);

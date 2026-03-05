@@ -295,7 +295,7 @@ py::class_<PyRNG>(m, "RNG")
     .def("rand_double", &PyRNG::rand_double, py::arg("low") = 0.0, py::arg("high") = 1.0)
     .def("random", &PyRNG::random_raw)
     .def("seed", &PyRNG::seed)
-    .def("sample_unique_bitvecs", &PyRNG::sample_small_unique_bitvectors)
+    .def("sample_unique_bitvecs", &PyRNG::sample_unique_bitvectors)
     .def("sample_bitvec", &PyRNG::sample_bitvector);
 
 #ifdef __OPENMP
