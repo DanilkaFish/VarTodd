@@ -27,29 +27,29 @@ struct CountWS {
 // object with precacluated data used to build nullspaces and new ranks
 class MatrixWithData {
   public:
-    MatrixWithData(Matrix&& P);
+    MatrixWithData(Matrix P);
 
     const ToddIndex& index() const noexcept { return index_; }
     const Matrix&    P() const noexcept { return P_; }
     const Matrix&    tohpe_basis() const noexcept { return tohpe_basis_; }
 
-    // keeps linear independent columns of (L|Y) system
+    // keeps linear independent columns of (L|Y) system in RREF
     struct FullToddData {
         Matrix                     LY_nonpivot;
         std::vector<std::uint64_t> offset;
         std::vector<std::int64_t>  pivot_row_of_col;
         std::vector<std::int64_t>  nonpivot_index;
-        std::vector<bool>          is_zero;
+        std::vector<uint8_t>       is_zero;
         index_t                    nonpiv_cols{};
     };
 
     const FullToddData& full_todd() const noexcept { return full_todd_; }
 
   private:
-    Matrix       P_;
-    Matrix       tohpe_basis_;
-    const ToddIndex    index_;
-    FullToddData full_todd_;
+    Matrix          P_;
+    Matrix          tohpe_basis_;
+    const ToddIndex index_;
+    FullToddData    full_todd_;
 };
 
 // base object for prediction of rank divergence

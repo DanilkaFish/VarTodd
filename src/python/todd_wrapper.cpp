@@ -1,4 +1,3 @@
-#include "algorithms.hpp"
 #include "matrix.hpp"
 #include "nullspace.hpp"
 #include "random.hpp"
@@ -16,9 +15,6 @@
 #include <utility>
 #include <vector>
 
-#ifdef __OPENMP
-#include <omp.h>
-#endif
 
 namespace py = pybind11;
 using namespace todd;
@@ -297,18 +293,6 @@ py::class_<PyRNG>(m, "RNG")
     .def("seed", &PyRNG::seed)
     .def("sample_unique_bitvecs", &PyRNG::sample_unique_bitvectors)
     .def("sample_bitvec", &PyRNG::sample_bitvector);
-
-#ifdef __OPENMP
-m.def("set_omp_threads", [](int n) {
-    if (n <= 0)
-        throw std::runtime_error("threads must be > 0");
-    omp_set_num_threads(n);
-});
-m.def("get_omp_threads", []() { return omp_get_max_threads(); });
-#else
-m.def("set_omp_threads", [](int) {});
-m.def("get_omp_threads", []() { return 1; });
-#endif
 
 py::class_<CandidateExport>(m, "CandidateExport")
     .def(py::init<>())

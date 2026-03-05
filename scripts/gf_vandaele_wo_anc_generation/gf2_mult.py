@@ -1,10 +1,7 @@
-from qiskit import QuantumCircuit, QuantumRegister
-from qiskit.qasm3 import dump
 from typing import List, Tuple
 import sys
 
 
-from qiskit import QuantumCircuit
 from typing import Dict, List, Union
 import os
 

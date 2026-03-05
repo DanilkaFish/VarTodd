@@ -93,6 +93,16 @@ def toffoli_to_parity(ccz_list: List[Tuple]):
     res = [0] * len(ccz_list) * 7
     for i, ccz in enumerate(ccz_list):
         A, B, C = ccz
+        if np.all(A == 0):
+            raise KeyError()
+        
+        if np.all(B == 0):
+
+            raise KeyError()
+        if np.all(C == 0):
+
+            raise KeyError()
+
         res[7 * i + 0] = np.concat((A, B, C))
         res[7 * i + 1] = np.concat((A, B, np.zeros_like(A)))
         res[7 * i + 2] = np.concat((A, np.zeros_like(A), C))

@@ -28,7 +28,7 @@ class SumEntry {
     index_t b;
 };
 
-Matrix solve_and_build_solution_basis(Matrix& A, index_t divider);
+// Matrix solve_and_build_solution_basis(Matrix& A, index_t divider);
 Matrix solve_and_build_solution_basis(Matrix& A, index_t divider, const Matrix& tohpe, const SumEntry* ptr, int len);
 
 struct HashKeyHash {

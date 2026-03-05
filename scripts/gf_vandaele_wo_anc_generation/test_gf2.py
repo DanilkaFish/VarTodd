@@ -126,7 +126,7 @@ def verify_representations(Q: np.ndarray, A: List[np.ndarray], B: List[np.ndarra
 # Example usage
 if __name__ == "__main__":
     from gf2_decomposition import gf_mult_synt, build_q_matrix, invert_matrix
-    p = [1,0,1,0,1,0,1,1]
+    p = [1,1,0,0,1]
     Q = invert_matrix(build_q_matrix(p))
     ccz_list = gf_mult_synt(p)
     A = [ccz[0] for ccz in ccz_list] 

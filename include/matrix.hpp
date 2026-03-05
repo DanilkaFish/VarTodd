@@ -134,15 +134,15 @@ using RowCView = BasicRowView<const uint64_t*>;
 
 template <class R>
 concept ReadableRow = requires(const R& r) {
-                          { r.size() } -> std::convertible_to<index_t>;
-                          { r.blocks() } -> std::convertible_to<index_t>;
-                          { r.data() } -> std::same_as<const uint64_t*>;
-                      };
+    { r.size() } -> std::convertible_to<index_t>;
+    { r.blocks() } -> std::convertible_to<index_t>;
+    { r.data() } -> std::same_as<const uint64_t*>;
+};
 
 template <class R>
 concept WritableRow = ReadableRow<R> && requires(R& r) {
-                                            { r.data() } -> std::same_as<uint64_t*>;
-                                        };
+    { r.data() } -> std::same_as<uint64_t*>;
+};
 
 // ------------------- OPS --------------------------
 
@@ -250,6 +250,7 @@ class Row {
     const uint64_t* data() const noexcept { return blk_.data(); }
 
     bool    test(index_t i) const noexcept { return (data()[i >> 6] >> (i & 63)) & 1ULL; }
+    void    reset() noexcept { std::fill_n(blk_.data(), blk_.size(), 0); }
     void    reset(index_t i) noexcept { data()[i >> 6] &= !(1ULL << (i & 63)); }
     index_t count() const noexcept { return this->cview().count(); }
     bool    none() const noexcept { return this->cview().none(); }
@@ -306,7 +307,7 @@ class Matrix {
     static Matrix identity(index_t n);
     static Matrix from_rows(const std::vector<Row>& rows);
     static Matrix from_npy(const std::string& npy_path);
-	void save_npy(const std::string& npy_path) const;
+    void          save_npy(const std::string& npy_path) const;
 
     Matrix& operator=(const Matrix&) = default;
 

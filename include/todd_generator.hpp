@@ -128,42 +128,43 @@ static CandidateExport export_candidate(Candidate const& c) {
     };
 }
 
-
+// TODO Only ScpringFunction POLYNOm function is used
 struct ScoringFunction {
     enum Function { LINEAR, POLYNOM, DISTANCE, LOGARITHMIC, SIGMOID };
     Function type = LINEAR;
-    float pow = 2.0;
-    float evaluate(const std::vector<float>& weights, const std::vector<float>& centers, const std::vector<float>& x) const{
+    float    pow  = 2.0;
+    float    evaluate(const std::vector<float>& weights, const std::vector<float>& centers,
+                      const std::vector<float>& x) const {
         switch (type) {
-            case (ScoringFunction::LINEAR):
-                return linear_scoring(weights, x);                
-            case (ScoringFunction::POLYNOM):
-                return polynom_scoring(weights, centers, x);                
-            case (ScoringFunction::DISTANCE):
-                return distance_scoring(weights, x);
-            case (ScoringFunction::SIGMOID):
-                return sigmoid_scoring(weights, x);
-            case (ScoringFunction::LOGARITHMIC):
-                return logarithmic_scoring(weights, x);
-            default:
-                throw std::runtime_error("Wrong function type for evaluation");
+        case (ScoringFunction::LINEAR):
+            return linear_scoring(weights, x);
+        case (ScoringFunction::POLYNOM):
+            return polynom_scoring(weights, centers, x);
+        case (ScoringFunction::DISTANCE):
+            return distance_scoring(weights, x);
+        case (ScoringFunction::SIGMOID):
+            return sigmoid_scoring(weights, x);
+        case (ScoringFunction::LOGARITHMIC):
+            return logarithmic_scoring(weights, x);
+        default:
+            throw std::runtime_error("Wrong function type for evaluation");
         }
         return 0;
     }
 
     float linear_scoring(std::vector<float> w, std::vector<float> x) const {
-        float sum = 0.0;
-        size_t n = std::min(w.size(), x.size());
+        float  sum = 0.0;
+        size_t n   = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
             sum += w[i] * x[i];
         }
         return sum;
     }
-    
+
     float polynom_scoring(const std::vector<float>& w, const std::vector<float> c, const std::vector<float>& x) const {
-        float sum = 0.0;
-        size_t n = std::min(w.size(), x.size());
-        if (pow >= 0){
+        float  sum = 0.0;
+        size_t n   = std::min(w.size(), x.size());
+        if (pow >= 0) {
             for (size_t i = 0; i < n; ++i) {
                 sum += w[i] * std::pow(std::abs(x[i] - c[i]), pow);
             }
@@ -174,45 +175,44 @@ struct ScoringFunction {
         }
         return sum;
     }
-    
+
     float distance_scoring(std::vector<float> w, std::vector<float> x) const {
-        float sum = 0.0;
-        size_t n = std::min(w.size(), x.size());
+        float  sum = 0.0;
+        size_t n   = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
             sum -= (x[i] - w[i]) * (x[i] - w[i]);
         }
         return sum;
     }
-    
+
     float sigmoid_scoring(std::vector<float> w, std::vector<float> x) const {
-        float sum = 0.0;
-        size_t n = std::min(w.size(), x.size());
+        float  sum = 0.0;
+        size_t n   = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
             sum += w[i] * std::pow(x[i], pow);
         }
         float z = sum;
         return 1.0f / (1.0f + std::exp(-z));
     }
-    
+
     float logarithmic_scoring(std::vector<float> w, std::vector<float> x) const {
-        float sum = 0.0;
-        size_t n = std::min(w.size(), x.size());
+        float  sum = 0.0;
+        size_t n   = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
-            // Ensure x[i] is positive for logarithm
-            sum += w[i] * std::log(std::max(1e-6f, x[i] ));
+            sum += w[i] * std::log(std::max(1e-6f, x[i]));
         }
         return sum;
     }
 };
 
 struct ExplorationScore {
-    std::vector<float> weights = {0,0,0,0,0};
-    std::vector<float> centers = {0,0,0,0,0};
-    
-    float bn       = 1;
-    float wvwn     = 1;
-    float dn       = 1;
-    ScoringFunction sc = {};
+    std::vector<float> weights = {0, 0, 0, 0, 0};
+    std::vector<float> centers = {0, 0, 0, 0, 0};
+
+    float           bn          = 1;
+    float           wvwn        = 1;
+    float           dn          = 1;
+    ScoringFunction sc          = {};
     explicit ExplorationScore() = default;
     ExplorationScore(float wred, float wdim, float wbucket, float wvw, float wz)
         : weights{wred, wdim, wbucket, wvw, wz} {}
@@ -221,26 +221,22 @@ struct ExplorationScore {
     ExplorationScore(std::vector<float> weights, std::vector<float> centers, float pow)
         : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
     auto operator()(Candidate& cand) {
-        auto tohpe_dim = 0;
-        std::vector<float> x = {
-            cand.reduction / bn / 2, 
-            cand.basis_dim / dn,
-            cand.bucket_size / bn,
-            cand.vec.count() / wvwn,
-            (cand.nsptr->vector().count())/float(cand.nsptr->vector().size())
-        };
-        cand.pool_score = sc.evaluate(weights, centers, x); 
+        auto               tohpe_dim = 0;
+        std::vector<float> x         = {cand.reduction / bn / 2, cand.basis_dim / dn, cand.bucket_size / bn,
+                                        cand.vec.count() / wvwn,
+                                        (cand.nsptr->vector().count()) / float(cand.nsptr->vector().size())};
+        cand.pool_score              = sc.evaluate(weights, centers, x);
         return std::make_pair(cand.pool_score, 0);
     }
 };
 
 struct FinalizationScore {
-    std::vector<float> weights = {0,0,0,0,0,0};
-    std::vector<float> centers = {0,0,0,0,0,0};
-    float bn         = 1;
-    float wvwn       = 1;
-    float dn         = 1;
-    ScoringFunction sc   = {};
+    std::vector<float> weights = {0, 0, 0, 0, 0, 0};
+    std::vector<float> centers = {0, 0, 0, 0, 0, 0};
+    float              bn      = 1;
+    float              wvwn    = 1;
+    float              dn      = 1;
+    ScoringFunction    sc      = {};
 
     explicit FinalizationScore() = default;
     FinalizationScore(float wred, float wdim, float wbucket, float wvw, float wz, float wtohpe_dim)
@@ -248,48 +244,43 @@ struct FinalizationScore {
     FinalizationScore(std::vector<float> weights, std::vector<float> centers, ScoringFunction sc)
         : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
     FinalizationScore(std::vector<float> weights, std::vector<float> centers, float pow)
-    : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
+        : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
     auto operator()(Candidate& cand) {
-        auto tohpe_dim = 0;
-        std::vector<float> x = {
-            cand.reduction / bn / 2, 
-            cand.basis_dim / dn,
-            cand.bucket_size / bn,
-            cand.vec.count() / wvwn,
-            (cand.nsptr->vector().count())/float(cand.nsptr->vector().size())
-        };
+        auto               tohpe_dim = 0;
+        std::vector<float> x         = {cand.reduction / bn / 2, cand.basis_dim / dn, cand.bucket_size / bn,
+                                        cand.vec.count() / wvwn,
+                                        (cand.nsptr->vector().count()) / float(cand.nsptr->vector().size())};
         if (weights[5] != 0) {
             tohpe_dim = get_tohpe_basis(cand.nsptr->apply(cand.vec)).rows();
             x.push_back(tohpe_dim / float(dn));
             cand.tohpe_dim = tohpe_dim;
-        } 
+        }
 
         cand.final_score = sc.evaluate(weights, centers, x);
         return std::make_pair(cand.final_score, cand.tohpe_dim);
     }
 };
 
-
 struct PolicyConfig {
     ExplorationScore  escore{1.0, 0., 0., 0., 0.};
     FinalizationScore fscore{1.0, 0., 0., 0., 0.0, 0.};
     std::string       selection = "softmax";
 
-    float  temperature                = 0.0f;
-    float  non_improving_prob         = 0.0f;
-    float  gen_part = 1.0;
-    Int    num_samples                = 64;
-    Int    num_candidates             = 1;
-    Int    top_pool                   = 1;
-    Int    max_from_single_ns         = 100;
-    Int    min_reduction              = 0;
-    Int    max_reduction              = k_single_sentinel<Int>();
-    Int    max_z_to_research          = 1 << 20;
-    Int    min_pool_size              = 1;
-    Int    max_tohpe                  = 1;
-    Int    threads                    = 1;
-    Int    tohpe_sample               = 1;
-    bool   try_only_tohpe             = true;
+    float temperature        = 0.0f;
+    float non_improving_prob = 0.0f;
+    float gen_part           = 1.0;
+    Int   num_samples        = 64;
+    Int   num_candidates     = 1;
+    Int   top_pool           = 1;
+    Int   max_from_single_ns = 100;
+    Int   min_reduction      = 0;
+    Int   max_reduction      = k_single_sentinel<Int>();
+    Int   max_z_to_research  = 1 << 20;
+    Int   min_pool_size      = 1;
+    Int   max_tohpe          = 1;
+    Int   threads            = 1;
+    Int   tohpe_sample       = 1;
+    bool  try_only_tohpe     = true;
 };
 
 auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyConfig config, index_t seed = 1,

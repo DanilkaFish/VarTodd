@@ -3,8 +3,10 @@
 #include "algorithms.hpp"
 #include "matrix.hpp"
 #include "todd_index.hpp"
+#include "typedef.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <ranges>
 #include <stdexcept>
 
@@ -54,7 +56,7 @@ std::vector<index_t> CountWS::argmax_n(std::size_t n) const {
     return candidates;
 }
 
-MatrixWithData::MatrixWithData(Matrix&& P) : P_{std::move(P)}, index_{P} {
+MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P} {
     if (P_.rows() == 0) {
         tohpe_basis_ = Matrix(0, 0);
         full_todd_   = FullToddData{};
@@ -63,8 +65,9 @@ MatrixWithData::MatrixWithData(Matrix&& P) : P_{std::move(P)}, index_{P} {
 
     Matrix    L = L_expansion(P_);
     Matrix    Y = Matrix::identity(P_.rows());
-    pivot_map pivots;
-    gauss_elimination_inplace(L, Y, pivots);
+    PivotMap pivots;
+    pivots.reset(L.cols());
+    gauss_elimination_inplace_rref(L, Y, pivots);
 
     tohpe_basis_ = extract_basis(Y, pivots);
 
@@ -73,25 +76,25 @@ MatrixWithData::MatrixWithData(Matrix&& P) : P_{std::move(P)}, index_{P} {
 
     Matrix            L_reduced(pivots.size(), full_cols);
     Matrix            Y_reduced(pivots.size(), Y.cols());
-    std::vector<bool> is_zero(L_reduced.rows(), true);
+    std::vector<uint8_t> is_zero(L_reduced.rows(), true);
 
     std::vector<std::pair<index_t, index_t>> pivot_mapping;
-    pivot_mapping.reserve(pivots.size());
 
     index_t counter = 0;
-    for (const auto& kv : pivots) {
-        const index_t row       = kv.first;
-        const index_t pivot_col = kv.second;
-        assign(L_reduced[counter], L[row]);
-        if (!Y[row].none()) {
-            assign(Y_reduced[counter], Y[row]);
-            is_zero[counter] = false;
-        }
-        pivot_mapping.emplace_back(pivot_col, counter);
-        ++counter;
-    }
 
-    std::sort(pivot_mapping.begin(), pivot_mapping.end());
+    full_todd_.pivot_row_of_col.assign((std::size_t)full_cols, -1);
+    for (index_t pivot_col=0; pivot_col < full_cols; pivot_col++) {
+        auto row = pivots.get(pivot_col); 
+        if (row != PivotMap::npos){
+            assign(L_reduced[counter], L[row]);
+            if (!Y[row].none()) {
+                assign(Y_reduced[counter], Y[row]);
+                is_zero[counter] = false;
+            }
+            full_todd_.pivot_row_of_col[(std::size_t)pivot_col] = (std::int64_t)counter;
+            ++counter;
+        }
+    }
 
     full_todd_.offset.assign((std::size_t)n, 0);
     if (n > 0) {
@@ -101,10 +104,6 @@ MatrixWithData::MatrixWithData(Matrix&& P) : P_{std::move(P)}, index_{P} {
         }
     }
 
-    full_todd_.pivot_row_of_col.assign((std::size_t)full_cols, -1);
-    for (const auto& pr : pivot_mapping) {
-        full_todd_.pivot_row_of_col[(std::size_t)pr.first] = (std::int64_t)pr.second;
-    }
 
     full_todd_.nonpivot_index.assign((std::size_t)full_cols, -1);
     index_t nonpiv_cols = 0;

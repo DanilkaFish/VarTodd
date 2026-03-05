@@ -6,132 +6,14 @@
 #include "typedef.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <sys/types.h>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace todd {
 constexpr int MAX_ROWS_IN_BASIS = 100;
-
-Matrix solution_gaussian_elimination(Matrix& A, Matrix& aug) {
-    if (A.rows() != aug.rows()) {
-        throw std::invalid_argument("A and aug must have the same number of rows");
-    }
-    if (A.rows() == 0) {
-        return Matrix();
-    }
-
-    const index_t m = A.rows();
-    const index_t n = A.cols();
-
-    std::vector<std::int64_t> pivot_row_of_col(n, -1);
-
-    Matrix solution;
-
-    for (index_t i = 0; i < m; ++i) {
-        auto a_row   = A[i];
-        auto aug_row = aug[i];
-
-        auto p = a_row.find_first();
-        while (p != decltype(a_row)::npos) {
-            const std::int64_t prow = pivot_row_of_col[static_cast<index_t>(p)];
-            if (prow < 0)
-                break;
-
-            a_row ^= A[static_cast<index_t>(prow)];
-            aug_row ^= aug[static_cast<index_t>(prow)];
-
-            p = a_row.find_next(p);
-        }
-
-        p = a_row.find_first();
-        if (p != decltype(a_row)::npos) {
-            pivot_row_of_col[static_cast<index_t>(p)] = static_cast<std::int64_t>(i);
-        } else {
-
-            if (!aug_row.none()) {
-                solution.push_back(aug_row);
-                if (solution.rows() >= MAX_ROWS_IN_BASIS) {
-                    return solution;
-                }
-            }
-        }
-    }
-
-    return solution;
-}
-
-struct PivotMap {
-    std::vector<int32_t>  row;
-    std::vector<uint32_t> tag;
-    uint32_t              epoch = 1;
-
-    void reset(std::size_t n) {
-        if (row.size() < n) {
-            row.resize(n);
-            tag.resize(n, 0);
-        }
-        ++epoch;
-        if (epoch == 0) {
-            std::fill(tag.begin(), tag.end(), 0);
-            epoch = 1;
-        }
-    }
-
-    inline int32_t get(std::size_t col) const { return (tag[col] == epoch) ? row[col] : -1; }
-    inline void    set(std::size_t col, int32_t r) {
-        row[col] = r;
-        tag[col] = epoch;
-    }
-};
-
-Matrix drop_left_block(const Matrix& A, index_t divider) {
-    const index_t m = A.rows();
-    const index_t n = A.cols();
-
-    if (divider > n)
-        throw std::runtime_error("drop_left_block: divider > cols()");
-    const index_t new_cols = n - divider;
-
-    if (new_cols == 0)
-        return Matrix(m, 0);
-
-    Matrix out(m, new_cols);
-
-    const index_t  sb = divider >> 6;
-    const unsigned sh = (unsigned)(divider & 63);
-
-    for (index_t r = 0; r < m; ++r) {
-        auto srcRow = A[r];
-        auto dstRow = out[r];
-
-        const uint64_t* src        = srcRow.data();
-        const index_t   src_blocks = srcRow.blocks();
-
-        uint64_t*     dst        = dstRow.data();
-        const index_t dst_blocks = dstRow.blocks();
-
-        for (index_t k = 0; k < dst_blocks; ++k) {
-            const index_t  i0 = sb + k;
-            const uint64_t lo = (i0 < src_blocks) ? src[i0] : 0ULL;
-
-            if (sh == 0) {
-                dst[k] = lo;
-            } else {
-                const uint64_t hi = (i0 + 1 < src_blocks) ? src[i0 + 1] : 0ULL;
-                dst[k]            = (lo >> sh) | (hi << (64u - sh));
-            }
-        }
-
-        const unsigned rem = (unsigned)(new_cols & 63);
-        if (rem)
-            dst[dst_blocks - 1] &= ((1ULL << rem) - 1ULL);
-    }
-
-    return out;
-}
 
 static inline Row extract_right(RowCView row, index_t divider, index_t nY) {
     Row y(nY);
@@ -172,113 +54,69 @@ static inline Row extract_right(RowCView row, index_t divider, index_t nY) {
     return y;
 }
 
-Matrix solve_and_build_solution_basis(Matrix& A, index_t divider, const Matrix& tohpe, const SumEntry* ptr, int len) {
-    if (A.rows() == 0)
-        return Matrix();
+// TODO Faster implementation
+static inline void apply_solution_transform(Row& y, const SumEntry* ptr, int len) {
+    // Current parity of y. This replaces repeated y.count() calls.
 
-    const index_t m      = A.rows();
-    const index_t nTotal = A.cols();
-    if (divider > nTotal)
-        return Matrix();
+    for (int t = 0; t < len; ++t) {
+        const SumEntry& e = ptr[t];
 
-    const index_t nY = nTotal - divider;
-    if (nY == 0)
-        return Matrix();
-
-    Matrix Y_tohpe(tohpe);
-    for (index_t i = 0; i < Y_tohpe.rows(); i++){
-        for (index_t t=0; t < len; t++){
-            RowView vec = Y_tohpe[i];
-            if (ptr[t].is_pair()) {
-                if (vec.test(ptr[t].b)){
-                    vec.flip(ptr[t].a);
-                    vec.flip(ptr[t].b);
-                }
-            } else if (vec.count() % 2 == 1){
-                vec.flip(ptr[t].a);
+        if (e.is_pair()) {
+            // Original semantics:
+            // if (y.test(b)) { y.flip(a); y.flip(b); }
+            //
+            // Parity is unchanged here:
+            // - either 0 flips
+            // - or 2 flips
+            if (y.test(e.b)) {
+                y.flip(e.a);
+                y.flip(e.b);
+            }
+        } else {
+            // Original semantics:
+            // if (y.count() % 2 == 1) y.flip(a);
+            if ((y.count() & 1u)) {
+                y.flip(e.a);
             }
         }
     }
-    // for (index_t i = 0; i < m; i++){
-
-    // }
-    static thread_local PivotMap pivA;
-    static thread_local PivotMap pivY;
-
-    pivA.reset((std::size_t)divider);
-    pivY.reset((std::size_t)nY);
-
-    Matrix basis(0, nY);
-
-    for (index_t i = 0; i < m; ++i) {
-        auto row = A[i];
-
-        auto p = row.find_first();
-        while (p != RowView::npos && p < divider) {
-            const int32_t prow = pivA.get((std::size_t)p);
-            if (prow < 0)
-                break;
-            row ^= A[(index_t)prow];
-            p = row.find_next(p);
-        }
-
-        p = row.find_first();
-        if (p == RowView::npos)
-            continue;
-
-        if (p < divider) {
-            pivA.set((std::size_t)p, (int32_t)i);
-            continue;
-        }
-
-        Row  y  = extract_right((RowCView)row, divider, nY);
-        for (index_t t=0; t < len; t++){
-            if (ptr[t].is_pair()) {
-                if (y.test(ptr[t].b)){
-                    y.flip(ptr[t].a);
-                    y.flip(ptr[t].b);
-                }
-            } else if (y.count() % 2 == 1){
-                y.flip(ptr[t].a);
-            }
-        }
-        auto yv = y.view();
-
-        auto q = yv.find_first();
-        while (q != RowView::npos) {
-
-            const int32_t brow = pivY.get((std::size_t)q);
-            if (brow < 0)
-                break;
-            yv ^= basis[(index_t)brow];
-            q = yv.find_next(q);
-        }
-
-        q = yv.find_first();
-        if (q == RowView::npos)
-            continue;
-
-        pivY.set((std::size_t)q, (int32_t)basis.rows());
-        basis.push_back(y.cview());
-        if (basis.rows() >= MAX_ROWS_IN_BASIS)
-            break;
-    }
-    basis.append_down_inplace(Y_tohpe);
-    return basis_gauss_elimination(std::move(basis));
 }
 
-Matrix solve_and_build_solution_basis(Matrix& A, index_t divider) {
-    if (A.rows() == 0)
-        return Matrix();
+static inline bool insert_into_y_basis(Row& y, Matrix& basis, PivotMap& pivY) {
+    auto yv = y.view();
+    auto q  = yv.find_first();
 
-    const index_t m      = A.rows();
-    const index_t nTotal = A.cols();
+    while (q != RowView::npos) {
+        const int32_t brow = pivY.get((std::size_t)q);
+        if (brow < 0) {
+            pivY.set((std::size_t)q, (int32_t)basis.rows());
+            basis.push_back(y.cview());   // copy reduced row into basis
+            return true;
+        }
+
+        yv ^= basis[(index_t)brow];
+        q = yv.find_next(q);
+    }
+
+    return false; // dependent
+}
+
+Matrix solve_and_build_solution_basis(Matrix& A,
+                                      index_t divider,
+                                      const Matrix& tohpe,
+                                      const SumEntry* ptr,
+                                      int len) {
+    // If not, fall back to divider + tohpe.cols().
+    const index_t nTotal = (A.cols() != 0) ? A.cols() : (divider + tohpe.cols());
+
     if (divider > nTotal)
-        return Matrix();
-
+        throw std::invalid_argument("solve_and_build_solution_basis: divider > cols");
     const index_t nY = nTotal - divider;
-    if (nY == 0)
-        return Matrix();
+
+    if (nY == 0) return Matrix(0, 0);
+
+    if (tohpe.rows() != 0 && tohpe.cols() != nY)
+        throw std::invalid_argument("solve_and_build_solution_basis: tohpe width mismatch");
 
     static thread_local PivotMap pivA;
     static thread_local PivotMap pivY;
@@ -288,7 +126,9 @@ Matrix solve_and_build_solution_basis(Matrix& A, index_t divider) {
 
     Matrix basis(0, nY);
 
-    for (index_t i = 0; i < m; ++i) {
+    const index_t full_rank = nY;
+
+    for (index_t i = 0; i < A.rows() && basis.rows() < full_rank; ++i) {
         auto row = A[i];
 
         auto p = row.find_first();
@@ -296,11 +136,11 @@ Matrix solve_and_build_solution_basis(Matrix& A, index_t divider) {
             const int32_t prow = pivA.get((std::size_t)p);
             if (prow < 0)
                 break;
+
             row ^= A[(index_t)prow];
             p = row.find_next(p);
         }
 
-        p = row.find_first();
         if (p == RowView::npos)
             continue;
 
@@ -309,86 +149,95 @@ Matrix solve_and_build_solution_basis(Matrix& A, index_t divider) {
             continue;
         }
 
-        Row  y  = extract_right((RowCView)row, divider, nY);
-        auto yv = y.view();
+        Row y = extract_right((RowCView)row, divider, nY);
+        apply_solution_transform(y, ptr, len);
+        insert_into_y_basis(y, basis, pivY);
+    }
 
-        auto q = yv.find_first();
-        while (q != RowView::npos) {
-            const int32_t brow = pivY.get((std::size_t)q);
-            if (brow < 0)
-                break;
-            yv ^= basis[(index_t)brow];
-            q = yv.find_next(q);
-        }
+    for (index_t i = 0; i < tohpe.rows() && basis.rows() < full_rank; ++i) {
+        Row y = tohpe[i];
 
-        q = yv.find_first();
-        if (q == RowView::npos)
-            continue;
-
-        pivY.set((std::size_t)q, (int32_t)basis.rows());
-        basis.push_back(y.cview());
-        if (basis.rows() >= MAX_ROWS_IN_BASIS)
-            break;
+        apply_solution_transform(y, ptr, len);
+        insert_into_y_basis(y, basis, pivY);
     }
 
     return basis;
 }
 
 Matrix basis_gauss_elimination(Matrix&& A) {
-    Matrix               linear_indep;
-    std::vector<index_t> pivot_columns;
-    for (index_t i = 0; i < A.rows(); i++) {
-        auto current_row = A[i];
-        for (size_t i = 0; i < pivot_columns.size(); ++i) {
-            size_t pivot_col = pivot_columns[i];
-            if (current_row.test(pivot_col)) {
-                current_row ^= linear_indep[i];
+    Matrix linear_indep;
+    std::vector<index_t> pivot_cols;
+    pivot_cols.reserve(A.rows());
+
+    for (index_t r = 0; r < A.rows(); ++r) {
+        auto row = A[r];
+
+        for (size_t k = 0; k < pivot_cols.size(); ++k) {
+            const index_t p = pivot_cols[k];
+            if (row.test(p)) {
+                row ^= linear_indep[k];
             }
         }
 
-        size_t pivot_index = current_row.find_first();
-        if (pivot_index != RowView::npos) {
-            linear_indep.push_back(current_row);
-            pivot_columns.push_back(pivot_index);
-            assign(A[i], current_row);
+        const index_t p = row.find_first();
+        if (p != RowView::npos) {
+            linear_indep.push_back(row);
+            pivot_cols.push_back(p);
+            assign(A[r], row);
         }
     }
     return linear_indep;
 }
 
-void gauss_elimination_inplace(Matrix& A, Matrix& aug, pivot_map& pivots) {
+void gauss_elimination_inplace_rref(Matrix& A, Matrix& aug, PivotMap& pivots) {
     if (A.rows() != aug.rows())
-        throw std::invalid_argument("gauss_elimination_inplace: row mismatch");
-    for (index_t i = 0; i < A.rows(); i++) {
-        auto row = A[i];
-        if (pivots.count(i)) {
-            continue;
-        }
-        for (auto [k, v] : pivots) {
-            if (row.test(v)) {
-                A[i] ^= A[k];
-                aug[i] ^= aug[k];
-            }
+        throw std::invalid_argument("gauss_jordan_rref_inplace: row mismatch");
+    const index_t m = A.rows();
+
+    for (index_t i = 0; i < m; ++i) {
+        auto row  = A[i];
+        auto arow = aug[i];
+
+        while (true) {
+            // TODO DOES find_first really neccesary
+            auto p = row.find_first();
+            if (p == RowView::npos) break;
+            const int32_t prow = pivots.get((size_t)p); 
+            if (prow < 0) break;              
+            if ((index_t)prow == i) break;
+            row  ^= A[(index_t)prow];
+            arow ^= aug[(index_t)prow];
         }
 
-        index_t index = row.find_first();
-        if (index != RowView::npos) {
-            for (auto [k, v] : pivots) {
-                if (A[k].test(index)) {
-                    A[k] ^= row;
-                    aug[k] ^= aug[i];
-                }
+        auto p = row.find_first();
+        if (p == RowView::npos) continue;
+        if (pivots.get((size_t)p) >= 0) {
+            continue;
+        }
+        pivots.set((size_t)p, (int32_t)i);
+
+        for (index_t r = 0; r < m; ++r) {
+            if (r == i) continue;
+            if (A[r].test(p)) {
+                A[r]   ^= row;
+                aug[r] ^= arow;
             }
-            pivots.insert_or_assign(i, index);
         }
     }
 }
 
-Matrix extract_basis(const Matrix& kernel, const pivot_map& pivots) {
+Matrix extract_basis(const Matrix& kernel, const PivotMap& pivots) {
     Matrix _kernel(0, 0);
-
+    // TODO memore allocation overhead
+    std::vector<std::size_t> not_used_rows{};
+    not_used_rows.resize(kernel.rows(), 1);
+    for (auto row: pivots.row) {
+        if (row != PivotMap::npos) {
+            not_used_rows[row] = 0;
+        }
+    }
     for (index_t i = 0; i < kernel.rows(); i++) {
-        if (pivots.find(i) == pivots.end()) {
+        if (not_used_rows[i]) {
             _kernel.push_back(kernel[i]);
         }
     }
@@ -440,18 +289,6 @@ Matrix L_expansion(const Matrix& mat) {
     return out;
 }
 
-std::ostream& operator<<(std::ostream& os, const pivot_map& m) {
-    os << '{';
-    bool first = true;
-    for (const auto& [k, v] : m) {
-        if (!first)
-            os << ", ";
-        first = false;
-        os << k << ':' << v;
-    }
-    return os << '}';
-}
-
 index_t PyRNG::rand_int(index_t low, index_t high) {
     std::uniform_int_distribution<index_t> dist(low, high);
     return dist(rng);
@@ -474,12 +311,9 @@ auto& PyRNG::get_engine() { return rng; }
 static inline Row mask_to_bv(index_t dim, uint64_t mask) {
     Row v(dim);
     v.data()[0] = mask;
-    // for (index_t i = 0; i < dim; ++i) {
-        // if (mask & (1ULL << i))
-            // v.set(i);
-    // }
     return v;
 }
+
 std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, index_t j, index_t num_samples) {
     auto                                   dim = basis.rows();
     const index_t                          N   = 1ULL << dim;
@@ -498,8 +332,6 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
 
     return out;
 }
-
-
 
 inline std::vector<uint32_t> PyRNG::floyd_sample_0n(uint32_t n, index_t k)
 {
@@ -643,8 +475,9 @@ Row PyRNG::sample_bitvector(index_t dim) {
 Matrix get_tohpe_basis(const Matrix& P) {
     Matrix    L = L_expansion(P);
     Matrix    Y = Matrix::identity(P.rows());
-    pivot_map pivots;
-    gauss_elimination_inplace(L, Y, pivots);
+    PivotMap  pivots;
+    pivots.reset(L.cols());
+    gauss_elimination_inplace_rref(L, Y, pivots);
     Matrix M = extract_basis(Y, pivots);
     return M;
 }

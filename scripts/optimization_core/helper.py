@@ -241,10 +241,11 @@ class BaseEvaluator:
     todd_width: RankSchedule = RankSchedule.constant(1)
     current_path: Path
     best_ranks: List[int] = field(default_factory=list)
-    best_evals: List[int] = field(default_factory=list) 
-    def __init__(self, mat: Matrix, max_depth: int, fin_rank: int = 161, shedule: str = "rank"):
+    best_evals: List[int] = field(default_factory=list)
+    def __init__(self, mat: Matrix, max_depth: int, fin_rank: int = 161, shedule: str = "rank", fill_tcounts=False):
         self.with_report = False
         self.current_path = Path()
+        self.init_rank = mat.rows
         self.current_path.final_node = Node(mat)
         self.fin_rank = fin_rank
         self.shedule = shedule
@@ -325,12 +326,15 @@ class BaseEvaluator:
         self.insert(params)
         self.reinit()
         # self.policy_setup(params)
-        with ProcessPoolExecutor(max_workers=max_workers) as ex:
-            futures = [
-                ex.submit(_worker_run_one_from_template, seed, self.current_path, self.todd, self.bs_width, self.todd_width)
-                for seed in seeds
-            ]
-            results = [(*f.result(), s) for f, s in zip(futures, seeds)]
+        if max_workers == 1:
+            results = [(*_worker_run_one_from_template(seed, self.current_path, self.todd, self.bs_width, self.todd_width), seed) for seed in seeds]
+        else:
+            with ProcessPoolExecutor(max_workers=max_workers) as ex:
+                futures = [
+                    ex.submit(_worker_run_one_from_template, seed, self.current_path, self.todd, self.bs_width, self.todd_width)
+                    for seed in seeds
+                ]
+                results = [(*f.result(), s) for f, s in zip(futures, seeds)]
 
         # process deterministically in seed order
         seed_to_idx = {s:i for i,s in enumerate(seeds)}
