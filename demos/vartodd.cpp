@@ -22,7 +22,8 @@ int main(int argc, char* argv[]) {
         ("fscore-wred,fr", po::value<int>()->default_value(-1), "finalization score wred")
         ("min-reduction", po::value<int>()->default_value(1), "minimum reduction")
         ("threads,r", po::value<int>()->default_value(4), "number of threads")
-        ("seed,s", po::value<int>()->default_value(4), "number of threads")
+        ("seed,s", po::value<int>()->default_value(4), "seed")
+        ("try-only-tohpe,ot", po::value<bool>()->default_value(1), "only tohpe")
     ;
     
     po::positional_options_description p;
@@ -54,8 +55,9 @@ int main(int argc, char* argv[]) {
     policy_cfg.num_samples = vm["num-samples"].as<int>();
     policy_cfg.max_z_to_research = vm["max-z"].as<int>();
     policy_cfg.gen_part = vm["max-z-fraction"].as<double>();
-    // policy_cfg.escore.wred = vm["escore-wred"].as<int>();
-    // policy_cfg.fscore.wred = vm["fscore-wred"].as<int>();
+    policy_cfg.try_only_tohpe = vm["try-only-tohpe"].as<bool>();
+    policy_cfg.escore.weights[0] = vm["escore-wred"].as<int>();
+    policy_cfg.fscore.weights[0] = vm["fscore-wred"].as<int>();
     policy_cfg.min_reduction = vm["min-reduction"].as<int>();
     policy_cfg.threads = vm["threads"].as<int>();
 	
