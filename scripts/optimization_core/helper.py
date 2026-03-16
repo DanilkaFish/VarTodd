@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import numpy as np
 from node import Matrix, Node, FinalizationScore, ExplorationScore, Tensor3D
 from mcts_dao import Dao, RankSchedule, Path
@@ -7,6 +7,7 @@ from typing import Iterable, Sequence, Any, Tuple
 from concurrent.futures import ProcessPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
+from path_store import PathStore
 
 
 def _worker_run_one_from_template(seed, path: Path, todd: Todd, bs_width: RankSchedule = RankSchedule.constant(1), todd_width: RankSchedule = RankSchedule.constant(1)):
@@ -371,6 +372,16 @@ class BaseEvaluator:
             f"total_evals: {self.total_eval}" +
             f"\nbest_seen_times: {self.best_seen}"
             )
+
+    def save_best_paths(self, name: str, root_dir: str = "data/path_backups", store_daos: bool = True):
+        store = PathStore(root_dir=root_dir)
+        return store.save(name, self.best_pathes, store_daos=store_daos)
+
+    def load_best_paths(self, name: str, root_dir: str = "data/path_backups", dao_fallback: Optional[Dao] = None):
+        store = PathStore(root_dir=root_dir)
+        fallback = self.dao if dao_fallback is None else dao_fallback
+        self.best_pathes = store.load(name, dao_fallback=fallback)
+        return self.best_pathes
     def set_final_scores(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))

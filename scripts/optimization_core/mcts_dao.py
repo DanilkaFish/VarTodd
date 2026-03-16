@@ -61,6 +61,8 @@ class Path:
             node = node.parent
         path = list(reversed(path))
         for index, node in enumerate(path[1:]):
+            if node.incoming is None:
+                return "path stats unavailable (missing incoming info)"
 
             cand = node.incoming.cand
             s = node.incoming.global_info

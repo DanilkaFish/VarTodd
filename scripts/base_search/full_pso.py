@@ -49,7 +49,7 @@ class Evaluator(BaseEvaluator):
         self.set_min_pool_size(2)
         self.set_min_z_to_research(10 + 1000*self.map_par(sigmoid, 0))
         self.set_temperature(0.5)
-        self.set_num_samples(0 + 63*self.map_par(sigmoid, 0))
+        self.set_num_samples(0 + 127*self.map_par(sigmoid, 0))
         self.set_max_pool_size(30)
         self.set_max_tohpe(4)
         self.set_try_only_tohpe(0)
@@ -58,8 +58,8 @@ class Evaluator(BaseEvaluator):
         self.set_max_from_single_ns(2)
         self.set_tohpe_num_best(5)
         self.set_gen_part(0.1 + 0.9*self.map_par(sigmoid, 0))
-        self.set_todd_width(3)
-        self.set_beamsearch_width(5)
+        self.set_todd_width(4)
+        self.set_beamsearch_width(4)
 
     def __call__(self, params: Iterable):
         tcounts = self.run(params, self.seeds, max_workers=1)
@@ -73,33 +73,33 @@ def run_opt(fun: Evaluator, num_eval: int=10) -> Evaluator:
     def objective_function(positions):
         """Alternative wrapper if fun takes parameters directly"""
         
-        with ProcessPoolExecutor(max_workers=16) as ex:
-            futures = [
-                ex.submit(fun, position)
-                for position in positions
-            ]
-            costs = [f.result() for f in futures]
+        with ProcessPoolExecutor(max_workers=24) as ex:
+            costs = list(ex.map(fun, positions))
+            # futures = [
+            #     ex.submit(fun, position)
+            #     for position in positions
+            # ]
+            # costs = [f.result() for f in futures]
 
         # for i in range(n_particles):
         #     costs[i] = fun(positions[i])
-        
         return np.array(costs)
     
     n_params = len(x)
-    lb = [-2.0] * n_params
-    ub = [2.0] * n_params
+    lb = [-1.0] * n_params
+    ub = [ 1.0] * n_params
 
     # Create bounds
     bounds = (np.array(lb), np.array(ub))
     options = {
-        'c1': 0.5,  # cognitive parameter
-        'c2': 0.3,  # social parameter
-        'w': 0.9    # inertia weight
+        'c1': 0.4,  # cognitive parameter
+        'c2': 0.4,  # social parameter
+        'w': 0.7    # inertia weight
     }
 
     # Create optimizer
     optimizer = ps.single.GlobalBestPSO(
-        n_particles=32, 
+        n_particles=18, 
         dimensions=n_params, 
         options=options,
         bounds=bounds
@@ -115,17 +115,17 @@ def run_opt(fun: Evaluator, num_eval: int=10) -> Evaluator:
         
 def entrypoint(mat: Matrix):
     fun = Evaluator(mat=mat, fin_rank=170, max_depth=100)
-    num_eval = 40
+    num_eval = 50
     x0 = run_opt(fun, num_eval)
     fun(x0)
     print(f"{fun.best_pathes[0].final_node.state.rows=}")
     # x0 = run_cma(fun)
-    ranks = [fun.best_pathes[0].final_node.state.rows + 60 - 20*i for i in range(20)]
+    ranks = [fun.init_rank - 0*i for i in range(1, 4)] + [fun.best_pathes[0].final_node.state.rows + 60 - 20*i for i in range(20)]
     for r in ranks:
         x_active = fun.set_up_new_init(0, rank_thr=r, xopt=None)
         if x_active is None:
             break
-        x0 = run_opt(fun, 20)
+        x0 = run_opt(fun, 30)
         fun(x0)
     return fun.get_best()
 
