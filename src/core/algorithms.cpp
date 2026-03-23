@@ -95,7 +95,7 @@ static inline bool insert_into_y_basis(Row& y, Matrix& basis, PivotMap& pivY) {
         }
 
         yv ^= basis[(index_t)brow];
-        q = yv.find_next(q);
+        q = yv.find_first();
     }
 
     return false; // dependent
