@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <memory>
+#include <filesystem>
 
 namespace po = boost::program_options;
 using namespace todd;
@@ -50,6 +51,10 @@ int main(int argc, char* argv[]) {
     }
     
     auto filename = vm["file"].as<std::string>();
+    if (!std::filesystem::exists(filename)) {
+        std::cerr << "Error: input file does not exist: " << filename << std::endl;
+        return 1;
+    }
     
     PolicyConfig policy_cfg;
     policy_cfg.num_samples = vm["num-samples"].as<int>();
@@ -65,7 +70,7 @@ int main(int argc, char* argv[]) {
 	auto finit_matrix = init_matrix;
 	std::cerr << init_matrix.rows() << " " << init_matrix.cols() << std::endl;
 	auto md_ptr = std::make_shared<MatrixWithData>(MatrixWithData(std::move(init_matrix)));
-	auto result = policy_iteration_impl(md_ptr, policy_cfg, 11, 1);
+    auto result = policy_iteration_impl(md_ptr, policy_cfg, vm["seed"].as<int>(), 1);
 	auto rank = result.states.back().rows();
 	while (result.states.size() >= 1) {
 		std::cerr << "total reduction : " << result.chosen.back().reduction << "    from source -- "
@@ -76,8 +81,12 @@ int main(int argc, char* argv[]) {
 		result = policy_iteration_impl(std::make_shared<MatrixWithData>(MatrixWithData(std::move(result.states.back()))), policy_cfg, vm["seed"].as<int>());
 	}
     std::string output = vm["output_file"].as<std::string>();
-    if (!output.empty()) {}
+    if (!output.empty()) {
         finit_matrix.save_npy(output);
+        std::cerr << "Saved output matrix to: " << output << std::endl;
+    } else {
+        std::cerr << "No output file provided; skipping save." << std::endl;
+    }
 	if (Tensor3D(init_matrix) != Tensor3D(finit_matrix)) {
 		throw std::runtime_error("CORE LINALG ERROR");
 	}
