@@ -1,14 +1,8 @@
 
 from __future__ import annotations
 
-import math
-import random
-from typing import Any, Callable, Dict, Optional, Tuple, List
-
-import numpy as np
-
 from mcts_dao import Dao, Path
-from node import Node, ActionInfo, Matrix, Result, Stats, policy_iteration
+from node import ActionInfo, Result, policy_iteration
 
 import heapq
 class Todd:
@@ -18,7 +12,6 @@ class Todd:
 
     def run(self, path: Path, width, todd_width, with_report=False, seed=1):
         root = path.final_node
-        # root = displ
         node = root
         best_node = root
         counter = 0
@@ -28,7 +21,6 @@ class Todd:
             new_nodes = []
             counter = max(counter, len(nodes))
             for node in nodes:
-                # width.at(node.state.rows)
                 pcfg = self.dao.policy_config_at(depth=node.state.rows, mode="default", num_candidates=todd_width.at(node.state.rows))
                 out: Result = policy_iteration(cur_mat=node.state, policy_cfg=pcfg, seed=seed, add_seed=0)
                 chosen = out.chosen
@@ -38,13 +30,11 @@ class Todd:
                 if len(states) == len(chosen) + 1:
                     states = states[1:]
 
-                # meta = {"stats": getattr(out, "stats", None), "seed": getattr(out, "seed", None), "mode": "rollout"}
                 for cand, state in zip(chosen, states):
                     info = ActionInfo.from_candidate(cand, global_info=out.stats, source="rollout")
                     child = node.add_child(
                         state=state,
                         incoming=info,
-                        prior=1.0
                     )
                     if child.state.rows < best_node.state.rows:
                         best_counter = 0
@@ -53,9 +43,6 @@ class Todd:
                         best_counter += 1
                     new_nodes.append(child)
                     
-                # print(width.at(best_node.state.rows))
-            # nodes = heapq.nlargest(width.at(best_node.state.rows), new_nodes, lambda x : -x.state.rows)
-            # print(len(nodes))
             nodes = heapq.nlargest(width.at(best_node.state.rows), new_nodes, lambda x : x.incoming.cand.final_score)
         if with_report:
             best_counter = min(counter, best_counter)

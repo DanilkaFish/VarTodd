@@ -4,15 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Generic, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
-from node import Node, PolicyConfig, ExplorationScore, FinalizationScore
+from node import Node, PolicyConfig, ExplorationScore, FinalizationScore, Stats, CandidateExport
 from copy import deepcopy
-
-def _get(obj, *names, default=None):
-    """First existing attribute in names, else default."""
-    for n in names:
-        if hasattr(obj, n):
-            return getattr(obj, n)
-    return default
 
 def _q_ge(num_better: int, total: int) -> float:
     if not total:
@@ -35,17 +28,23 @@ class Path:
         return new_path
         
     def branch_path_at(self, rank_thr: int):
-        print(f"{self.final_node.state.rows=}")
         node = self.final_node
-        if node.state.rows > rank_thr:
-            return None
-        while node is not None and node.state.rows < rank_thr:
-            node = node.parent
         if node is None:
             return None
+        path = []
+        while node is not None:
+            path.append(node)
+            node = node.parent
+        path = list(reversed(path))
+        candidate = None
+        for node in path:
+            if node.state.rows > rank_thr:
+                candidate = node
+        if candidate is None:
+            return None
         new_path = Path()
-        new_path.final_node = node
-        new_path.ranks_thr = self.ranks_thr + [node.state.rows]
+        new_path.final_node = candidate
+        new_path.ranks_thr = self.ranks_thr + [candidate.state.rows]
         new_path.daos = deepcopy(self.daos)
         new_path.x0s = deepcopy(self.x0s)
         return new_path
@@ -60,23 +59,27 @@ class Path:
             path.append(node)
             node = node.parent
         path = list(reversed(path))
+        missing_incoming = 0
         for index, node in enumerate(path[1:]):
             if node.incoming is None:
-                return "path stats unavailable (missing incoming info)"
+                missing_incoming += 1
+                _out.append("unavailable stat")
+                continue
+                # return "path stats unavailable (missing incoming info)"
 
-            cand = node.incoming.cand
-            s = node.incoming.global_info
+            cand: CandidateExport = node.incoming.cand
+            s: Stats = node.incoming.global_info
             maxbucket = node.incoming.global_info.max_bucket
             bs = node.incoming.cand.bucket_size
-            n = int(_get(s, "nonzero", default=0) or 0)
+            n = s.nonzero
 
-            r = int(_get(cand, "reduction", default=0) or 0)
-            rmax = int(_get(s, "max_reduction", "best_reduction", default=r) or r)
+            r = cand.reduction
+            rmax = s.max_reduction
             mean_dim = s.mean_basis
             max_dim = s.max_basis
             dim = cand.basis_dim
             rd = r - rmax
-            rbetter = int(_get(cand, "num_better_red", "num_better_reduction", default=0) or 0)
+            rbetter = cand.num_better_red
             rq = _q_ge(rbetter, n)
 
             is_beyond = n == s.accepted_non_improving
@@ -95,16 +98,18 @@ class Path:
             rank = node.state.rows
             out.append(f"{rank}:{_out[index]}")
         out.append(f"{path[-1].state.rows}:final")
+        if missing_incoming == len(path) - 1:
+            return "path stats unavailable (missing incoming info; loaded paths do not store action stats)"
         l = len(out)
         if len(out) > 15:
             if tohpe_zero <= 7:
                 first_part = out[0:7]
             else:
-                first_part = out[0:5]
+                first_part = out[0:4]
             if len(out) - tohpe_zero <= 7:
                 second_part = out[-7:]
             else:
-                second_part = out[-5:]
+                second_part = out[-4:]
             if tohpe_zero > 7 and len(out) - tohpe_zero > 7:
                 return "\n".join(first_part + ["..."] + out[tohpe_zero - 1 : tohpe_zero + 3] + ["..."] + second_part) 
             return "\n".join(first_part + ["..."] + second_part) 

@@ -1,11 +1,17 @@
+import os
 import sys
-from typing import List, Tuple
-import numpy as np
-from helper import Matrix, Tensor3D, get_matrix
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from importlib import import_module
+from typing import Tuple
 
-def get_matrix(name:str=None) -> Matrix:
-    return Matrix.from_numpy(np.load(f"data/init_npy/{name}.npy") )
+import numpy as np
+
+from helper import Matrix, Tensor3D
+
+DATA_ROOT = "data/init_npy"
+
+def get_matrix(name: str) -> Matrix:
+    return Matrix.from_numpy(np.load(f"{DATA_ROOT}/{name}.npy"))
 
 def validate(
     result: Tuple[np.ndarray, str],
@@ -23,20 +29,43 @@ def validate(
             "mcts info": report + best_path,
             }
 
+def _run_one(
+    name: str,
+    *,
+    module_path: str,
+    last_name: str,
+    init_circuit: str,
+) -> Tuple[str, list]:
+    entrypoint = import_module(module_path).entrypoint
+    en = entrypoint(get_matrix(init_circuit + "/" + name))
+    if isinstance(en, Tuple) and len(en) == 2:
+        en, tcount = en
+    else:
+        tcount = []
+    res = validate(en, init_circuit + "/" + name)
+    result_rank = res["result"].shape[0]
+    output_filename = f"data/baseline_npy/{init_circuit}/{last_name}-{name}-{result_rank}"
+    np.save(output_filename, res["result"])
+    print(f"Results for {name} saved to {output_filename}:\n\tFinal rank = {result_rank}")
+    return name, tcount
+
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: python run_standard.py <module_path> [workers]")
     module_path = sys.argv[1].replace('/', '.').replace('.py', '')
     last_name = sys.argv[1].split('/')[-1].replace('.py', '')
-    entrypoint = import_module(module_path).entrypoint
-    init_circtit = "gf_mult_Vandaele_wo_ancilla"
+    workers = int(sys.argv[2]) if len(sys.argv) > 2 else max(1, min(8, os.cpu_count() or 1))
+    init_circuit = "gf_mult_Vandaele_wo_ancilla"
+    init_circuit = "gf_mult_Khoruzhii_best"
     names = [
-        # "gf_mult_Khoruzhii_best/gf2^3",
-        # "gf_mult_Khoruzhii_best/gf2^4",
-        # "gf_mult_Khoruzhii_best/gf2^5",
-        # "gf_mult_Khoruzhii_best/gf2^6",
-        # "gf_mult_Khoruzhii_best/gf2^7",
-        # "gf_mult_Khoruzhii_best/gf2^8",
-        # "gf_mult_Khoruzhii_best/gf2^9",
-        # "gf_mult_Khoruzhii_best/gf2^10",
+        "gf2^3",
+        "gf2^4",
+        "gf2^5",
+        "gf2^6",
+        "gf2^7",
+        "gf2^8",
+        "gf2^9",
+        "gf2^10",
         # "gf2^3_310",
         # "gf2^4_410",
         # "gf2^5_520",
@@ -50,37 +79,22 @@ if __name__ == "__main__":
         # "gf2^13_134310",
         # "gf2^14_148610",
         # "gf2^15_1510",
-        "gf2^16_1612310",
-
-        # "gf2^3_mult_fr_310",
-        # "gf2^3_mult_fr_310",
-
-        # "gf2^3_mult_fr_310",
-        # "gf2^4_mult_fr_410",
-        # "gf2^5_mult_fr_54320",
-        # "gf2^6_mult_fr_610",
-        # "gf_mult_Vandaele_wo_ancilla/gf2^10_1030",
-        # "gf2^8_mult_fr_84310",
-        # "gf2^9_mult_fr_940",
-        # "gf2^10_mult_fr_1030",
-        # "gf2^11_mult_fr_1120"
-        # "1733init173-00231"
-        # # "1731init129-00168"
+        # "gf2^16_1612310"
     ]
-    results = []
     aux_info = {}
     tcounts = []
-    for name in names:
-        en = entrypoint(get_matrix(init_circtit + "/" + name))
-        if isinstance(en, Tuple) and len(en) == 2:
-            en, tcount = en
-        else:
-            tcount = []
-        res = validate(en, init_circtit + "/" + name)
-        tcounts.append(tcount)
-        results.append(res["result"])
-        output_filename = f"data/baseline_npy/{init_circtit}/{last_name}-{name}-{res["result"].shape[0]}"
-
-        np.save(output_filename, res["result"])
-        print(f"Results for {name} saved to {output_filename}:\n\tFinal rank = {res["result"].shape[0]}")
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        futures = {
+            ex.submit(
+                _run_one,
+                name,
+                module_path=module_path,
+                last_name=last_name,
+                init_circuit=init_circuit,
+            ): name
+            for name in names
+        }
+        for future in as_completed(futures):
+            name, tcount = future.result()
+            tcounts.append(tcount)
     print([tcount for tcount in tcounts])

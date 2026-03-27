@@ -1,8 +1,49 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional
-from pyvartodd.Release.pyvartodd import Matrix, CandidateExport, Stats, Result,  PolicyConfig, ExplorationScore, FinalizationScore, policy_iteration, Tensor3D, Function, ScoringFunction
+from dataclasses import dataclass
+from typing import List, Optional
+
+#TODO ambiuguity of lib version
+try:
+    from pyvartodd.Release.pyvartodd import (  # type: ignore
+        CandidateExport,
+        ExplorationScore,
+        FinalizationScore,
+        Matrix,
+        PolicyConfig,
+        Result,
+        ScoringFunction,
+        Stats,
+        Tensor3D,
+        policy_iteration,
+    )
+except Exception:
+    try:
+        from pyvartodd.Debug.pyvartodd import (  # type: ignore
+            CandidateExport,
+            ExplorationScore,
+            FinalizationScore,
+            Matrix,
+            PolicyConfig,
+            Result,
+            ScoringFunction,
+            Stats,
+            Tensor3D,
+            policy_iteration,
+        )
+    except Exception:
+        from pyvartodd.pyvartodd import (  # type: ignore
+            CandidateExport,
+            ExplorationScore,
+            FinalizationScore,
+            Matrix,
+            PolicyConfig,
+            Result,
+            ScoringFunction,
+            Stats,
+            Tensor3D,
+            policy_iteration,
+        )
 
 
 @dataclass(slots=True)
@@ -34,6 +75,8 @@ class Node:
     parent: Optional["Node"] = None
     incoming: Optional[ActionInfo] = None
     depth: int = 0
+    visits: int = 0
+    value_sum: float = 0.0
 
     @property
     def value_mean(self) -> float:
@@ -43,11 +86,7 @@ class Node:
         self,
         *,
         state: Matrix,
-        incoming: ActionInfo,
-        prior: float,
-        frozen_until: int = 0,
-        active: bool = True,
-        init_rank: int = 1000000
+        incoming: ActionInfo
     ) -> "Node":
         child = Node(
             state=state,
