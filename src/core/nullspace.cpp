@@ -50,7 +50,11 @@ std::vector<index_t> CountWS::argmax_n(std::size_t n) const {
     n = std::min(n, candidates.size());
 
     std::nth_element(candidates.begin(), candidates.begin() + n, candidates.end(),
-                     [this](auto a, auto b) { return cnt[a] > cnt[b]; });
+                     [this](auto a, auto b) {
+                         if (cnt[a] != cnt[b])
+                             return cnt[a] > cnt[b];
+                         return a < b;
+                     });
 
     candidates.resize(n);
     return candidates;

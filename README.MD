@@ -20,6 +20,16 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
+### Python Bindings (optional)
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_PYTHON_BINDINGS=ON
+cmake --build build -j
+```
+
+The module is emitted into `pyvartodd/` (project root). You can import it by
+adding the project root to `PYTHONPATH` or by running Python from the repo.
+
 ### Useful CMake Options
 
 - `-DBUILD_DEMONSTRATION=ON|OFF` (default: ON) builds `vartodd_demo`.
