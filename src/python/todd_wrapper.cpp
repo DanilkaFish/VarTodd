@@ -546,7 +546,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
     py::class_<PolicyConfig>(m, "PolicyConfig")
         .def(py::init<>())
         .def(py::init<ExplorationScore, FinalizationScore, std::string, float, float, float, Int, Int, Int, Int, Int,
-                      Int, Int, Int, Int, Int, Int, bool>(),
+                      Int, Int, Int, Int, Int, Int, Int,bool>(),
              py::arg("ExplorationScore") = ExplorationScore(), 
              py::arg("FinalizationScore") = FinalizationScore(),
              py::arg("selection") = "greedy",
@@ -559,6 +559,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
              py::arg("max_from_single_ns") = 10, 
              py::arg("min_reduction") = 0,
              py::arg("max_reduction") = k_single_sentinel<Int>(), 
+             py::arg("min_z_to_research") = 1 << 30,
              py::arg("max_z_to_research") = 1 << 30,
              py::arg("min_pool_size") = 1, 
              py::arg("max_tohpe") = 1, 
@@ -575,7 +576,8 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def_readwrite("min_reduction", &PolicyConfig::min_reduction)
         .def_readwrite("max_reduction", &PolicyConfig::max_reduction)
         .def_readwrite("min_pool_size", &PolicyConfig::min_pool_size)
-        .def_readwrite("max_z_to_research", &PolicyConfig::max_z_to_research)
+        .def_readwrite("min_z_to_research", &PolicyConfig::min_z_to_research)
+        .def_readwrite("max_z_to_research", &PolicyConfig::min_z_to_research)
         .def_readwrite("gen_part", &PolicyConfig::gen_part)
         .def_readwrite("max_tohpe", &PolicyConfig::max_tohpe)
         .def_readwrite("threads", &PolicyConfig::threads)
@@ -591,7 +593,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
                    ", min_reduction=" + std::to_string((long long)c.min_reduction) +
                    ", max_reduction=" + std::to_string((long long)c.max_reduction) +
                    ", min_pool_size=" + std::to_string((long long)c.min_pool_size) +
-                   ", max_z_to_research=" + std::to_string((long long)c.max_z_to_research) +
+                   ", min_z_to_research=" + std::to_string((long long)c.min_z_to_research) +
                    ", gen_part=" + std::to_string((long long)c.gen_part) +
                    ", max_tohpe=" + std::to_string((long long)c.max_tohpe) +
                    ", threads=" + std::to_string((long long)c.threads) +

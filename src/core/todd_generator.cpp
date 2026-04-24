@@ -222,8 +222,8 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     auto       min_pool           = std::max(1, config.min_pool_size);
     auto       escore             = config.escore;
     auto       fscore             = config.fscore;
-
-    auto       max_z_to_research          = index_t(std::max(0,config.max_z_to_research));
+    auto       max_z_to_research  = config.max_z_to_research;
+    auto       min_z_to_research          = index_t(std::max(0,config.min_z_to_research));
     auto       max_tohpe                  = config.max_tohpe;
     auto       max_from_single_ns         = config.max_from_single_ns;
     auto       tohpe_sample               = config.tohpe_sample;
@@ -312,11 +312,11 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
         if (!try_only_tohpe || pool.size() < min_pool) {
 
             auto buckets = data->index().sum_key_sizes();
-            max_z_to_research = static_cast<int>(std::min(buckets.size(), max_z_to_research));
-            if (buckets.size() > max_z_to_research) {
+            min_z_to_research = static_cast<int>(std::min(buckets.size(), min_z_to_research));
+            if (buckets.size() > min_z_to_research) {
                 std::ranges::nth_element(
                     buckets, 
-                    buckets.begin() + max_z_to_research, 
+                    buckets.begin() + min_z_to_research, 
                     [&](auto const& a, auto const& b) {
                         return std::tie(a.second, a.first) > std::tie(b.second, b.first);
                     }
@@ -336,8 +336,8 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                 auto            len = index_t{};
 
                 int pos = 0;
-                for (std::size_t i = 0; (i < buckets.size()); ++i) {
-                    if (i >= max_z_to_research &&
+                for (std::size_t i = 0; i < std::min(Int(buckets.size()), max_z_to_research); ++i) {
+                    if (i >= min_z_to_research &&
                         (local_pool.size() >= min_pool || local_beyond_pool.size() >= min_pool)) {
                         stop.store(true, std::memory_order_relaxed);
                     }

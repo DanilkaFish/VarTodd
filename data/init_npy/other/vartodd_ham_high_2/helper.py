@@ -16,7 +16,10 @@ from todd import Todd
 
 DEFAULT_MATRIX_PATH = "npy/gf2^9.npy"
 
-DEFAULT_MATRIX_PATH = "/home/danilkafish/Projects/VarTodd/data/init_npy/other/ham15_high.npy"
+DEFAULT_MATRIX_PATH = "npy/gf2^32_3228320.npy"
+DEFAULT_MATRIX_PATH = "npy/ham15_high.npy"
+
+DATA_BACKUPS_PATH = "data/path_backups_ham_high"
 
 def _worker_run_one_from_template(
     seed: int,
@@ -241,7 +244,7 @@ def print_uniform_by_rank(best_ranks, best_evals, max_lines=10):
     return s
 
 
-def summarize_path_backups(root_dir: str = "data/path_backups", top_k: int = 10, init_word: str = "init") -> str:
+def summarize_path_backups(root_dir: str = DATA_BACKUPS_PATH, top_k: int = 10, init_word: str = "init") -> str:
     root = FsPath(root_dir)
     if not root.exists() or not root.is_dir():
         return (
@@ -488,7 +491,7 @@ class BaseEvaluator:
     def policy_mapping(self):
         pass
 
-    def run(self, params, seeds, max_workers=3):
+    def run(self, params, seeds, max_workers=1):
         if len(params) != len(self.active_params):
             raise RuntimeError(f"Num of params {len(params)} is not equal to the num of active params {len(self.active_params)}")
         self.insert(params)
@@ -602,14 +605,14 @@ class BaseEvaluator:
         h.update(mat.tobytes())
         return f"{name}i{init_rank}_m{mid_rank}_f{rank}_{h.hexdigest()}"
 
-    def save_path(self, name: str, root_dir: str = "data/path_backups", store_daos: bool = True, auto_hash: bool = True) -> str:
+    def save_path(self, name: str, root_dir: str = DATA_BACKUPS_PATH, store_daos: bool = True, auto_hash: bool = True) -> str:
         store = PathStore(root_dir=root_dir)
         best_path = self._pick_path_for_save()
         save_name = self._auto_hashed_name(name, best_path) if auto_hash else name
         store.save(save_name, [best_path], store_daos=store_daos)
         return save_name
 
-    def load_path(self, name: str, root_dir: str = "data/path_backups", dao_fallback: Optional[Dao] = None):
+    def load_path(self, name: str, root_dir: str = DATA_BACKUPS_PATH, dao_fallback: Optional[Dao] = None):
         store = PathStore(root_dir=root_dir)
         fallback = self.dao if dao_fallback is None else dao_fallback
         self.best_paths = store.load(name, dao_fallback=fallback)
@@ -617,7 +620,7 @@ class BaseEvaluator:
             raise RuntimeError(f"Empty paths for path_name={name}")
         return self.best_paths
     
-    def insert_path(self, name: str, root_dir: str = "data/path_backups", dao_fallback: Optional[Dao] = None):
+    def insert_path(self, name: str, root_dir: str = DATA_BACKUPS_PATH, dao_fallback: Optional[Dao] = None):
         store = PathStore(root_dir=root_dir)
         fallback = self.dao if dao_fallback is None else dao_fallback
         self.best_paths = store.load(name, dao_fallback=fallback)

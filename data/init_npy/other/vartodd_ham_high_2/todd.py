@@ -45,7 +45,6 @@ class Todd:
             if not new_nodes:
                 break 
             nodes = heapq.nlargest(width.at(best_node.state.rows), new_nodes, lambda x : x.incoming.cand.final_score)
-            print(best_node.state.rows)
         if with_report:
             best_counter = min(counter, best_counter)
             return best_node, (counter, best_counter)

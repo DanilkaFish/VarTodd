@@ -55,17 +55,18 @@ if __name__ == "__main__":
     module_path = sys.argv[1].replace('/', '.').replace('.py', '')
     last_name = sys.argv[1].split('/')[-1].replace('.py', '')
     workers = int(sys.argv[2]) if len(sys.argv) > 2 else max(1, min(8, os.cpu_count() or 1))
-    init_circuit = "gf_mult_Vandaele_wo_ancilla"
-    init_circuit = "gf_mult_Khoruzhii_best"
+    init_circuit = "other"
+    # init_circuit = "gf_mult_Vandaele_wo_ancilla"
+    # init_circuit = "gf_mult_Khoruzhii_best"
     names = [
-        "gf2^3",
-        "gf2^4",
-        "gf2^5",
-        "gf2^6",
-        "gf2^7",
-        "gf2^8",
-        "gf2^9",
-        "gf2^10",
+        # "gf2^3",
+        # "gf2^4",
+        # "gf2^5",
+        # "gf2^6",
+        # "gf2^7",
+        # "gf2^8",
+        # "gf2^9",
+        # "gf2^10",
         # "gf2^3_310",
         # "gf2^4_410",
         # "gf2^5_520",
@@ -80,6 +81,8 @@ if __name__ == "__main__":
         # "gf2^14_148610",
         # "gf2^15_1510",
         # "gf2^16_1612310"
+        # "gf2^32_3228320"
+        "ham15_high"
     ]
     aux_info = {}
     tcounts = []
