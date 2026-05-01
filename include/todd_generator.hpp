@@ -3,9 +3,10 @@
 #include "algorithms.hpp"
 #include "nullspace.hpp"
 #include "typedef.hpp"
+#include <array>
 #include <cmath>
 #include <cstdint>
-#include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -27,20 +28,22 @@ struct Candidate {
     Int   num_better_red         = 0;
     Int   num_better_dim         = 0;
     Int   num_better_pool_score  = 0;
-
-    std::shared_ptr<NullSpace> nsptr;
+    Int   vec_weight             = 0;
+    Int   z_weight               = 0;
+    Int   z_size                 = 1;
 
     Candidate() = default;
 
-    Candidate(float s, Int r, Int kk, Int ll, Row v, Int basis_dim, Int bucket_size,
-              const std::shared_ptr<NullSpace>& nsptr)
+    Candidate(float s, Int r, Int kk, Int ll, Row v, Int basis_dim, Int bucket_size, Int z_weight, Int z_size)
         : vec(std::move(v)), pool_score(s), reduction(r), k(kk), l(ll), basis_dim(basis_dim), bucket_size(bucket_size),
-          possible_max_reduction(static_cast<Int>(bucket_size * 2)), nsptr(nsptr) {}
+          possible_max_reduction(static_cast<Int>(bucket_size * 2)), vec_weight(static_cast<Int>(vec.count())),
+          z_weight(z_weight), z_size(std::max<Int>(1, z_size)) {}
 
-    Candidate(float s, Int r, Int kk, Int ll, Row&& v, Row&& zz, Int basis_dim, Int bucket_size,
-              const std::shared_ptr<NullSpace>& nsptr)
+    Candidate(float s, Int r, Int kk, Int ll, Row&& v, Row&& zz, Int basis_dim, Int bucket_size)
         : vec(std::move(v)), z(std::move(zz)), pool_score(s), reduction(r), k(kk), l(ll), basis_dim(basis_dim),
-          bucket_size(bucket_size), possible_max_reduction(static_cast<Int>(bucket_size * 2)), nsptr(nsptr) {}
+          bucket_size(bucket_size), possible_max_reduction(static_cast<Int>(bucket_size * 2)),
+          vec_weight(static_cast<Int>(vec.count())), z_weight(static_cast<Int>(z.count())),
+          z_size(static_cast<Int>(std::max<index_t>(1, z.size()))) {}
 
     bool at_least_single() const;
     bool is_tohpe() const;
@@ -133,8 +136,7 @@ struct ScoringFunction {
     enum Function { LINEAR, POLYNOM, DISTANCE, LOGARITHMIC, SIGMOID };
     Function type = LINEAR;
     float    pow  = 2.0;
-    float    evaluate(const std::vector<float>& weights, const std::vector<float>& centers,
-                      const std::vector<float>& x) const {
+    float    evaluate(std::span<const float> weights, std::span<const float> centers, std::span<const float> x) const {
         switch (type) {
         case (ScoringFunction::LINEAR):
             return linear_scoring(weights, x);
@@ -152,7 +154,7 @@ struct ScoringFunction {
         return 0;
     }
 
-    float linear_scoring(std::vector<float> w, std::vector<float> x) const {
+    float linear_scoring(std::span<const float> w, std::span<const float> x) const {
         float  sum = 0.0;
         size_t n   = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
@@ -161,12 +163,13 @@ struct ScoringFunction {
         return sum;
     }
 
-    float polynom_scoring(const std::vector<float>& w, const std::vector<float> c, const std::vector<float>& x) const {
+    float polynom_scoring(std::span<const float> w, std::span<const float> c, std::span<const float> x) const {
         float  sum = 0.0;
-        size_t n   = std::min(w.size(), x.size());
+        size_t n   = std::min({w.size(), c.size(), x.size()});
         if (pow >= 0) {
             for (size_t i = 0; i < n; ++i) {
-                sum += w[i] * std::pow(std::abs(x[i] - c[i]), pow);
+                const float d = std::abs(x[i] - c[i]);
+                sum += w[i] * ((pow == 2.0f) ? d * d : std::pow(d, pow));
             }
         } else {
             for (size_t i = 0; i < n; ++i) {
@@ -176,7 +179,7 @@ struct ScoringFunction {
         return sum;
     }
 
-    float distance_scoring(std::vector<float> w, std::vector<float> x) const {
+    float distance_scoring(std::span<const float> w, std::span<const float> x) const {
         float  sum = 0.0;
         size_t n   = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
@@ -185,17 +188,17 @@ struct ScoringFunction {
         return sum;
     }
 
-    float sigmoid_scoring(std::vector<float> w, std::vector<float> x) const {
+    float sigmoid_scoring(std::span<const float> w, std::span<const float> x) const {
         float  sum = 0.0;
         size_t n   = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
-            sum += w[i] * std::pow(x[i], pow);
+            sum += w[i] * ((pow == 2.0f) ? x[i] * x[i] : std::pow(x[i], pow));
         }
         float z = sum;
         return 1.0f / (1.0f + std::exp(-z));
     }
 
-    float logarithmic_scoring(std::vector<float> w, std::vector<float> x) const {
+    float logarithmic_scoring(std::span<const float> w, std::span<const float> x) const {
         float  sum = 0.0;
         size_t n   = std::min(w.size(), x.size());
         for (size_t i = 0; i < n; ++i) {
@@ -221,11 +224,9 @@ struct ExplorationScore {
     ExplorationScore(std::vector<float> weights, std::vector<float> centers, float pow)
         : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
     auto operator()(Candidate& cand) {
-        auto               tohpe_dim = 0;
-        std::vector<float> x         = {cand.reduction / bn / 2, cand.basis_dim / dn, cand.bucket_size / bn,
-                                        cand.vec.count() / wvwn,
-                                        (cand.nsptr->vector().count()) / float(cand.nsptr->vector().size())};
-        cand.pool_score              = sc.evaluate(weights, centers, x);
+        std::array<float, 5> x = {cand.reduction / bn / 2, cand.basis_dim / dn, cand.bucket_size / bn,
+                                  cand.vec_weight / wvwn, cand.z_weight / static_cast<float>(cand.z_size)};
+        cand.pool_score       = sc.evaluate(weights, centers, x);
         return std::make_pair(cand.pool_score, 0);
     }
 };
@@ -245,18 +246,17 @@ struct FinalizationScore {
         : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
     FinalizationScore(std::vector<float> weights, std::vector<float> centers, float pow)
         : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
+    bool needs_tohpe_dim() const { return weights.size() > 5 && weights[5] != 0.0f; }
     auto operator()(Candidate& cand) {
-        auto               tohpe_dim = 0;
-        std::vector<float> x         = {cand.reduction / bn / 2, cand.basis_dim / dn, cand.bucket_size / bn,
-                                        cand.vec.count() / wvwn,
-                                        (cand.nsptr->vector().count()) / float(cand.nsptr->vector().size())};
-        if (weights[5] != 0) {
-            tohpe_dim = get_tohpe_basis(cand.nsptr->apply(cand.vec)).rows();
-            x.push_back(tohpe_dim / float(dn));
-            cand.tohpe_dim = tohpe_dim;
-        }
+        std::array<float, 6> x = {cand.reduction / bn / 2,
+                                  cand.basis_dim / dn,
+                                  cand.bucket_size / bn,
+                                  cand.vec_weight / wvwn,
+                                  cand.z_weight / static_cast<float>(cand.z_size),
+                                  cand.tohpe_dim / dn};
+        const std::size_t    n = needs_tohpe_dim() ? 6 : 5;
 
-        cand.final_score = sc.evaluate(weights, centers, x);
+        cand.final_score = sc.evaluate(weights, centers, std::span<const float>(x.data(), n));
         return std::make_pair(cand.final_score, cand.tohpe_dim);
     }
 };
@@ -275,6 +275,7 @@ struct PolicyConfig {
     Int   max_from_single_ns = 100;
     Int   min_reduction      = 0;
     Int   max_reduction      = k_single_sentinel<Int>();
+    Int   min_z_to_research  = 1 << 20;
     Int   max_z_to_research  = 1 << 20;
     Int   min_pool_size      = 1;
     Int   max_tohpe          = 1;

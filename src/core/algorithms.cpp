@@ -54,9 +54,8 @@ static inline Row extract_right(RowCView row, index_t divider, index_t nY) {
     return y;
 }
 
-// TODO Faster implementation
 static inline void apply_solution_transform(Row& y, const SumEntry* ptr, int len) {
-    // Current parity of y. This replaces repeated y.count() calls.
+    bool odd = (y.count() & 1u) != 0;
 
     for (int t = 0; t < len; ++t) {
         const SumEntry& e = ptr[t];
@@ -73,10 +72,9 @@ static inline void apply_solution_transform(Row& y, const SumEntry* ptr, int len
                 y.flip(e.b);
             }
         } else {
-            // Original semantics:
-            // if (y.count() % 2 == 1) y.flip(a);
-            if ((y.count() & 1u)) {
+            if (odd) {
                 y.flip(e.a);
+                odd = false;
             }
         }
     }
