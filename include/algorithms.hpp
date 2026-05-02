@@ -15,10 +15,10 @@ struct PivotMap {
     uint32_t              epoch = 1;
     std::size_t           size() const { return len; }
     void                  reset(std::size_t n) {
+        len = 0;
         if (row.size() < n) {
             row.resize(n);
             tag.resize(n, 0);
-            len = 0;
         }
         ++epoch;
         if (epoch == 0) {
@@ -43,6 +43,7 @@ struct RrefResult {
 };
 void          gauss_elimination_inplace_rref(Matrix& A, Matrix& aug, PivotMap& pivots);
 Matrix        get_tohpe_basis(const Matrix& P);
+Matrix        row_dependency_basis(Matrix&& A);
 Matrix        basis_gauss_elimination(Matrix&& A);
 Matrix        extract_basis(const Matrix& kernel, const PivotMap& pivots);
 Matrix        L_expansion(const Matrix& mat);

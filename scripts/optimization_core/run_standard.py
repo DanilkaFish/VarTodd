@@ -50,6 +50,7 @@ def _run_one(
     return name, tcount
 
 if __name__ == "__main__":
+    print("hello")
     if len(sys.argv) < 2:
         raise SystemExit("usage: python run_standard.py <module_path> [workers]")
     module_path = sys.argv[1].replace('/', '.').replace('.py', '')
@@ -82,8 +83,8 @@ if __name__ == "__main__":
         # "gf2^15_1510",
         # "gf2^16_1612310"
         # "gf2^32_3228320"
-        "mod_adder_1024.qc.matrix"
-        # "ham15_high"
+        # "mod_adder_1024"
+        "ham15_high"
     ]
     aux_info = {}
     tcounts = []

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -44,13 +45,15 @@ class MatrixWithData {
         index_t                    nonpiv_cols{};
     };
 
-    const FullToddData& full_todd() const noexcept { return full_todd_; }
+    const FullToddData& full_todd() const;
 
   private:
+    FullToddData build_full_todd() const;
+
     Matrix          P_;
     Matrix          tohpe_basis_;
     const ToddIndex index_;
-    FullToddData    full_todd_;
+    mutable std::optional<FullToddData> full_todd_;
 };
 
 // base object for prediction of rank divergence
@@ -68,6 +71,8 @@ class Witness {
     explicit Witness(std::shared_ptr<MatrixWithData> M, Row z);
     std::shared_ptr<MatrixWithData>  M_;
     std::vector<std::pair<int, int>> pairs_;
+    Row                              pair_endpoints_;
+    bool                             pair_endpoints_disjoint_ = true;
 
     Row z_;
     int special_ = -1;
@@ -140,7 +145,7 @@ class TohpeGenerator {
 
 class FullToddGenerator {
   public:
-    FullToddGenerator(std::shared_ptr<MatrixWithData> M);
+    explicit FullToddGenerator(std::shared_ptr<MatrixWithData> M);
     auto make(RowCView z) const -> NullSpace;
     auto make(index_t row) const -> NullSpace;
     auto make(index_t row1, index_t row2) const -> NullSpace;
@@ -151,9 +156,6 @@ class FullToddGenerator {
 
   private:
     std::shared_ptr<MatrixWithData> M_;
-
-    mutable Matrix scratch_R_and_AUG_nonpivot_;
-    mutable std::vector<index_t> scratch_S_;
 };
 
 } // namespace todd

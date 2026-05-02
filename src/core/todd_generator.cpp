@@ -7,7 +7,6 @@
 #include <numeric>
 #include <random.hpp>
 #include <stdexcept>
-#include <atomic>
 
 namespace todd {
 
@@ -246,7 +245,6 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     auto       tohpe_sample               = config.tohpe_sample;
     auto       try_only_tohpe             = config.try_only_tohpe;
     auto       gen_part = config.gen_part;
-    const auto threads                    = config.threads;
     num_samples                = std::max(num_samples, (Int)0);
     num_candidates             = std::max(num_candidates, (Int)1);
     top_pool                   = std::max(num_candidates, top_pool);
@@ -365,26 +363,24 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                 auto& local_gen        = get_full_gen();
                 auto local_svs         = SeenValues{};
                 local_pool.reserve(top_pool);
-                std::atomic<bool> stop{false};
+
                 const SumEntry* ptr = nullptr;
                 auto            len = index_t{};
 
-                int pos = 0;
                 for (std::size_t i = 0; i < buckets.size(); ++i) {
                     if (i >= min_z_to_research &&
                         (local_pool.size() >= min_pool || local_beyond_pool.size() >= min_pool)) {
-                        stop.store(true, std::memory_order_relaxed);
+                        break;
                     }
-                    if (stop.load(std::memory_order_relaxed))
-                        continue;
-                    
+
                     auto& [key, bucket_size] = buckets[i];
                     stats.total += 1;
                     if (!data->index().sum_bucket(key, ptr, len) || len == 0)
                         continue;
-                    const auto k         = ptr[0].a;
-                    const auto l         = ptr[0].b;
-                    const bool is_single = (l == k_single_sentinel<decltype(l)>());
+
+                    const index_t k      = ptr[0].a;
+                    const bool    is_single = !ptr[0].is_pair();
+                    const index_t l      = is_single ? k_single_sentinel<index_t>() : (index_t)ptr[0].b;
                     auto       ns        = is_single ? local_gen.make(k) : local_gen.make(k, l);
 
                     const auto dim = ns.basis().rows();
@@ -397,14 +393,13 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                         continue;
 
                     PyRNG local_rng(base_seed + k + l);
-                    auto  beyond        = [&](const auto red) { return (red < min_reduction || red > max_reduction); };
-                    // TODO
+                    auto  beyond = [&](const auto red) { return (red < min_reduction || red > max_reduction); };
                     auto  accept_anyway = [&](auto red) {
-                        return false && red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
+                        return false && red <= 0 && non_improving_prob &&
+                               local_rng.rand_double(0.0, 1.0) < non_improving_prob;
                     };
 
                     stats.max_bucket = std::max(stats.max_bucket, (Int)bucket_size);
-                    auto counter     = 0;
 
                     auto local_local_pool = TopKPool<ExplorationScore>(max_from_single_ns, escore);
                     local_rng.for_each_unique_bitvector(dim, num_samples, gen_part, [&](RowCView coefs) {
@@ -421,11 +416,13 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                         }
                         stats.accepted++;
                         stats.nonzero++;
+
                         const Int cand_l = is_single ? k_single_sentinel<Int>() : static_cast<Int>(l);
-                        Candidate c(0, (Int)red, static_cast<Int>(k), cand_l, std::move(vec), (Int)dim, (Int)bucket_size,
-                                    static_cast<Int>(key.count()), static_cast<Int>(key.size()));
+                        Candidate c(0, (Int)red, static_cast<Int>(k), cand_l, std::move(vec), (Int)dim,
+                                    (Int)bucket_size, static_cast<Int>(key.count()), static_cast<Int>(key.size()));
                         auto [score, tohpe] =
                             (beyond(red)) ? local_beyond_pool.push(std::move(c)) : local_local_pool.push(std::move(c));
+                        (void)tohpe;
                         local_svs.observe(red, dim, score);
 
                         stats.max_pool_score = std::max(stats.max_pool_score, score);
@@ -437,31 +434,36 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                     local_pool.merge_from(local_local_pool);
                 }
 
-                {
-                    if (local_pool.size() > 0) {
-                        pool.merge_from(local_pool);
-                    } else {
-                        pool.merge_from(local_beyond_pool);
-                    }
-                    svs.merge_from(local_svs);
-                    auto gnz                = global_stats.total;
-                    auto lnz                = stats.total;
+                if (local_pool.size() > 0) {
+                    pool.merge_from(local_pool);
+                } else {
+                    pool.merge_from(local_beyond_pool);
+                }
+                svs.merge_from(local_svs);
+
+                if (stats.total > 0) {
+                    const auto gnz = global_stats.total;
+                    const auto lnz = stats.total;
                     global_stats.mean_basis = (global_stats.mean_basis * gnz + stats.mean_basis * lnz) / (gnz + lnz);
                     global_stats.mean_mr    = (global_stats.mean_mr * gnz + stats.mean_mr * lnz) / (gnz + lnz);
-                    gnz                     = global_stats.nonzero;
-                    lnz                     = stats.nonzero;
-                    global_stats.mean_score = (global_stats.mean_score * gnz + stats.mean_score * lnz) / (gnz + lnz);
+                }
+                if (stats.nonzero > 0) {
+                    const auto gnz = global_stats.nonzero;
+                    const auto lnz = stats.nonzero;
+                    global_stats.mean_score =
+                        (global_stats.mean_score * gnz + stats.mean_score * lnz) / (gnz + lnz);
                     global_stats.mean_reduction =
                         (global_stats.mean_reduction * gnz + stats.mean_reduction * lnz) / (gnz + lnz);
-                    global_stats.accepted_non_improving += stats.accepted_non_improving;
-                    global_stats.rejected += stats.rejected;
-                    global_stats.accepted += stats.accepted;
-                    global_stats.total += stats.total;
-                    global_stats.nonzero += stats.nonzero;
-                    global_stats.max_basis      = std::max(stats.max_basis, global_stats.max_basis);
-                    global_stats.max_pool_score = std::max(stats.max_pool_score, global_stats.max_pool_score);
-                    global_stats.max_reduction  = std::max(stats.max_reduction, global_stats.max_reduction);
                 }
+                global_stats.accepted_non_improving += stats.accepted_non_improving;
+                global_stats.rejected += stats.rejected;
+                global_stats.accepted += stats.accepted;
+                global_stats.total += stats.total;
+                global_stats.nonzero += stats.nonzero;
+                global_stats.max_basis      = std::max(stats.max_basis, global_stats.max_basis);
+                global_stats.max_pool_score = std::max(stats.max_pool_score, global_stats.max_pool_score);
+                global_stats.max_reduction  = std::max(stats.max_reduction, global_stats.max_reduction);
+                global_stats.max_bucket     = std::max(stats.max_bucket, global_stats.max_bucket);
             }
         }
     }

@@ -279,7 +279,6 @@ struct PolicyConfig {
     Int   max_z_to_research  = 1 << 20;
     Int   min_pool_size      = 1;
     Int   max_tohpe          = 1;
-    Int   threads            = 1;
     Int   tohpe_sample       = 1;
     bool  try_only_tohpe     = true;
 };

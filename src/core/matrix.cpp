@@ -121,10 +121,12 @@ Matrix Matrix::from_npy(const std::string& npy_path) {
 
     Matrix mat(static_cast<index_t>(n_rows), static_cast<index_t>(n_cols));
 
+    const bool fortran_order = arr.memory_order == cnpypp::MemoryOrder::Fortran;
     for (std::size_t i = 0; i < n_rows; ++i) {
         for (std::size_t j = 0; j < n_cols; ++j) {
-            std::uint8_t v = data[i * n_cols + j];
-            if (v & 1u) {
+            const std::size_t offset = fortran_order ? (j * n_rows + i) : (i * n_cols + j);
+            std::uint8_t v = data[offset];
+            if (v != 0) {
                 mat[static_cast<index_t>(i)].set(static_cast<index_t>(j));
             }
         }
@@ -155,6 +157,12 @@ void Matrix::save_npy(const std::string& npy_path) const {
 }
 
 void Matrix::reset() { std::ranges::fill(data_, 0); }
+
+void Matrix::reserve_rows(index_t rows) {
+    if (rows <= rows_ || cols_ == 0)
+        return;
+    data_.reserve((std::size_t)rows * (std::size_t)blocks_per_row_);
+}
 
 RowCView Matrix::operator[](index_t i) const noexcept {
     return RowCView(&data_[i * blocks_per_row_], cols_, blocks_per_row_);

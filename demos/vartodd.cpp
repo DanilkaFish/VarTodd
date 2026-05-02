@@ -22,7 +22,6 @@ int main(int argc, char* argv[]) {
         ("escore-wred,er", po::value<int>()->default_value(1), "exploration score wred")
         ("fscore-wred,fr", po::value<int>()->default_value(-1), "finalization score wred")
         ("min-reduction", po::value<int>()->default_value(1), "minimum reduction")
-        ("threads,r", po::value<int>()->default_value(4), "number of threads")
         ("seed,s", po::value<int>()->default_value(4), "seed")
         ("try-only-tohpe,ot", po::value<bool>()->default_value(1), "only tohpe")
     ;
@@ -64,7 +63,6 @@ int main(int argc, char* argv[]) {
     policy_cfg.escore.weights[0] = vm["escore-wred"].as<int>();
     policy_cfg.fscore.weights[0] = vm["fscore-wred"].as<int>();
     policy_cfg.min_reduction = vm["min-reduction"].as<int>();
-    policy_cfg.threads = vm["threads"].as<int>();
 	
 	auto init_matrix = Matrix::from_npy(filename);
 	auto finit_matrix = init_matrix;

@@ -17,6 +17,7 @@ class Todd:
         counter = 0
         best_counter = 0
         nodes = [root]
+        print(best_node.state.rows)
         for i in range(self.depth):
             new_nodes = []
             counter = max(counter, len(nodes))

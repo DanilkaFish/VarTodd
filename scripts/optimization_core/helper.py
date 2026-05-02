@@ -3,7 +3,7 @@ import json
 import os
 import re
 from pathlib import Path as FsPath
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
@@ -25,6 +25,7 @@ def _worker_run_one_from_template(
     bs_width: RankSchedule = RankSchedule.constant(1),
     todd_width: RankSchedule = RankSchedule.constant(1),
 ):
+    path = deepcopy(path)
     todd = deepcopy(todd)
     # self.todd = Todd(self.dao, max_depth)
     node, counters = todd.run(path, bs_width, todd_width, True, seed)
@@ -363,6 +364,7 @@ class BaseEvaluator:
     @best_pathes.setter
     def best_pathes(self, value: List[Path]) -> None:
         self.best_paths = value
+
     def __init__(
         self,
         path_name: str = "init",
@@ -419,12 +421,13 @@ class BaseEvaluator:
         self.init_rank = mat.rows
         self.fin_rank = fin_rank
         self.shedule = shedule
-        self.dao.threads = 4
         self.todd = Todd(self.dao, max_depth)
         self.max_depth = max_depth
         self.tcount = []
         self.active_params = []
         self.best_params = []
+        self._executor = None
+        self._executor_key = None
         # self
         self.x0 = [0 for i in range(X0_LENGTH)]
 
@@ -489,24 +492,86 @@ class BaseEvaluator:
     def policy_mapping(self):
         pass
 
+    def _get_executor(self, executor_cls, executor_kind: str, max_workers: int):
+        key = (executor_kind, max_workers)
+        if self._executor_key != key:
+            self.close_workers()
+            self._executor = executor_cls(max_workers=max_workers)
+            self._executor_key = key
+        return self._executor
+
+    def close_workers(self):
+        if self._executor is not None:
+            self._executor.shutdown(wait=True, cancel_futures=False)
+            self._executor = None
+            self._executor_key = None
+
+    def __del__(self):
+        try:
+            self.close_workers()
+        except Exception:
+            pass
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_executor"] = None
+        state["_executor_key"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._executor = None
+        self._executor_key = None
+
+    def merge_run_state_from(self, other: "BaseEvaluator"):
+        eval_offset = self.total_eval
+        self.total_eval += other.total_eval
+        self.tcount.extend(other.tcount)
+
+        if other._best_rank < self._best_rank:
+            self.best_seen = other.best_seen
+            self.best_ranks = list(other.best_ranks)
+            self.best_evals = [eval_offset + e for e in other.best_evals]
+            self.best_eval = eval_offset + other.best_eval
+            self._best_rank = other._best_rank
+            self.best_paths = deepcopy(other.best_paths)
+            self.best_seed = getattr(other, "best_seed", None)
+        elif other._best_rank == self._best_rank:
+            self.best_paths.extend(deepcopy(other.best_paths))
+            self.best_seen += other.best_seen
+
     def run(self, params, seeds, max_workers=24):
         if len(params) != len(self.active_params):
             raise RuntimeError(f"Num of params {len(params)} is not equal to the num of active params {len(self.active_params)}")
         self.insert(params)
         self.reinit()
         # self.policy_setup(params)
+        if max_workers is None:
+            default_workers = min(4, os.cpu_count() or 1)
+            max_workers = int(
+                os.environ.get("VARTODD_SEED_WORKERS", os.environ.get("VARTODD_MAX_WORKERS", default_workers))
+            )
+        max_workers = max(1, min(int(max_workers), len(seeds)))
         if max_workers == 1:
             results = [
                 _worker_run_one_from_template(seed, self.current_path, self.todd, self.bs_width, self.todd_width)
                 for seed in seeds
             ]
         else:
-            with ProcessPoolExecutor(max_workers=max_workers) as ex:
-                futures = [
-                    ex.submit(_worker_run_one_from_template, seed, self.current_path, self.todd, self.bs_width, self.todd_width)
-                    for seed in seeds
-                ]
-                results = [f.result() for f in futures]
+            executor_kind = os.environ.get("VARTODD_EXECUTOR", "process").strip().lower()
+            if executor_kind in {"process", "processes", "proc"}:
+                executor_cls = ProcessPoolExecutor
+            elif executor_kind in {"thread", "threads", "threading"}:
+                executor_cls = ThreadPoolExecutor
+            else:
+                raise ValueError("VARTODD_EXECUTOR must be 'thread' or 'process'")
+
+            ex = self._get_executor(executor_cls, executor_kind, max_workers)
+            futures = [
+                ex.submit(_worker_run_one_from_template, seed, self.current_path, self.todd, self.bs_width, self.todd_width)
+                for seed in seeds
+            ]
+            results = [f.result() for f in futures]
 
         # process deterministically in seed order
         seed_to_idx = {s:i for i,s in enumerate(seeds)}
@@ -532,6 +597,7 @@ class BaseEvaluator:
         return mats_ranks
 
     def get_best(self):
+        self.close_workers()
         reuse_note = ""
         load_note = ""
         if self.loaded_rank is not None:
@@ -662,7 +728,6 @@ class BaseEvaluator:
         if vals is not None:
             x = list(zip(x, vals))
         self.dao.mode.min_z_to_research = _to_rank_schedule(x)
-        self.dao.threads = 3
 
     def set_max_z_to_research(self, x: Any, vals=None):
         if vals is not None:

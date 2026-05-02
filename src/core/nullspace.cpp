@@ -11,6 +11,41 @@
 #include <stdexcept>
 
 namespace todd {
+static index_t intersection_count(RowCView a, RowCView b) noexcept {
+    assert(a.blocks() == b.blocks());
+    index_t total = 0;
+    for (index_t k = 0; k < a.blocks(); ++k)
+        total += popcount64(a.data()[k] & b.data()[k]);
+    return total;
+}
+
+static void or_shifted(RowView dst, index_t offset, RowCView src) noexcept {
+    if (src.size() == 0)
+        return;
+
+    uint64_t*       d          = dst.data();
+    const uint64_t* s          = src.data();
+    const index_t   dst_blocks = dst.blocks();
+    const index_t   src_blocks = src.blocks();
+    const index_t   d0         = offset >> 6;
+    const unsigned  sh         = (unsigned)(offset & 63);
+
+    if (sh == 0) {
+        for (index_t k = 0; k < src_blocks && d0 + k < dst_blocks; ++k)
+            d[d0 + k] |= s[k];
+    } else {
+        for (index_t k = 0; k < src_blocks && d0 + k < dst_blocks; ++k) {
+            const uint64_t w = s[k];
+            d[d0 + k] |= (w << sh);
+            if (d0 + k + 1 < dst_blocks)
+                d[d0 + k + 1] |= (w >> (64u - sh));
+        }
+    }
+
+    if (dst_blocks != 0)
+        d[dst_blocks - 1] &= tail_mask_bits(dst.size());
+}
+
 void CountWS::reset(std::size_t K) {
     if (cnt.size() < K) {
         cnt.resize(K);
@@ -69,11 +104,26 @@ void CountWS::argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) co
     scratch_out.resize(n);
 }
 
-MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P} {
+MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P_} {
     if (P_.rows() == 0) {
         tohpe_basis_ = Matrix(0, 0);
-        full_todd_   = FullToddData{};
         return;
+    }
+
+    tohpe_basis_ = get_tohpe_basis(P_);
+}
+
+const MatrixWithData::FullToddData& MatrixWithData::full_todd() const {
+    if (!full_todd_) {
+        full_todd_ = build_full_todd();
+    }
+    return *full_todd_;
+}
+
+MatrixWithData::FullToddData MatrixWithData::build_full_todd() const {
+    FullToddData out;
+    if (P_.rows() == 0) {
+        return out;
     }
 
     Matrix    L = L_expansion(P_);
@@ -82,71 +132,65 @@ MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P} {
     pivots.reset(L.cols());
     gauss_elimination_inplace_rref(L, Y, pivots);
 
-    tohpe_basis_ = extract_basis(Y, pivots);
-
     const index_t n         = P_.cols();
     const index_t full_cols = L.cols();
 
-    Matrix            L_reduced(pivots.size(), full_cols);
-    Matrix            Y_reduced(pivots.size(), Y.cols());
-    std::vector<uint8_t> is_zero(L_reduced.rows(), true);
-
-    std::vector<std::pair<index_t, index_t>> pivot_mapping;
-
-    index_t counter = 0;
-
-    full_todd_.pivot_row_of_col.assign((std::size_t)full_cols, -1);
-    for (index_t pivot_col=0; pivot_col < full_cols; pivot_col++) {
-        auto row = pivots.get(pivot_col); 
-        if (row != PivotMap::npos){
-            assign(L_reduced[counter], L[row]);
-            if (!Y[row].none()) {
-                assign(Y_reduced[counter], Y[row]);
-                is_zero[counter] = false;
-            }
-            full_todd_.pivot_row_of_col[(std::size_t)pivot_col] = (std::int64_t)counter;
-            ++counter;
+    out.pivot_row_of_col.assign((std::size_t)full_cols, -1);
+    std::vector<index_t> pivot_source_rows;
+    pivot_source_rows.reserve(pivots.size());
+    for (index_t pivot_col = 0; pivot_col < full_cols; ++pivot_col) {
+        auto row = pivots.get(pivot_col);
+        if (row != PivotMap::npos) {
+            out.pivot_row_of_col[(std::size_t)pivot_col] = (std::int64_t)pivot_source_rows.size();
+            pivot_source_rows.push_back((index_t)row);
         }
     }
 
-    full_todd_.offset.assign((std::size_t)n, 0);
+    out.offset.assign((std::size_t)n, 0);
     if (n > 0) {
-        full_todd_.offset[(std::size_t)(n - 1)] = 0;
+        out.offset[(std::size_t)(n - 1)] = 0;
         for (index_t b = n - 1; b > 0; --b) {
-            full_todd_.offset[(std::size_t)(b - 1)] = full_todd_.offset[(std::size_t)b] + (std::uint64_t)(b + 1);
+            out.offset[(std::size_t)(b - 1)] = out.offset[(std::size_t)b] + (std::uint64_t)(b + 1);
         }
     }
 
 
-    full_todd_.nonpivot_index.assign((std::size_t)full_cols, -1);
+    out.nonpivot_index.assign((std::size_t)full_cols, -1);
     index_t nonpiv_cols = 0;
     for (index_t col = 0; col < full_cols; ++col) {
-        if (full_todd_.pivot_row_of_col[(std::size_t)col] < 0) {
-            full_todd_.nonpivot_index[(std::size_t)col] = (std::int64_t)nonpiv_cols;
+        if (out.pivot_row_of_col[(std::size_t)col] < 0) {
+            out.nonpivot_index[(std::size_t)col] = (std::int64_t)nonpiv_cols;
             ++nonpiv_cols;
         }
     }
-    full_todd_.nonpiv_cols = nonpiv_cols;
+    out.nonpiv_cols = nonpiv_cols;
 
-    Matrix L_nonpivot(L_reduced.rows(), nonpiv_cols);
-    for (index_t r = 0; r < L_reduced.rows(); ++r) {
-        Row        proj(nonpiv_cols);
-        const auto lr = L_reduced[r];
+    Matrix               LY_nonpivot((index_t)pivot_source_rows.size(), nonpiv_cols + P_.rows());
+    std::vector<uint8_t> is_zero(LY_nonpivot.rows(), true);
+    for (index_t r = 0; r < LY_nonpivot.rows(); ++r) {
+        auto       dst = LY_nonpivot[r];
+        const auto lr  = L[pivot_source_rows[(std::size_t)r]];
         for (auto p = lr.find_first(); p != Row::npos; p = lr.find_next(p)) {
-            const std::int64_t idx = full_todd_.nonpivot_index[(std::size_t)p];
+            const std::int64_t idx = out.nonpivot_index[(std::size_t)p];
             if (idx >= 0) {
-                proj.set((index_t)idx);
+                dst.set((index_t)idx);
                 is_zero[r] = false;
             }
         }
-        if (!is_zero[r])
-            assign(L_nonpivot[r], proj);
+
+        const auto yr = Y[pivot_source_rows[(std::size_t)r]];
+        if (!yr.none()) {
+            or_shifted(dst, nonpiv_cols, yr);
+            is_zero[r] = false;
+        }
     }
-    full_todd_.is_zero     = std::move(is_zero);
-    full_todd_.LY_nonpivot = std::move(L_nonpivot.append_right_inplace(Y_reduced));
+    out.is_zero     = std::move(is_zero);
+    out.LY_nonpivot = std::move(LY_nonpivot);
+    return out;
 }
 
-Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move(z)}, special_{-1} {
+Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z)
+    : M_{M}, pair_endpoints_(M->P().rows()), z_{std::move(z)}, special_{-1} {
     const Matrix&    P   = M_->P();
     const ToddIndex& idx = M_->index();
     const index_t    m   = P.rows();
@@ -167,7 +211,7 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move
         break;
     }
 
-    Row buf(P.cols());
+    Row seen_endpoints(P.rows());
 
     for (index_t t = 0; t < len; ++t) {
         if (!ptr[t].is_pair())
@@ -177,6 +221,12 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move
         assert(P[b].count() != 0);
         assert(special_ != a);
         assert(special_ != b);
+        if (seen_endpoints.test(a) || seen_endpoints.test(b))
+            pair_endpoints_disjoint_ = false;
+        seen_endpoints.set(a);
+        seen_endpoints.set(b);
+        pair_endpoints_.set(a);
+        pair_endpoints_.set(b);
         pairs_.emplace_back((int)a, (int)b);
     }
 }
@@ -193,11 +243,15 @@ int Witness::rank_divergence(RowCView y) const {
     if (S && y.test(special_))
         ++ones_S;
     int diff_pairs = 0;
-    for (const auto& pr : pairs_) {
-        const int i = pr.first;
-        const int j = pr.second;
-        if (y.test(i) ^ y.test(j))
-            ++diff_pairs;
+    if (pair_endpoints_disjoint_) {
+        diff_pairs = (int)intersection_count(y, pair_endpoints_);
+    } else {
+        for (const auto& pr : pairs_) {
+            const int i = pr.first;
+            const int j = pr.second;
+            if (y.test(i) ^ y.test(j))
+                ++diff_pairs;
+        }
     }
     if (parity == 0)
         return ones_S + 2 * diff_pairs;
@@ -372,20 +426,15 @@ void TohpeGenerator::best_z_n_into(RowCView y, index_t num_samples,
 }
 
 FullToddGenerator::FullToddGenerator(std::shared_ptr<MatrixWithData> M) : M_{M} {
-    const index_t n             = M_->P().cols();
-    const index_t rows          = n + 1;
-    const index_t nonp          = M_->full_todd().nonpiv_cols;
-    scratch_R_and_AUG_nonpivot_ = Matrix(rows, nonp + M_->P().rows());
+    (void)M_->full_todd();
 }
 
 Matrix FullToddGenerator::full_todd_kernel(RowCView z, const SumEntry* ptr, int len) const {
     const auto&   ft = M_->full_todd();
     const index_t n  = z.size();
-    Matrix&       RA = scratch_R_and_AUG_nonpivot_;
-    RA.reset();
+    const index_t total_cols = ft.nonpiv_cols + M_->P().rows();
 
-    auto& S = scratch_S_;
-    S.clear();
+    std::vector<index_t> S;
     S.reserve((std::size_t)z.count());
     for (auto i = z.find_first(); i != RowView::npos; i = z.find_next(i)) {
         S.push_back((index_t)i);
@@ -399,32 +448,30 @@ Matrix FullToddGenerator::full_todd_kernel(RowCView z, const SumEntry* ptr, int 
         }
     };
 
-    for (index_t gamma = 0; gamma < n; ++gamma) {
-        auto                row  = RA[gamma];
-        const std::uint64_t offg = ft.offset[(index_t)gamma];
-        for (index_t s : S) {
-            if (s == gamma)
-                continue;
-            const index_t col = (s > gamma) ? (index_t)(ft.offset[(std::size_t)s] + gamma) : (index_t)(offg + s);
-            add_col(row, col);
-        }
-    }
-
-    {
-        auto brow_ra = RA[RA.rows() - 1];
-        for (std::size_t bi = 0; bi < S.size(); ++bi) {
-            const index_t       b    = S[bi];
-            const std::uint64_t offb = ft.offset[(std::size_t)b];
-            for (std::size_t ai = 0; ai <= bi; ++ai) {
-                const index_t a = S[ai];
-                add_col(brow_ra, (index_t)(offb + a));
+    auto fill_row = [&](index_t row_idx, RowView row) {
+        if (row_idx < n) {
+            const index_t       gamma = row_idx;
+            const std::uint64_t offg  = ft.offset[(index_t)gamma];
+            for (index_t s : S) {
+                if (s == gamma)
+                    continue;
+                const index_t col = (s > gamma) ? (index_t)(ft.offset[(std::size_t)s] + gamma) : (index_t)(offg + s);
+                add_col(row, col);
+            }
+        } else {
+            for (std::size_t bi = 0; bi < S.size(); ++bi) {
+                const index_t       b    = S[bi];
+                const std::uint64_t offb = ft.offset[(std::size_t)b];
+                for (std::size_t ai = 0; ai <= bi; ++ai) {
+                    const index_t a = S[ai];
+                    add_col(row, (index_t)(offb + a));
+                }
             }
         }
-    }
-    // Matrix solution = solve_and_build_solution_basis(RA, M_->full_todd().nonpiv_cols);
-    Matrix solution = solve_and_build_solution_basis(RA, M_->full_todd().nonpiv_cols,M_->tohpe_basis(), ptr, len);
-    // solution.append_down_inplace(M_->tohpe_basis());
-    return solution;
+    };
+
+    return solve_and_build_solution_basis_generated(n + 1, total_cols, ft.nonpiv_cols, M_->tohpe_basis(), ptr, len,
+                                                    fill_row);
 }
 
 NullSpace FullToddGenerator::make(RowCView z) const {

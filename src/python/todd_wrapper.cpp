@@ -546,7 +546,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
     py::class_<PolicyConfig>(m, "PolicyConfig")
         .def(py::init<>())
         .def(py::init<ExplorationScore, FinalizationScore, std::string, float, float, float, Int, Int, Int, Int, Int,
-                      Int, Int, Int, Int, Int, Int, Int,bool>(),
+                      Int, Int, Int, Int, Int, Int, bool>(),
              py::arg("ExplorationScore") = ExplorationScore(), 
              py::arg("FinalizationScore") = FinalizationScore(),
              py::arg("selection") = "greedy",
@@ -563,7 +563,6 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
              py::arg("max_z_to_research") = 1 << 30,
              py::arg("min_pool_size") = 1, 
              py::arg("max_tohpe") = 1, 
-             py::arg("threads") = 1,
              py::arg("tohpe_sample") = 1, 
              py::arg("try_only_tohpe") = true)
         .def_readwrite("num_samples", &PolicyConfig::num_samples)
@@ -580,7 +579,6 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def_readwrite("max_z_to_research", &PolicyConfig::max_z_to_research)
         .def_readwrite("gen_part", &PolicyConfig::gen_part)
         .def_readwrite("max_tohpe", &PolicyConfig::max_tohpe)
-        .def_readwrite("threads", &PolicyConfig::threads)
         .def_readwrite("try_only_tohpe", &PolicyConfig::try_only_tohpe)
         .def_readwrite("tohpe_sample", &PolicyConfig::tohpe_sample)
         .def("__repr__", [](const PolicyConfig& c) {
@@ -596,7 +594,6 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
                    ", min_z_to_research=" + std::to_string((long long)c.min_z_to_research) +
                    ", gen_part=" + std::to_string((long long)c.gen_part) +
                    ", max_tohpe=" + std::to_string((long long)c.max_tohpe) +
-                   ", threads=" + std::to_string((long long)c.threads) +
                    ", try_only_tohpe=" + std::to_string((long long)c.try_only_tohpe) +
                    ", tohpe_sample=" + std::to_string((long long)c.tohpe_sample) + ")";
         });
@@ -607,5 +604,6 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
             auto data = std::make_shared<MatrixWithData>(std::move(cur_mat));
             return policy_iteration_impl(data, pcfg, seed, add_seed);
         },
-        py::arg("cur_mat"), py::arg("policy_cfg") = PolicyConfig{}, py::arg("seed") = 21, py::arg("add_seed") = 0);
+        py::arg("cur_mat"), py::arg("policy_cfg") = PolicyConfig{}, py::arg("seed") = 21, py::arg("add_seed") = 0,
+        py::call_guard<py::gil_scoped_release>());
 }

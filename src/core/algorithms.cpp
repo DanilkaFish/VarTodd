@@ -122,9 +122,9 @@ Matrix solve_and_build_solution_basis(Matrix& A,
     pivA.reset((std::size_t)divider);
     pivY.reset((std::size_t)nY);
 
-    Matrix basis(0, nY);
-
     const index_t full_rank = nY;
+    Matrix        basis(0, nY);
+    basis.reserve_rows(full_rank);
 
     for (index_t i = 0; i < A.rows() && basis.rows() < full_rank; ++i) {
         auto row = A[i];
@@ -162,8 +162,77 @@ Matrix solve_and_build_solution_basis(Matrix& A,
     return basis;
 }
 
+Matrix solve_and_build_solution_basis_generated(index_t rows,
+                                                index_t cols,
+                                                index_t divider,
+                                                const Matrix& tohpe,
+                                                const SumEntry* ptr,
+                                                int len,
+                                                const std::function<void(index_t, RowView)>& fill_row) {
+    if (divider > cols)
+        throw std::invalid_argument("solve_and_build_solution_basis_generated: divider > cols");
+    const index_t nY = cols - divider;
+    if (nY == 0)
+        return Matrix(0, 0);
+    if (tohpe.rows() != 0 && tohpe.cols() != nY)
+        throw std::invalid_argument("solve_and_build_solution_basis_generated: tohpe width mismatch");
+
+    static thread_local PivotMap pivA;
+    static thread_local PivotMap pivY;
+
+    pivA.reset((std::size_t)divider);
+    pivY.reset((std::size_t)nY);
+
+    Matrix basis(0, nY);
+    Matrix pivot_rows(0, cols);
+    Row    row(cols);
+
+    const index_t full_rank = nY;
+    basis.reserve_rows(full_rank);
+    pivot_rows.reserve_rows(std::min(rows, divider));
+
+    for (index_t i = 0; i < rows && basis.rows() < full_rank; ++i) {
+        row.reset();
+        fill_row(i, row.view());
+
+        auto rowv = row.view();
+        auto p    = rowv.find_first();
+        while (p != RowView::npos && p < divider) {
+            const int32_t prow = pivA.get((std::size_t)p);
+            if (prow < 0)
+                break;
+
+            rowv ^= pivot_rows[(index_t)prow];
+            p = rowv.find_next(p);
+        }
+
+        if (p == RowView::npos)
+            continue;
+
+        if (p < divider) {
+            pivA.set((std::size_t)p, (int32_t)pivot_rows.rows());
+            pivot_rows.push_back(row.cview());
+            continue;
+        }
+
+        Row y = extract_right(row.cview(), divider, nY);
+        apply_solution_transform(y, ptr, len);
+        insert_into_y_basis(y, basis, pivY);
+    }
+
+    for (index_t i = 0; i < tohpe.rows() && basis.rows() < full_rank; ++i) {
+        Row y = tohpe[i];
+
+        apply_solution_transform(y, ptr, len);
+        insert_into_y_basis(y, basis, pivY);
+    }
+
+    return basis;
+}
+
 Matrix basis_gauss_elimination(Matrix&& A) {
     Matrix linear_indep;
+    linear_indep.reserve_rows(A.rows());
     std::vector<index_t> pivot_cols;
     pivot_cols.reserve(A.rows());
 
@@ -185,6 +254,47 @@ Matrix basis_gauss_elimination(Matrix&& A) {
         }
     }
     return linear_indep;
+}
+
+Matrix row_dependency_basis(Matrix&& A) {
+    if (A.rows() == 0)
+        return Matrix(0, 0);
+
+    Matrix   row_basis;
+    Matrix   transform_basis;
+    Matrix   dependencies;
+    row_basis.reserve_rows(A.rows());
+    transform_basis.reserve_rows(A.rows());
+    dependencies.reserve_rows(A.rows());
+    PivotMap pivots;
+    pivots.reset(A.cols());
+
+    for (index_t i = 0; i < A.rows(); ++i) {
+        auto row = A[i];
+        Row  y(A.rows());
+        y.set(i);
+
+        while (true) {
+            const auto p = row.find_first();
+            if (p == RowView::npos) {
+                dependencies.push_back(y);
+                break;
+            }
+
+            const int32_t brow = pivots.get((std::size_t)p);
+            if (brow < 0) {
+                pivots.set((std::size_t)p, (int32_t)row_basis.rows());
+                row_basis.push_back(row);
+                transform_basis.push_back(y);
+                break;
+            }
+
+            row ^= row_basis[(index_t)brow];
+            y ^= transform_basis[(index_t)brow];
+        }
+    }
+
+    return dependencies;
 }
 
 void gauss_elimination_inplace_rref(Matrix& A, Matrix& aug, PivotMap& pivots) {
@@ -475,13 +585,7 @@ void PyRNG::sample_bitvector_inplace(Row& r) {
     }
 }
 Matrix get_tohpe_basis(const Matrix& P) {
-    Matrix    L = L_expansion(P);
-    Matrix    Y = Matrix::identity(P.rows());
-    PivotMap  pivots;
-    pivots.reset(L.cols());
-    gauss_elimination_inplace_rref(L, Y, pivots);
-    Matrix M = extract_basis(Y, pivots);
-    return M;
+    return row_dependency_basis(L_expansion(P));
 }
 
 } // namespace todd

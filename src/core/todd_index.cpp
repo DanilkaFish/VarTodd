@@ -3,7 +3,7 @@
 #include <cstring>
 namespace todd {
 
-static inline bool equal_masked(RowCView a, const Row& b) noexcept { return a == b; }
+static inline bool equal_masked(RowCView a, RowCView b) noexcept { return a == b; }
 ToddIndex::ToddIndex(const Matrix& P) : P_(P), m_(P.rows()), n_bits_(P.cols()) {
     build_masks_();
     build_row_hashes_();
@@ -35,14 +35,14 @@ std::uint32_t ToddIndex::get_bucket_id_(HashKey hk, RowCView sumv) {
     std::uint32_t& head_id = it->second;
     for (std::uint32_t id = head_id; id != std::numeric_limits<std::uint32_t>::max();
          id               = buckets_[(std::size_t)id].next) {
-        if (equal_masked(sumv, buckets_[(std::size_t)id].key))
+        if (equal_masked(sumv, bucket_keys_[(index_t)id]))
             return id;
     }
     const std::uint32_t new_id = (std::uint32_t)buckets_.size();
     BucketInfo          b;
-    b.key   = Row(sumv);
     b.next  = head_id;
     head_id = new_id;
+    bucket_keys_.push_back(sumv);
     buckets_.push_back(std::move(b));
     return new_id;
 }
@@ -56,6 +56,8 @@ void ToddIndex::build_sum_buckets_() {
     head_.max_load_factor(0.7f);
     buckets_.clear();
     buckets_.reserve((std::size_t)std::min<index_t>(n * 4, 2000000));
+    bucket_keys_ = Matrix(0, n_bits_);
+    bucket_keys_.reserve_rows((index_t)std::min<index_t>(n * 4, 2000000));
     const index_t              nb = (n_bits_ + 63) / 64;
     std::vector<std::uint64_t> tmp((std::size_t)nb);
     for (index_t i = 0; i < n; ++i) {
@@ -112,7 +114,7 @@ bool ToddIndex::sum_bucket(RowCView key, const SumEntry*& ptr, index_t& len) con
     for (std::uint32_t id = it->second; id != std::numeric_limits<std::uint32_t>::max();
          id               = buckets_[(std::size_t)id].next) {
         const auto& b = buckets_[(std::size_t)id];
-        if (equal_masked(key, b.key)) {
+        if (equal_masked(key, bucket_keys_[(index_t)id])) {
             ptr = sum_entries_.data() + (std::size_t)b.off;
             len = (index_t)b.len;
             return true;
@@ -133,16 +135,16 @@ index_t ToddIndex::get_size_from_z(RowCView z) const {
 std::vector<std::pair<RowCView, index_t>> ToddIndex::sum_key_sizes() const {
     std::vector<std::pair<RowCView, index_t>> out;
     out.reserve(buckets_.size());
-    for (const auto& b : buckets_)
-        out.emplace_back(b.key.cview(), (index_t)b.len);
+    for (std::uint32_t id = 0; id < buckets_.size(); ++id)
+        out.emplace_back(bucket_keys_[(index_t)id], (index_t)buckets_[(std::size_t)id].len);
     return out;
 }
 
 std::vector<ToddIndex::SumKeySize>& ToddIndex::sum_key_sizes_scratch() const {
     scratch_sum_key_sizes_.clear();
     scratch_sum_key_sizes_.reserve(buckets_.size());
-    for (const auto& b : buckets_)
-        scratch_sum_key_sizes_.emplace_back(b.key.cview(), (index_t)b.len);
+    for (std::uint32_t id = 0; id < buckets_.size(); ++id)
+        scratch_sum_key_sizes_.emplace_back(bucket_keys_[(index_t)id], (index_t)buckets_[(std::size_t)id].len);
     return scratch_sum_key_sizes_;
 }
 

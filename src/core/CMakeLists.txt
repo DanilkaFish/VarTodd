@@ -25,7 +25,7 @@ target_link_libraries(vartodd
 target_compile_options(vartodd PRIVATE
     $<$<CONFIG:Release>:-O3>
 )
-
+# target_link_libraries(vartodd PUBLIC tcmalloc)
 # set_property(TARGET vartodd PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 target_compile_definitions(vartodd PUBLIC
   $<$<CONFIG:Release>:NDEBUG>

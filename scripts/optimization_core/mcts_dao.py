@@ -373,6 +373,4 @@ class Dao:
             raise KeyError(f"unknown mode: {mode}")
         # num_candidates = self.branching_at(depth) if mode == "expand" else 1
         # num
-        kwargs = m.policy_kwargs(depth=depth, num_candidates=num_candidates)
-        kwargs["threads"] = self.threads
-        return PolicyConfig(**kwargs)
+        return PolicyConfig(**m.policy_kwargs(depth=depth, num_candidates=num_candidates))

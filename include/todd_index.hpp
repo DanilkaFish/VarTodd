@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <ankerl/unordered_dense.h>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -20,16 +21,26 @@ struct BucketRange {
 // basic element
 class SumEntry {
   public:
-    SumEntry(index_t a, index_t b) : a{a}, b{b} {}
-    SumEntry(index_t a) : a{a}, b{k_single_sentinel<index_t>()} {}
-    bool is_pair() const { return b != k_single_sentinel<index_t>(); }
+    using storage_t = std::uint32_t;
 
-    index_t a;
-    index_t b;
+    SumEntry(index_t a_, index_t b_) : a{static_cast<storage_t>(a_)}, b{static_cast<storage_t>(b_)} {
+        assert(a_ < k_single_sentinel<storage_t>());
+        assert(b_ < k_single_sentinel<storage_t>());
+    }
+    SumEntry(index_t a_) : a{static_cast<storage_t>(a_)}, b{k_single_sentinel<storage_t>()} {
+        assert(a_ < k_single_sentinel<storage_t>());
+    }
+    bool is_pair() const { return b != k_single_sentinel<storage_t>(); }
+
+    storage_t a;
+    storage_t b;
 };
 
 // Matrix solve_and_build_solution_basis(Matrix& A, index_t divider);
 Matrix solve_and_build_solution_basis(Matrix& A, index_t divider, const Matrix& tohpe, const SumEntry* ptr, int len);
+Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, index_t divider, const Matrix& tohpe,
+                                                const SumEntry* ptr, int len,
+                                                const std::function<void(index_t, RowView)>& fill_row);
 
 struct HashKeyHash {
     static inline std::uint64_t mix(std::uint64_t x) noexcept {
@@ -70,14 +81,13 @@ class ToddIndex {
     std::vector<SumKeySize>&                  sum_key_sizes_scratch() const;
     const std::vector<std::uint32_t>&         single_id() const noexcept { return single_id_; }
     const std::vector<std::uint32_t>&         pair_id() const noexcept { return pair_id_; }
-    RowCView key_of(std::uint32_t id) const noexcept { return buckets_[(std::size_t)id].key.cview(); }
+    RowCView key_of(std::uint32_t id) const noexcept { return bucket_keys_[(index_t)id]; }
     index_t  buckets_num() const noexcept { return buckets_.size(); }
     index_t  max_bucket() const noexcept;
 
   private:
     struct BucketInfo {
         std::uint32_t off = 0, len = 0, cur = 0, next = std::numeric_limits<std::uint32_t>::max();
-        Row           key;
     };
     const Matrix&                                                     P_;
     index_t                                                           m_{}, n_bits_{};
@@ -86,6 +96,7 @@ class ToddIndex {
     std::vector<std::uint32_t>                                        single_id_;
     std::vector<std::uint32_t>                                        pair_id_;
     std::vector<BucketInfo>                                           buckets_;
+    Matrix                                                            bucket_keys_;
     std::vector<SumEntry>                                             sum_entries_;
     mutable std::vector<SumKeySize>                                   scratch_sum_key_sizes_;
     ankerl::unordered_dense::map<HashKey, std::uint32_t, HashKeyHash> head_;

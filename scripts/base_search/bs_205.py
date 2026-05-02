@@ -24,7 +24,7 @@ def sigmoid(x: float) -> float:
 
 
 class Evaluator(BaseEvaluator):
-    seeds = [random.randint(1, 10000) for _ in range(2)]
+    seeds = [random.randint(1, 10000) for _ in range(24)]
     deep_search = False
     deep_max_z = 1200000
 
@@ -75,26 +75,21 @@ class Evaluator(BaseEvaluator):
         return float(np.quantile(ranks, 0.65) + 0.01 * np.std(ranks))
 
 
-def _fallback_pso(fun: Evaluator, evals: int, low: float, high: float) -> np.ndarray:
-    n_params = len(fun.extract_active())
-    best = np.zeros(n_params, dtype=float)
-    best_cost = float(fun(best))
-    for _ in range(max(0, evals - 1)):
-        cand = np.random.uniform(low, high, n_params)
-        cost = float(fun(cand))
-        if cost < best_cost:
-            best_cost = cost
-            best = cand
-    return best
-
-
 def run_pso(fun: Evaluator, iters: int = 2, particles: int = 3) -> np.ndarray:
     n_params = len(fun.extract_active())
     low, high = -1.0, 1.0
     if n_params == 0:
         return np.asarray([], dtype=float)
     if ps is None:
-        return _fallback_pso(fun, iters * particles, low, high)
+        best = np.zeros(n_params, dtype=float)
+        best_cost = float(fun(best))
+        for _ in range(max(0, iters * particles - 1)):
+            cand = np.random.uniform(low, high, n_params)
+            cost = float(fun(cand))
+            if cost < best_cost:
+                best_cost = cost
+                best = cand
+        return best
 
     def objective(positions):
         return np.asarray([fun(pos) for pos in positions], dtype=float)
@@ -110,7 +105,7 @@ def run_pso(fun: Evaluator, iters: int = 2, particles: int = 3) -> np.ndarray:
 
 
 def entrypoint(mat):
-    fun = Evaluator(path_name="init", max_depth=235)
+    fun = Evaluator(path_name="init", mat=mat, max_depth=235)
     xopt = run_pso(fun, iters=2, particles=3)
     fun(xopt)
     if fun.best_paths:

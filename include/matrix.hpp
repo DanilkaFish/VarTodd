@@ -312,6 +312,7 @@ class Matrix {
     Matrix& operator=(const Matrix&) = default;
 
     void reset();
+    void reserve_rows(index_t rows);
     auto rows() const noexcept -> index_t { return rows_; }
     auto cols() const noexcept -> index_t { return cols_; }
 
