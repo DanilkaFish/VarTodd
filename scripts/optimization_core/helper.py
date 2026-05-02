@@ -16,7 +16,7 @@ from todd import Todd
 
 DEFAULT_MATRIX_PATH = "npy/gf2^9.npy"
 
-DEFAULT_MATRIX_PATH = "/home/danilkafish/Projects/VarTodd/data/init_npy/other/ham15_high.npy"
+DEFAULT_MATRIX_PATH = "/home/danilkafish/Projects/VarTodd/data/init_npy/other/mod_adder_1024.npy"
 
 def _worker_run_one_from_template(
     seed: int,
@@ -389,6 +389,7 @@ class BaseEvaluator:
         self.dao: Dao = Dao()
         if mat is None and path_name == "init":
             mat = get_matrix()
+            print(mat.rows)
             self.init_rank_thr = mat.rows
         elif path_name != "init":
             if init_rank_thr is None:
@@ -488,7 +489,7 @@ class BaseEvaluator:
     def policy_mapping(self):
         pass
 
-    def run(self, params, seeds, max_workers=3):
+    def run(self, params, seeds, max_workers=24):
         if len(params) != len(self.active_params):
             raise RuntimeError(f"Num of params {len(params)} is not equal to the num of active params {len(self.active_params)}")
         self.insert(params)

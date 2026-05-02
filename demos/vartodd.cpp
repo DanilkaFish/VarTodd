@@ -58,7 +58,7 @@ int main(int argc, char* argv[]) {
     
     PolicyConfig policy_cfg;
     policy_cfg.num_samples = vm["num-samples"].as<int>();
-    policy_cfg.max_z_to_research = vm["max-z"].as<int>();
+    policy_cfg.min_z_to_research = vm["max-z"].as<int>();
     policy_cfg.gen_part = vm["max-z-fraction"].as<double>();
     policy_cfg.try_only_tohpe = vm["try-only-tohpe"].as<bool>();
     policy_cfg.escore.weights[0] = vm["escore-wred"].as<int>();

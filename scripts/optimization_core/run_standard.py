@@ -82,7 +82,8 @@ if __name__ == "__main__":
         # "gf2^15_1510",
         # "gf2^16_1612310"
         # "gf2^32_3228320"
-        "ham15_high"
+        "mod_adder_1024.qc.matrix"
+        # "ham15_high"
     ]
     aux_info = {}
     tcounts = []
