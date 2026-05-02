@@ -138,6 +138,14 @@ std::vector<std::pair<RowCView, index_t>> ToddIndex::sum_key_sizes() const {
     return out;
 }
 
+std::vector<ToddIndex::SumKeySize>& ToddIndex::sum_key_sizes_scratch() const {
+    scratch_sum_key_sizes_.clear();
+    scratch_sum_key_sizes_.reserve(buckets_.size());
+    for (const auto& b : buckets_)
+        scratch_sum_key_sizes_.emplace_back(b.key.cview(), (index_t)b.len);
+    return scratch_sum_key_sizes_;
+}
+
 index_t ToddIndex::max_bucket() const noexcept {
     index_t max = 0;
     for (const auto& b : buckets_)

@@ -442,8 +442,14 @@ std::vector<Row> PyRNG::sample_unique_bitvectors(index_t dim, index_t num_sample
 
 Row PyRNG::sample_bitvector(index_t dim) {
     Row r(dim);
+    sample_bitvector_inplace(r);
+    return r;
+}
+
+void PyRNG::sample_bitvector_inplace(Row& r) {
+    const index_t dim = r.size();
     if (dim == 0)
-        return r;
+        return;
 
     uint64_t*     dst = r.data();
     const index_t nb  = r.blocks();
@@ -466,9 +472,7 @@ Row PyRNG::sample_bitvector(index_t dim) {
         if (rem != 0) {
             dst[nb - 1] &= ((1ULL << rem) - 1ULL);
         }
-        return r;
     }
-    return r;
 }
 Matrix get_tohpe_basis(const Matrix& P) {
     Matrix    L = L_expansion(P);

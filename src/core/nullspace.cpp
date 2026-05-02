@@ -43,21 +43,30 @@ index_t CountWS::argmax() const {
 }
 
 std::vector<index_t> CountWS::argmax_n(std::size_t n) const {
-    if (used.empty())
-        return {};
-
-    std::vector<index_t> candidates(used.begin(), used.end());
-    n = std::min(n, candidates.size());
-
-    std::nth_element(candidates.begin(), candidates.begin() + n, candidates.end(),
-                     [this](auto a, auto b) {
-                         if (cnt[a] != cnt[b])
-                             return cnt[a] > cnt[b];
-                         return a < b;
-                     });
-
-    candidates.resize(n);
+    std::vector<index_t> candidates;
+    argmax_n_into(n, candidates);
     return candidates;
+}
+
+void CountWS::argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) const {
+    scratch_out.clear();
+    if (used.empty() || n == 0)
+        return;
+
+    scratch_out.assign(used.begin(), used.end());
+    n = std::min(n, scratch_out.size());
+
+    auto better = [this](auto a, auto b) {
+        if (cnt[a] != cnt[b])
+            return cnt[a] > cnt[b];
+        return a < b;
+    };
+    if (n < scratch_out.size())
+        std::nth_element(scratch_out.begin(), scratch_out.begin() + n, scratch_out.end(), better);
+    else
+        std::ranges::sort(scratch_out, better);
+
+    scratch_out.resize(n);
 }
 
 MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P} {
@@ -209,6 +218,11 @@ Row NullSpace::linear_combination(RowCView coefs) const {
 }
 
 Matrix NullSpace::apply(RowCView y) const {
+    std::vector<std::uint8_t> scratch_killed;
+    return apply(y, scratch_killed);
+}
+
+Matrix NullSpace::apply(RowCView y, std::vector<std::uint8_t>& scratch_killed) const {
     const Matrix& P0     = M_->P();
     const index_t n_rows = P0.rows();
     if (y.size() != n_rows)
@@ -218,21 +232,21 @@ Matrix NullSpace::apply(RowCView y) const {
     const int   special = w_->get_special();
     const auto& pairs   = w_->get_pairs();
 
-    std::vector<std::uint8_t> killed((std::size_t)n_rows, 0);
-    index_t                   removed = 0;
+    scratch_killed.assign((std::size_t)n_rows, 0);
+    index_t removed = 0;
     for (const auto& pr : pairs) {
         const index_t a = (index_t)pr.first;
         const index_t b = (index_t)pr.second;
         if (y.test(a) ^ y.test(b)) {
-            killed[(std::size_t)a] = 1;
-            killed[(std::size_t)b] = 1;
+            scratch_killed[(std::size_t)a] = 1;
+            scratch_killed[(std::size_t)b] = 1;
             removed += 2;
         }
     }
 
     const bool parity = (y.count() & 1) != 0;
     if (special != -1 && (y.test(special) || parity)) {
-        killed[(std::size_t)special] = 1;
+        scratch_killed[(std::size_t)special] = 1;
         ++removed;
     }
     if (parity && (special == -1 || y.test(special))) {
@@ -243,7 +257,7 @@ Matrix NullSpace::apply(RowCView y) const {
 
     index_t j = 0;
     for (index_t i = 0; i < n_rows; ++i) {
-        if (killed[(std::size_t)i])
+        if (scratch_killed[(std::size_t)i])
             continue;
         if (y.test(i)) {
             assign(new_P[j], (P0[i] ^ z));
@@ -312,58 +326,66 @@ Row TohpeGenerator::best_z(RowCView y) const {
 }
 
 std::vector<std::pair<Row, index_t>> TohpeGenerator::best_z_n(RowCView y, index_t num_samples) const {
+    std::vector<std::pair<Row, index_t>> out;
+    best_z_n_into(y, num_samples, out);
+    return out;
+}
+
+void TohpeGenerator::best_z_n_into(RowCView y, index_t num_samples,
+                                   std::vector<std::pair<Row, index_t>>& scratch_out) const {
     assert(y.count() != 0);
     const Matrix&    P   = M_->P();
     const ToddIndex& idx = M_->index();
     const index_t    n   = P.rows();
+    const index_t    y_count = y.count();
 
-    std::vector<index_t> ones;
-    std::vector<index_t> zeros;
-    ones.reserve((std::size_t)y.count());
-    zeros.reserve((std::size_t)(n - y.count()));
+    scratch_ones_.clear();
+    scratch_zeros_.clear();
+    scratch_ones_.reserve((std::size_t)y_count);
+    scratch_zeros_.reserve((std::size_t)(n - y_count));
 
     for (index_t i = 0; i < n; ++i) {
-        (y.test(i) ? ones : zeros).push_back(i);
+        (y.test(i) ? scratch_ones_ : scratch_zeros_).push_back(i);
     }
 
     ws_.reset(idx.buckets_num());
-    ws_.parity = y.count() % 2;
-    for (index_t i : ones) {
+    ws_.parity = y_count % 2;
+    for (index_t i : scratch_ones_) {
         ws_.add(idx.single_id()[(std::size_t)i], 1);
 
-        for (index_t j : zeros) {
+        for (index_t j : scratch_zeros_) {
             const auto id = idx.pair_id()[pair_index(i, j, n)];
             ws_.add(id, 2);
         }
     }
     if (ws_.parity) {
-        for (index_t i : zeros) {
+        for (index_t i : scratch_zeros_) {
             ws_.add(idx.single_id()[(std::size_t)i], 2);
         }
     }
-    std::vector<Row> out{};
 
-    // return {{Row(idx.key_of(ws_.argmax())), ws_.cnt[ws_.argmax()]}};
-    return ws_.argmax_n(num_samples) | std::views::all | std::views::transform([&](auto id) {
-               return std::pair{Row(idx.key_of(id)), index_t(ws_.cnt[id])};
-           }) |
-           std::ranges::to<std::vector>();
+    scratch_out.clear();
+    ws_.argmax_n_into(num_samples, scratch_candidates_);
+    scratch_out.reserve(scratch_candidates_.size());
+    for (auto id : scratch_candidates_)
+        scratch_out.emplace_back(Row(idx.key_of(id)), index_t(ws_.cnt[id]));
 }
 
 FullToddGenerator::FullToddGenerator(std::shared_ptr<MatrixWithData> M) : M_{M} {
     const index_t n             = M_->P().cols();
     const index_t rows          = n + 1;
     const index_t nonp          = M_->full_todd().nonpiv_cols;
-    R_and_AUG_nonpivot_scratch_ = Matrix(rows, nonp + M_->P().rows());
+    scratch_R_and_AUG_nonpivot_ = Matrix(rows, nonp + M_->P().rows());
 }
 
 Matrix FullToddGenerator::full_todd_kernel(RowCView z, const SumEntry* ptr, int len) const {
     const auto&   ft = M_->full_todd();
     const index_t n  = z.size();
-    Matrix&       RA = R_and_AUG_nonpivot_scratch_;
+    Matrix&       RA = scratch_R_and_AUG_nonpivot_;
     RA.reset();
 
-    std::vector<index_t> S;
+    auto& S = scratch_S_;
+    S.clear();
     S.reserve((std::size_t)z.count());
     for (auto i = z.find_first(); i != RowView::npos; i = z.find_next(i)) {
         S.push_back((index_t)i);

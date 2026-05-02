@@ -54,6 +54,8 @@ static inline std::size_t pair_index(index_t i, index_t j, index_t n) noexcept {
 // keeps buckets for columns of given matrix.
 class ToddIndex {
   public:
+    using SumKeySize = std::pair<RowCView, index_t>;
+
     explicit ToddIndex(const Matrix& P);
 
     const Matrix& matrix() const noexcept { return P_; }
@@ -65,6 +67,7 @@ class ToddIndex {
 
     const std::vector<HashKey>&               row_hashes() const noexcept { return hP_; }
     std::vector<std::pair<RowCView, index_t>> sum_key_sizes() const;
+    std::vector<SumKeySize>&                  sum_key_sizes_scratch() const;
     const std::vector<std::uint32_t>&         single_id() const noexcept { return single_id_; }
     const std::vector<std::uint32_t>&         pair_id() const noexcept { return pair_id_; }
     RowCView key_of(std::uint32_t id) const noexcept { return buckets_[(std::size_t)id].key.cview(); }
@@ -84,6 +87,7 @@ class ToddIndex {
     std::vector<std::uint32_t>                                        pair_id_;
     std::vector<BucketInfo>                                           buckets_;
     std::vector<SumEntry>                                             sum_entries_;
+    mutable std::vector<SumKeySize>                                   scratch_sum_key_sizes_;
     ankerl::unordered_dense::map<HashKey, std::uint32_t, HashKeyHash> head_;
 
     void build_masks_();

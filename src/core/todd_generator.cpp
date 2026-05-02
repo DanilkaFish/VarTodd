@@ -208,13 +208,14 @@ Result build_result(TopKPool<FinalizationScore>& pool, bool is_best, std::size_t
         }
     } acc{out};
 
+    std::vector<std::uint8_t> scratch_killed;
     for (Candidate& c : chosen_view) {
         c.num_better_dim        = svs.better_dim(c.basis_dim);
         c.num_better_red        = svs.better_red(c.reduction);
         c.num_better_pool_score = svs.better_score(c.pool_score);
 
         auto ns    = make_candidate_nullspace(c, tohpe_gen, get_full_gen);
-        auto state = ns.apply(c.vec);
+        auto state = ns.apply(c.vec, scratch_killed);
 
         acc.add(c, std::move(state));
     }
@@ -249,7 +250,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     num_samples                = std::max(num_samples, (Int)0);
     num_candidates             = std::max(num_candidates, (Int)1);
     top_pool                   = std::max(num_candidates, top_pool);
-    gen_part = std::min(gen_part, 1.0f);
+    gen_part = std::clamp(gen_part, 0.0f, 1.0f);
     max_reduction              = max_reduction > 0 ? max_reduction : k_single_sentinel<decltype(max_reduction)>();
     min_reduction              = std::max(min_reduction, (Int)0);
     non_improving_prob         = std::min(std::max(0.0f, non_improving_prob), 1.0f);
@@ -295,12 +296,12 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                 return false && red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
             };
 
-            auto coefs_list = local_rng.sample_unique_bitvectors(dim, num_samples, gen_part);
-            assert(coefs_list.size() <= dim * gen_part + num_samples);
-            for (auto const& coefs : coefs_list) {
+            std::vector<std::pair<Row, index_t>> scratch_best_z;
+            local_rng.for_each_unique_bitvector(dim, num_samples, gen_part, [&](RowCView coefs) {
                 assert(coefs.count() != 0);
                 auto vec = ns.linear_combination(coefs);
-                for (auto [z, red] : tohpe_gen.best_z_n(vec, tohpe_sample)) {
+                tohpe_gen.best_z_n_into(vec, tohpe_sample, scratch_best_z);
+                for (auto& [z, red] : scratch_best_z) {
                     if (beyond(red)) {
                         if (accept_anyway(red) || (red > 0)) {
                             global_stats.accepted_non_improving++;
@@ -324,22 +325,35 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                     update_mean(global_stats.mean_score, score, global_stats.nonzero);
                     update_mean(global_stats.mean_reduction, red, global_stats.nonzero);
                 }
-            }
+            });
             pool.merge_from(local_pool);
             pool.merge_from(local_beyond_pool);
         }
 
         if (!try_only_tohpe || pool.size() < min_pool) {
 
-            auto buckets = data->index().sum_key_sizes();
-            min_z_to_research = static_cast<int>(std::min(buckets.size(), min_z_to_research));
+            auto& buckets = data->index().sum_key_sizes_scratch();
+            auto better_bucket = [](auto const& a, auto const& b) {
+                return std::tie(a.second, a.first) > std::tie(b.second, b.first);
+            };
+
+            const auto max_bucket_research =
+                std::min<std::size_t>(buckets.size(), static_cast<std::size_t>(std::max<Int>(0, max_z_to_research)));
+            if (buckets.size() > max_bucket_research) {
+                std::ranges::nth_element(
+                    buckets,
+                    buckets.begin() + static_cast<std::ptrdiff_t>(max_bucket_research),
+                    better_bucket
+                );
+                buckets.resize(max_bucket_research);
+            }
+
+            min_z_to_research = std::min<std::size_t>(buckets.size(), min_z_to_research);
             if (buckets.size() > min_z_to_research) {
                 std::ranges::nth_element(
-                    buckets, 
-                    buckets.begin() + min_z_to_research, 
-                    [&](auto const& a, auto const& b) {
-                        return std::tie(a.second, a.first) > std::tie(b.second, b.first);
-                    }
+                    buckets,
+                    buckets.begin() + static_cast<std::ptrdiff_t>(min_z_to_research),
+                    better_bucket
                 );
             }
 
@@ -356,7 +370,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                 auto            len = index_t{};
 
                 int pos = 0;
-                for (std::size_t i = 0; i < std::min(Int(buckets.size()), max_z_to_research); ++i) {
+                for (std::size_t i = 0; i < buckets.size(); ++i) {
                     if (i >= min_z_to_research &&
                         (local_pool.size() >= min_pool || local_beyond_pool.size() >= min_pool)) {
                         stop.store(true, std::memory_order_relaxed);
@@ -389,12 +403,11 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                         return false && red <= 0 && non_improving_prob && local_rng.rand_double(0.0, 1.0) < non_improving_prob;
                     };
 
-                    auto coefs_list = local_rng.sample_unique_bitvectors(dim, num_samples, gen_part);
                     stats.max_bucket = std::max(stats.max_bucket, (Int)bucket_size);
                     auto counter     = 0;
 
                     auto local_local_pool = TopKPool<ExplorationScore>(max_from_single_ns, escore);
-                    for (auto& coefs : coefs_list) {
+                    local_rng.for_each_unique_bitvector(dim, num_samples, gen_part, [&](RowCView coefs) {
                         auto       vec = ns.linear_combination(coefs);
                         const auto red = ns.rank_divergence(vec);
 
@@ -403,7 +416,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                                 stats.accepted_non_improving++;
                             } else {
                                 stats.rejected++;
-                                continue;
+                                return;
                             }
                         }
                         stats.accepted++;
@@ -420,7 +433,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                         stats.max_bucket     = std::max(stats.max_bucket, (Int)bucket_size);
                         update_mean(stats.mean_score, score, stats.nonzero);
                         update_mean(stats.mean_reduction, red, stats.nonzero);
-                    }
+                    });
                     local_pool.merge_from(local_local_pool);
                 }
 
@@ -430,7 +443,6 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
                     } else {
                         pool.merge_from(local_beyond_pool);
                     }
-                    pool.merge_from(local_pool);
                     svs.merge_from(local_svs);
                     auto gnz                = global_stats.total;
                     auto lnz                = stats.total;
@@ -459,11 +471,12 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     auto final_pool = TopKPool<FinalizationScore>(top_pool, fscore);
     if (!pool.empty()) {
         const bool need_tohpe_dim = fscore.needs_tohpe_dim();
+        std::vector<std::uint8_t> scratch_killed;
         int n = 0;
         for (auto& cand : pool.release_unsorted()) {
             if (need_tohpe_dim) {
                 auto ns       = make_candidate_nullspace(cand, tohpe_gen, get_full_gen);
-                cand.tohpe_dim = static_cast<Int>(get_tohpe_basis(ns.apply(cand.vec)).rows());
+                cand.tohpe_dim = static_cast<Int>(get_tohpe_basis(ns.apply(cand.vec, scratch_killed)).rows());
             }
             auto [score, tohpe] = final_pool.push(std::move(cand));
 

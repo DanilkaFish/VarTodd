@@ -19,6 +19,7 @@ struct CountWS {
     bool                 parity;
 
     auto argmax_n(std::size_t n) const -> std::vector<index_t>;
+    void argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) const;
     auto argmax() const -> index_t;
     void reset(std::size_t K);
     void add(index_t id, index_t delta);
@@ -92,6 +93,7 @@ class NullSpace {
     NullSpace(std::shared_ptr<MatrixWithData> M, std::unique_ptr<Witness>&& w) : M_{M}, w_{std::move(w)} {}
 
     Matrix        apply(RowCView y) const;
+    Matrix        apply(RowCView y, std::vector<std::uint8_t>& scratch_killed) const;
     int           rank_divergence(RowCView y) const { return w_->rank_divergence(y); }
     Row           linear_combination(RowCView coefs) const;
     const Matrix& basis() const noexcept { return w_->get_Y(); }
@@ -118,6 +120,7 @@ class TohpeGenerator {
   public:
     TohpeGenerator(std::shared_ptr<MatrixWithData> M);
     auto best_z_n(RowCView y, index_t num_samples) const -> std::vector<std::pair<Row, index_t>>;
+    void best_z_n_into(RowCView y, index_t num_samples, std::vector<std::pair<Row, index_t>>& scratch_out) const;
 
     auto make(RowCView z) const -> NullSpace;
     auto make(index_t row) const -> NullSpace;
@@ -130,6 +133,9 @@ class TohpeGenerator {
     std::shared_ptr<MatrixWithData> M_;
 
     mutable CountWS ws_;
+    mutable std::vector<index_t> scratch_ones_;
+    mutable std::vector<index_t> scratch_zeros_;
+    mutable std::vector<index_t> scratch_candidates_;
 };
 
 class FullToddGenerator {
@@ -146,7 +152,8 @@ class FullToddGenerator {
   private:
     std::shared_ptr<MatrixWithData> M_;
 
-    mutable Matrix R_and_AUG_nonpivot_scratch_;
+    mutable Matrix scratch_R_and_AUG_nonpivot_;
+    mutable std::vector<index_t> scratch_S_;
 };
 
 } // namespace todd
