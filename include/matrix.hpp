@@ -77,7 +77,7 @@ template <class Ptr> class BasicRowView {
     void reset(index_t i) noexcept
         requires(!std::is_const_v<std::remove_pointer_t<Ptr>>)
     {
-        data()[i >> 6] &= !(1ULL << (i & 63));
+        data()[i >> 6] &= ~(1ULL << (i & 63));
     }
     void flip(index_t i) noexcept
         requires(!std::is_const_v<std::remove_pointer_t<Ptr>>)
@@ -251,7 +251,7 @@ class Row {
 
     bool    test(index_t i) const noexcept { return (data()[i >> 6] >> (i & 63)) & 1ULL; }
     void    reset() noexcept { std::fill_n(blk_.data(), blk_.size(), 0); }
-    void    reset(index_t i) noexcept { data()[i >> 6] &= !(1ULL << (i & 63)); }
+    void    reset(index_t i) noexcept { data()[i >> 6] &= ~(1ULL << (i & 63)); }
     index_t count() const noexcept { return this->cview().count(); }
     bool    none() const noexcept { return this->cview().none(); }
     void    set(index_t i) noexcept { data()[i >> 6] |= (1ULL << (i & 63)); }

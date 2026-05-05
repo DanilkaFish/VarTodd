@@ -13,6 +13,7 @@ set_target_properties(pyvartodd PROPERTIES
     DEBUG_POSTFIX "${CMAKE_DEBUG_POSTFIX}${PYTHON_MODULE_DEBUG_POSTFIX}"
     CXX_VISIBILITY_PRESET "hidden"
     VISIBILITY_INLINES_HIDDEN TRUE
+    CXX_SCAN_FOR_MODULES OFF
 )
 if (DEFINED CMAKE_PYTHON_OUTPUT_DIRECTORY)
     set_target_properties(pyvartodd PROPERTIES
@@ -46,7 +47,10 @@ if (WITH_PY_STUBS)
     add_custom_command(
         TARGET pyvartodd
         POST_BUILD
-        COMMAND ${Python3_EXECUTABLE} -m pybind11_stubgen -o . pyvartodd
+        COMMAND ${Python3_EXECUTABLE} -m pybind11_stubgen
+                --ignore-invalid-expressions ".*"
+                --enum-class-locations "Function:pyvartodd.Function"
+                -o . pyvartodd
         WORKING_DIRECTORY $<TARGET_FILE_DIR:pyvartodd>
         COMMENT "Generating .pyi file next to pyvartodd module"
     )

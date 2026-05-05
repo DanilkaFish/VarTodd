@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <vector>
@@ -14,23 +15,26 @@ namespace todd {
 using Int = int;
 
 struct Candidate {
-    Row   vec;
-    Row   z;
-    float final_score            = 0.0f;
-    float pool_score             = 0.0f;
-    Int   reduction              = 0;
-    Int   k                      = k_single_sentinel<Int>();
-    Int   l                      = k_single_sentinel<Int>();
-    Int   basis_dim              = 0;
-    Int   tohpe_dim              = 0;
-    Int   bucket_size            = 0;
-    Int   possible_max_reduction = 0;
-    Int   num_better_red         = 0;
-    Int   num_better_dim         = 0;
-    Int   num_better_pool_score  = 0;
-    Int   vec_weight             = 0;
-    Int   z_weight               = 0;
-    Int   z_size                 = 1;
+    static constexpr std::uint32_t no_bucket_id = std::numeric_limits<std::uint32_t>::max();
+
+    Row           vec;
+    Row           z;
+    float         final_score            = 0.0f;
+    float         pool_score             = 0.0f;
+    Int           reduction              = 0;
+    Int           k                      = k_single_sentinel<Int>();
+    Int           l                      = k_single_sentinel<Int>();
+    Int           basis_dim              = 0;
+    Int           tohpe_dim              = 0;
+    Int           bucket_size            = 0;
+    Int           possible_max_reduction = 0;
+    Int           num_better_red         = 0;
+    Int           num_better_dim         = 0;
+    Int           num_better_pool_score  = 0;
+    Int           vec_weight             = 0;
+    Int           z_weight               = 0;
+    Int           z_size                 = 1;
+    std::uint32_t bucket_id              = no_bucket_id;
 
     Candidate() = default;
 
@@ -39,11 +43,12 @@ struct Candidate {
           possible_max_reduction(static_cast<Int>(bucket_size * 2)), vec_weight(static_cast<Int>(vec.count())),
           z_weight(z_weight), z_size(std::max<Int>(1, z_size)) {}
 
-    Candidate(float s, Int r, Int kk, Int ll, Row&& v, Row&& zz, Int basis_dim, Int bucket_size)
+    Candidate(float s, Int r, Int kk, Int ll, Row&& v, Row&& zz, Int basis_dim, Int bucket_size,
+              std::uint32_t bucket_id = no_bucket_id)
         : vec(std::move(v)), z(std::move(zz)), pool_score(s), reduction(r), k(kk), l(ll), basis_dim(basis_dim),
           bucket_size(bucket_size), possible_max_reduction(static_cast<Int>(bucket_size * 2)),
           vec_weight(static_cast<Int>(vec.count())), z_weight(static_cast<Int>(z.count())),
-          z_size(static_cast<Int>(std::max<index_t>(1, z.size()))) {}
+          z_size(static_cast<Int>(std::max<index_t>(1, z.size()))), bucket_id(bucket_id) {}
 
     bool at_least_single() const;
     bool is_tohpe() const;
@@ -226,7 +231,7 @@ struct ExplorationScore {
     auto operator()(Candidate& cand) {
         std::array<float, 5> x = {cand.reduction / bn / 2, cand.basis_dim / dn, cand.bucket_size / bn,
                                   cand.vec_weight / wvwn, cand.z_weight / static_cast<float>(cand.z_size)};
-        cand.pool_score       = sc.evaluate(weights, centers, x);
+        cand.pool_score        = sc.evaluate(weights, centers, x);
         return std::make_pair(cand.pool_score, 0);
     }
 };

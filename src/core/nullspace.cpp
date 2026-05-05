@@ -72,7 +72,7 @@ index_t CountWS::argmax() const {
     assert(used.size() > 0);
     index_t best = used[0];
     for (auto id : used)
-        if (cnt[id] > cnt[best])
+        if (cnt[id] > cnt[best] || (cnt[id] == cnt[best] && id < best))
             best = id;
     return best;
 }
@@ -88,20 +88,33 @@ void CountWS::argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) co
     if (used.empty() || n == 0)
         return;
 
-    scratch_out.assign(used.begin(), used.end());
-    n = std::min(n, scratch_out.size());
-
     auto better = [this](auto a, auto b) {
         if (cnt[a] != cnt[b])
             return cnt[a] > cnt[b];
         return a < b;
     };
-    if (n < scratch_out.size())
-        std::nth_element(scratch_out.begin(), scratch_out.begin() + n, scratch_out.end(), better);
-    else
-        std::ranges::sort(scratch_out, better);
 
-    scratch_out.resize(n);
+    n = std::min(n, used.size());
+    if (n == used.size()) {
+        scratch_out.assign(used.begin(), used.end());
+        std::ranges::sort(scratch_out, better);
+        return;
+    }
+
+    scratch_out.reserve(n);
+    for (auto id : used) {
+        if (scratch_out.size() < n) {
+            scratch_out.push_back(id);
+            std::push_heap(scratch_out.begin(), scratch_out.end(), better);
+            continue;
+        }
+        if (better(id, scratch_out.front())) {
+            std::pop_heap(scratch_out.begin(), scratch_out.end(), better);
+            scratch_out.back() = id;
+            std::push_heap(scratch_out.begin(), scratch_out.end(), better);
+        }
+    }
+    std::ranges::sort(scratch_out, better);
 }
 
 MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P_} {
@@ -126,8 +139,8 @@ MatrixWithData::FullToddData MatrixWithData::build_full_todd() const {
         return out;
     }
 
-    Matrix    L = L_expansion(P_);
-    Matrix    Y = Matrix::identity(P_.rows());
+    Matrix   L = L_expansion(P_);
+    Matrix   Y = Matrix::identity(P_.rows());
     PivotMap pivots;
     pivots.reset(L.cols());
     gauss_elimination_inplace_rref(L, Y, pivots);
@@ -153,7 +166,6 @@ MatrixWithData::FullToddData MatrixWithData::build_full_todd() const {
             out.offset[(std::size_t)(b - 1)] = out.offset[(std::size_t)b] + (std::uint64_t)(b + 1);
         }
     }
-
 
     out.nonpivot_index.assign((std::size_t)full_cols, -1);
     index_t nonpiv_cols = 0;
@@ -191,23 +203,34 @@ MatrixWithData::FullToddData MatrixWithData::build_full_todd() const {
 
 Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z)
     : M_{M}, pair_endpoints_(M->P().rows()), z_{std::move(z)}, special_{-1} {
-    const Matrix&    P   = M_->P();
     const ToddIndex& idx = M_->index();
-    const index_t    m   = P.rows();
-    pairs_.reserve((std::size_t)(m / 2));
-
 
     const SumEntry* ptr = nullptr;
     index_t         len = 0;
     if (!idx.sum_bucket(z_, ptr, len)) {
         return;
     }
+    init_from_entries_(ptr, len);
+}
+
+Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntry* ptr, index_t len)
+    : M_{M}, pair_endpoints_(M->P().rows()), z_{std::move(z)}, special_{-1} {
+    init_from_entries_(ptr, len);
+}
+
+void Witness::init_from_entries_(const SumEntry* ptr, index_t len) {
+    if (ptr == nullptr || len == 0)
+        return;
+
+    const Matrix& P = M_->P();
+    const index_t m = P.rows();
+    pairs_.reserve((std::size_t)(m / 2));
 
     for (index_t t = 0; t < len; ++t) {
         if (ptr[t].is_pair())
             continue;
         const index_t a = ptr[t].a;
-        special_ = (int)a;
+        special_        = (int)a;
         break;
     }
 
@@ -232,6 +255,8 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z)
 }
 
 TohpeWitness::TohpeWitness(std::shared_ptr<MatrixWithData> M, Row z) : Witness(M, std::move(z)) {}
+TohpeWitness::TohpeWitness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntry* ptr, index_t len)
+    : Witness(M, std::move(z), ptr, len) {}
 
 ToddWitness::ToddWitness(std::shared_ptr<MatrixWithData> M, Row z, Matrix&& Y)
     : Witness(M, std::move(z)), Y_{std::move(Y)} {}
@@ -343,6 +368,13 @@ NullSpace TohpeGenerator::make(RowCView z) const {
     return NullSpace(M_, std::make_unique<TohpeWitness>(TohpeWitness(M_, z)));
 }
 
+NullSpace TohpeGenerator::make(RowCView z, std::uint32_t bucket_id) const {
+    const SumEntry* ptr = nullptr;
+    index_t         len = 0;
+    M_->index().sum_bucket(bucket_id, ptr, len);
+    return NullSpace(M_, std::make_unique<TohpeWitness>(TohpeWitness(M_, z, ptr, len)));
+}
+
 Row TohpeGenerator::best_z(RowCView y) const {
     const Matrix&    P   = M_->P();
     const ToddIndex& idx = M_->index();
@@ -363,13 +395,13 @@ Row TohpeGenerator::best_z(RowCView y) const {
         ws_.add(idx.single_id()[(std::size_t)i], 1);
 
         for (index_t j : zeros) {
-            const auto id = idx.pair_id()[pair_index(i, j, n)];
+            const auto id = idx.pair_bucket_id(i, j);
             ws_.add(id, 2);
         }
     }
     if (ws_.parity) {
         for (index_t i : zeros) {
-            ws_.add(idx.single_id()[(std::size_t)i], 1);
+            ws_.add(idx.single_id()[(std::size_t)i], 2);
         }
     }
     if (ws_.used.empty())
@@ -387,10 +419,20 @@ std::vector<std::pair<Row, index_t>> TohpeGenerator::best_z_n(RowCView y, index_
 
 void TohpeGenerator::best_z_n_into(RowCView y, index_t num_samples,
                                    std::vector<std::pair<Row, index_t>>& scratch_out) const {
+    best_z_n_details_into(y, num_samples, scratch_z_infos_);
+
+    scratch_out.clear();
+    scratch_out.reserve(scratch_z_infos_.size());
+    for (auto& info : scratch_z_infos_)
+        scratch_out.emplace_back(std::move(info.z), info.reduction);
+}
+
+void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
+                                           std::vector<TohpeZInfo>& scratch_out) const {
     assert(y.count() != 0);
-    const Matrix&    P   = M_->P();
-    const ToddIndex& idx = M_->index();
-    const index_t    n   = P.rows();
+    const Matrix&    P       = M_->P();
+    const ToddIndex& idx     = M_->index();
+    const index_t    n       = P.rows();
     const index_t    y_count = y.count();
 
     scratch_ones_.clear();
@@ -408,7 +450,7 @@ void TohpeGenerator::best_z_n_into(RowCView y, index_t num_samples,
         ws_.add(idx.single_id()[(std::size_t)i], 1);
 
         for (index_t j : scratch_zeros_) {
-            const auto id = idx.pair_id()[pair_index(i, j, n)];
+            const auto id = idx.pair_bucket_id(i, j);
             ws_.add(id, 2);
         }
     }
@@ -421,17 +463,22 @@ void TohpeGenerator::best_z_n_into(RowCView y, index_t num_samples,
     scratch_out.clear();
     ws_.argmax_n_into(num_samples, scratch_candidates_);
     scratch_out.reserve(scratch_candidates_.size());
-    for (auto id : scratch_candidates_)
-        scratch_out.emplace_back(Row(idx.key_of(id)), index_t(ws_.cnt[id]));
+    for (auto id : scratch_candidates_) {
+        const auto bucket_id = static_cast<std::uint32_t>(id);
+        scratch_out.push_back(TohpeZInfo{
+            .z           = Row(idx.key_of(bucket_id)),
+            .reduction   = index_t(ws_.cnt[id]),
+            .bucket_size = idx.bucket_size(bucket_id),
+            .bucket_id   = bucket_id,
+        });
+    }
 }
 
-FullToddGenerator::FullToddGenerator(std::shared_ptr<MatrixWithData> M) : M_{M} {
-    (void)M_->full_todd();
-}
+FullToddGenerator::FullToddGenerator(std::shared_ptr<MatrixWithData> M) : M_{M} { (void)M_->full_todd(); }
 
 Matrix FullToddGenerator::full_todd_kernel(RowCView z, const SumEntry* ptr, int len) const {
-    const auto&   ft = M_->full_todd();
-    const index_t n  = z.size();
+    const auto&   ft         = M_->full_todd();
+    const index_t n          = z.size();
     const index_t total_cols = ft.nonpiv_cols + M_->P().rows();
 
     std::vector<index_t> S;
@@ -483,7 +530,7 @@ NullSpace FullToddGenerator::make(RowCView z) const {
 }
 
 NullSpace FullToddGenerator::make(index_t row) const {
-    Row    z = M_->P()[row];
+    Row             z   = M_->P()[row];
     const SumEntry* ptr = nullptr;
     index_t         len = 0;
     M_->index().sum_bucket(z, ptr, len);

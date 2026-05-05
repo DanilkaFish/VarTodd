@@ -12,6 +12,13 @@
 
 namespace todd {
 
+struct TohpeZInfo {
+    Row           z;
+    index_t       reduction   = 0;
+    index_t       bucket_size = 0;
+    std::uint32_t bucket_id   = 0;
+};
+
 struct CountWS {
     std::vector<index_t> cnt;
     std::vector<index_t> tag;
@@ -50,9 +57,9 @@ class MatrixWithData {
   private:
     FullToddData build_full_todd() const;
 
-    Matrix          P_;
-    Matrix          tohpe_basis_;
-    const ToddIndex index_;
+    Matrix                              P_;
+    Matrix                              tohpe_basis_;
+    const ToddIndex                     index_;
     mutable std::optional<FullToddData> full_todd_;
 };
 
@@ -69,6 +76,9 @@ class Witness {
 
   protected:
     explicit Witness(std::shared_ptr<MatrixWithData> M, Row z);
+    Witness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntry* ptr, index_t len);
+    void init_from_entries_(const SumEntry* ptr, index_t len);
+
     std::shared_ptr<MatrixWithData>  M_;
     std::vector<std::pair<int, int>> pairs_;
     Row                              pair_endpoints_;
@@ -81,6 +91,7 @@ class Witness {
 class TohpeWitness final : public Witness {
   public:
     TohpeWitness(std::shared_ptr<MatrixWithData> M, Row z);
+    TohpeWitness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntry* ptr, index_t len);
     const Matrix& get_Y() const override { return M_->tohpe_basis(); }
 };
 
@@ -126,8 +137,10 @@ class TohpeGenerator {
     TohpeGenerator(std::shared_ptr<MatrixWithData> M);
     auto best_z_n(RowCView y, index_t num_samples) const -> std::vector<std::pair<Row, index_t>>;
     void best_z_n_into(RowCView y, index_t num_samples, std::vector<std::pair<Row, index_t>>& scratch_out) const;
+    void best_z_n_details_into(RowCView y, index_t num_samples, std::vector<TohpeZInfo>& scratch_out) const;
 
     auto make(RowCView z) const -> NullSpace;
+    auto make(RowCView z, std::uint32_t bucket_id) const -> NullSpace;
     auto make(index_t row) const -> NullSpace;
     auto make(index_t row1, index_t row2) const -> NullSpace;
     Row  best_z(RowCView y) const;
@@ -137,10 +150,11 @@ class TohpeGenerator {
   private:
     std::shared_ptr<MatrixWithData> M_;
 
-    mutable CountWS ws_;
-    mutable std::vector<index_t> scratch_ones_;
-    mutable std::vector<index_t> scratch_zeros_;
-    mutable std::vector<index_t> scratch_candidates_;
+    mutable CountWS                 ws_;
+    mutable std::vector<index_t>    scratch_ones_;
+    mutable std::vector<index_t>    scratch_zeros_;
+    mutable std::vector<index_t>    scratch_candidates_;
+    mutable std::vector<TohpeZInfo> scratch_z_infos_;
 };
 
 class FullToddGenerator {

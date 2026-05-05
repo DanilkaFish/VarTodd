@@ -1,6 +1,6 @@
 #include "todd_index.hpp"
-#include <random>
 #include <cstring>
+#include <random>
 namespace todd {
 
 static inline bool equal_masked(RowCView a, RowCView b) noexcept { return a == b; }
@@ -51,6 +51,12 @@ void ToddIndex::build_sum_buckets_() {
     const index_t n = m_;
     single_id_.assign((std::size_t)n, 0);
     pair_id_.assign((std::size_t)n * (n - 1) / 2, 0);
+    pair_row_start_.assign((std::size_t)n, 0);
+    for (index_t i = 0; i < n; ++i) {
+        const auto ii                   = static_cast<std::size_t>(i);
+        const auto nn                   = static_cast<std::size_t>(n);
+        pair_row_start_[(std::size_t)i] = ii * (nn - 1) - (ii * (ii - 1)) / 2;
+    }
     head_.clear();
     head_.reserve((std::size_t)std::min<index_t>(n * 4, 2000000));
     head_.max_load_factor(0.7f);
@@ -79,7 +85,7 @@ void ToddIndex::build_sum_buckets_() {
 
             const std::uint32_t id = get_bucket_id_(hk, sumv);
             ++buckets_[(std::size_t)id].len;
-            pair_id_[pair_index(i, j, n)] = id;
+            pair_id_[pair_index_fast_(i, j)] = id;
         }
     }
     std::uint32_t off = 0;
@@ -96,7 +102,7 @@ void ToddIndex::build_sum_buckets_() {
     }
     for (index_t i = 0; i < n; ++i) {
         for (index_t j = i + 1; j < n; ++j) {
-            const std::uint32_t id                       = pair_id_[pair_index(i, j, n)];
+            const std::uint32_t id                       = pair_id_[pair_index_fast_(i, j)];
             auto&               b                        = buckets_[(std::size_t)id];
             sum_entries_[(std::size_t)(b.off + b.cur++)] = SumEntry{i, j};
         }
@@ -123,6 +129,18 @@ bool ToddIndex::sum_bucket(RowCView key, const SumEntry*& ptr, index_t& len) con
     ptr = nullptr;
     len = 0;
     return false;
+}
+
+bool ToddIndex::sum_bucket(std::uint32_t id, const SumEntry*& ptr, index_t& len) const noexcept {
+    if (id >= buckets_.size()) {
+        ptr = nullptr;
+        len = 0;
+        return false;
+    }
+    const auto& b = buckets_[(std::size_t)id];
+    ptr           = sum_entries_.data() + (std::size_t)b.off;
+    len           = (index_t)b.len;
+    return len != 0;
 }
 
 index_t ToddIndex::get_size_from_z(RowCView z) const {

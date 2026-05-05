@@ -75,15 +75,20 @@ class ToddIndex {
     HashKey       hash_vec(RowCView v) const noexcept;
     index_t       get_size_from_z(RowCView z) const;
     bool          sum_bucket(RowCView key, const SumEntry*& ptr, index_t& len) const noexcept;
+    bool          sum_bucket(std::uint32_t id, const SumEntry*& ptr, index_t& len) const noexcept;
+    index_t       bucket_size(std::uint32_t id) const noexcept {
+        return (id < buckets_.size()) ? (index_t)buckets_[(std::size_t)id].len : 0;
+    }
 
     const std::vector<HashKey>&               row_hashes() const noexcept { return hP_; }
     std::vector<std::pair<RowCView, index_t>> sum_key_sizes() const;
     std::vector<SumKeySize>&                  sum_key_sizes_scratch() const;
     const std::vector<std::uint32_t>&         single_id() const noexcept { return single_id_; }
     const std::vector<std::uint32_t>&         pair_id() const noexcept { return pair_id_; }
-    RowCView key_of(std::uint32_t id) const noexcept { return bucket_keys_[(index_t)id]; }
-    index_t  buckets_num() const noexcept { return buckets_.size(); }
-    index_t  max_bucket() const noexcept;
+    std::uint32_t pair_bucket_id(index_t i, index_t j) const noexcept { return pair_id_[pair_index_fast_(i, j)]; }
+    RowCView      key_of(std::uint32_t id) const noexcept { return bucket_keys_[(index_t)id]; }
+    index_t       buckets_num() const noexcept { return buckets_.size(); }
+    index_t       max_bucket() const noexcept;
 
   private:
     struct BucketInfo {
@@ -95,15 +100,22 @@ class ToddIndex {
     std::vector<HashKey>                                              hP_;
     std::vector<std::uint32_t>                                        single_id_;
     std::vector<std::uint32_t>                                        pair_id_;
+    std::vector<std::size_t>                                          pair_row_start_;
     std::vector<BucketInfo>                                           buckets_;
     Matrix                                                            bucket_keys_;
     std::vector<SumEntry>                                             sum_entries_;
     mutable std::vector<SumKeySize>                                   scratch_sum_key_sizes_;
     ankerl::unordered_dense::map<HashKey, std::uint32_t, HashKeyHash> head_;
 
-    void build_masks_();
-    void build_row_hashes_();
-    void build_sum_buckets_();
+    void        build_masks_();
+    void        build_row_hashes_();
+    void        build_sum_buckets_();
+    std::size_t pair_index_fast_(index_t i, index_t j) const noexcept {
+        if (i > j)
+            std::swap(i, j);
+        assert(i < j);
+        return pair_row_start_[(std::size_t)i] + static_cast<std::size_t>(j - i - 1);
+    }
 
     std::uint32_t get_bucket_id_(HashKey hk, RowCView sumv);
 };
