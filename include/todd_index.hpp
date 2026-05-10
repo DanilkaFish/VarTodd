@@ -12,7 +12,7 @@
 
 namespace todd {
 
-using HashKey = std::uint64_t;
+using HashKey = std::uint32_t;
 struct BucketRange {
     std::uint32_t off;
     std::uint32_t len;
@@ -54,21 +54,12 @@ struct HashKeyHash {
     size_t operator()(HashKey k) const noexcept { return (size_t)mix(k); }
 };
 
-static inline std::size_t pair_index(index_t i, index_t j, index_t n) noexcept {
-    if (i > j)
-        std::swap(i, j);
-    const std::size_t ii = (std::size_t)i, nn = (std::size_t)n;
-    const std::size_t prefix = ii * (nn - 1) - (ii * (ii - 1)) / 2;
-    return prefix + (std::size_t)(j - i - 1);
-}
-
 // keeps buckets for columns of given matrix.
 class ToddIndex {
   public:
     using SumKeySize = std::pair<RowCView, index_t>;
 
     explicit ToddIndex(const Matrix& P);
-
     const Matrix& matrix() const noexcept { return P_; }
     index_t       rows() const noexcept { return m_; }
     index_t       cols() const noexcept { return n_bits_; }
@@ -85,7 +76,10 @@ class ToddIndex {
     std::vector<SumKeySize>&                  sum_key_sizes_scratch() const;
     const std::vector<std::uint32_t>&         single_id() const noexcept { return single_id_; }
     const std::vector<std::uint32_t>&         pair_id() const noexcept { return pair_id_; }
-    std::uint32_t pair_bucket_id(index_t i, index_t j) const noexcept { return pair_id_[pair_index_fast_(i, j)]; }
+    std::uint32_t pair_bucket_id(index_t i, index_t j) const noexcept {
+        assert(i != j);
+        return pair_id_[pair_index_fast_(i, j)];
+    }
     RowCView      key_of(std::uint32_t id) const noexcept { return bucket_keys_[(index_t)id]; }
     index_t       buckets_num() const noexcept { return buckets_.size(); }
     index_t       max_bucket() const noexcept;
@@ -100,7 +94,6 @@ class ToddIndex {
     std::vector<HashKey>                                              hP_;
     std::vector<std::uint32_t>                                        single_id_;
     std::vector<std::uint32_t>                                        pair_id_;
-    std::vector<std::size_t>                                          pair_row_start_;
     std::vector<BucketInfo>                                           buckets_;
     Matrix                                                            bucket_keys_;
     std::vector<SumEntry>                                             sum_entries_;
@@ -111,10 +104,9 @@ class ToddIndex {
     void        build_row_hashes_();
     void        build_sum_buckets_();
     std::size_t pair_index_fast_(index_t i, index_t j) const noexcept {
-        if (i > j)
-            std::swap(i, j);
-        assert(i < j);
-        return pair_row_start_[(std::size_t)i] + static_cast<std::size_t>(j - i - 1);
+        assert(i >= 0 && j >= 0);
+        assert(i < m_ && j < m_);
+        return static_cast<std::size_t>(i) * static_cast<std::size_t>(m_) + static_cast<std::size_t>(j);
     }
 
     std::uint32_t get_bucket_id_(HashKey hk, RowCView sumv);

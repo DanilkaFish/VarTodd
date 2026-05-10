@@ -70,7 +70,9 @@ Run:
 - `--min-reduction`: minimum reduction (default: 1).
 - `--threads, -r`: number of threads (default: 4).
 - `--seed, -s`: RNG seed (default: 4).
-- `--try-only-tohpe, -ot`: restrict to TOHPE (default: 1).
+- `--try-only-tohpe, -ot`: skip the full Todd stage when TOHPE already finds enough actions (default: 1).
+- `--enable-tohpe`: run the TOHPE candidate stage (default: 1).
+- `--enable-todd`: run the full Todd candidate stage (default: 1).
 
 ### Input Format
 

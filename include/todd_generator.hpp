@@ -286,6 +286,8 @@ struct PolicyConfig {
     Int   max_tohpe          = 1;
     Int   tohpe_sample       = 1;
     bool  try_only_tohpe     = true;
+    bool  enable_tohpe       = true;
+    bool  enable_todd        = true;
 };
 
 auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyConfig config, index_t seed = 1,

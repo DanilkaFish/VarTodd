@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -55,12 +54,10 @@ class MatrixWithData {
     const FullToddData& full_todd() const;
 
   private:
-    FullToddData build_full_todd() const;
-
     Matrix                              P_;
     Matrix                              tohpe_basis_;
     const ToddIndex                     index_;
-    mutable std::optional<FullToddData> full_todd_;
+    FullToddData                        full_todd_;
 };
 
 // base object for prediction of rank divergence

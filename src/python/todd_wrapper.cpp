@@ -546,7 +546,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
     py::class_<PolicyConfig>(m, "PolicyConfig")
         .def(py::init<>())
         .def(py::init<ExplorationScore, FinalizationScore, std::string, float, float, float, Int, Int, Int, Int, Int,
-                      Int, Int, Int, Int, Int, Int, bool>(),
+                      Int, Int, Int, Int, Int, Int, bool, bool, bool>(),
              py::arg("ExplorationScore") = ExplorationScore(), 
              py::arg("FinalizationScore") = FinalizationScore(),
              py::arg("selection") = "greedy",
@@ -564,7 +564,9 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
              py::arg("min_pool_size") = 1, 
              py::arg("max_tohpe") = 1, 
              py::arg("tohpe_sample") = 1, 
-             py::arg("try_only_tohpe") = true)
+             py::arg("try_only_tohpe") = true,
+             py::arg("enable_tohpe") = true,
+             py::arg("enable_todd") = true)
         .def_readwrite("num_samples", &PolicyConfig::num_samples)
         .def_readwrite("num_candidates", &PolicyConfig::num_candidates)
         .def_readwrite("top_pool", &PolicyConfig::top_pool)
@@ -580,6 +582,8 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def_readwrite("gen_part", &PolicyConfig::gen_part)
         .def_readwrite("max_tohpe", &PolicyConfig::max_tohpe)
         .def_readwrite("try_only_tohpe", &PolicyConfig::try_only_tohpe)
+        .def_readwrite("enable_tohpe", &PolicyConfig::enable_tohpe)
+        .def_readwrite("enable_todd", &PolicyConfig::enable_todd)
         .def_readwrite("tohpe_sample", &PolicyConfig::tohpe_sample)
         .def("__repr__", [](const PolicyConfig& c) {
             return "PolicyConfig(num_samples=" + std::to_string((long long)c.num_samples) +
@@ -595,6 +599,8 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
                    ", gen_part=" + std::to_string((long long)c.gen_part) +
                    ", max_tohpe=" + std::to_string((long long)c.max_tohpe) +
                    ", try_only_tohpe=" + std::to_string((long long)c.try_only_tohpe) +
+                   ", enable_tohpe=" + std::to_string((long long)c.enable_tohpe) +
+                   ", enable_todd=" + std::to_string((long long)c.enable_todd) +
                    ", tohpe_sample=" + std::to_string((long long)c.tohpe_sample) + ")";
         });
 

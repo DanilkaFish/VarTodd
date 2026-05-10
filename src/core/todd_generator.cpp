@@ -262,6 +262,8 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     auto max_from_single_ns = config.max_from_single_ns;
     auto tohpe_sample       = config.tohpe_sample;
     auto try_only_tohpe     = config.try_only_tohpe;
+    auto enable_tohpe       = config.enable_tohpe;
+    auto enable_todd        = config.enable_todd;
     auto gen_part           = config.gen_part;
     num_samples             = std::max(num_samples, (Int)0);
     num_candidates          = std::max(num_candidates, (Int)1);
@@ -269,6 +271,8 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     gen_part                = std::clamp(gen_part, 0.0f, 1.0f);
     max_reduction           = max_reduction > 0 ? max_reduction : k_single_sentinel<decltype(max_reduction)>();
     min_reduction           = std::max(min_reduction, (Int)0);
+    max_tohpe               = std::max(max_tohpe, (Int)0);
+    tohpe_sample            = std::max(tohpe_sample, (Int)1);
     non_improving_prob      = std::min(std::max(0.0f, non_improving_prob), 1.0f);
 
     const auto                       base_seed            = matrix_seed(data->P(), seed, add_seed);
@@ -300,7 +304,7 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
         auto local_beyond_pool = TopKPool<ExplorationScore>(max_tohpe, escore);
         auto local_pool        = TopKPool<ExplorationScore>(max_tohpe, escore);
 
-        if (max_tohpe > 0) {
+        if (enable_tohpe && max_tohpe > 0) {
             const index_t dim      = tohpe_dim;
             global_stats.max_basis = dim;
 
@@ -348,7 +352,12 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
             pool.merge_from(local_beyond_pool);
         }
 
-        if (!try_only_tohpe) {
+        const auto required_tohpe_actions =
+            static_cast<std::size_t>(std::max<Int>(min_pool, num_candidates));
+        const bool tohpe_has_enough_actions = pool.size() >= required_tohpe_actions;
+        const bool run_todd_stage = enable_todd && !(try_only_tohpe && tohpe_has_enough_actions);
+
+        if (run_todd_stage) {
 
             auto& buckets       = data->index().sum_key_sizes_scratch();
             auto  better_bucket = [](auto const& a, auto const& b) {

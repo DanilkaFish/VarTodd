@@ -1,9 +1,11 @@
 #include "todd_index.hpp"
+
 #include <cstring>
 #include <random>
 namespace todd {
 
 static inline bool equal_masked(RowCView a, RowCView b) noexcept { return a == b; }
+
 ToddIndex::ToddIndex(const Matrix& P) : P_(P), m_(P.rows()), n_bits_(P.cols()) {
     build_masks_();
     build_row_hashes_();
@@ -50,13 +52,7 @@ std::uint32_t ToddIndex::get_bucket_id_(HashKey hk, RowCView sumv) {
 void ToddIndex::build_sum_buckets_() {
     const index_t n = m_;
     single_id_.assign((std::size_t)n, 0);
-    pair_id_.assign((std::size_t)n * (n - 1) / 2, 0);
-    pair_row_start_.assign((std::size_t)n, 0);
-    for (index_t i = 0; i < n; ++i) {
-        const auto ii                   = static_cast<std::size_t>(i);
-        const auto nn                   = static_cast<std::size_t>(n);
-        pair_row_start_[(std::size_t)i] = ii * (nn - 1) - (ii * (ii - 1)) / 2;
-    }
+    pair_id_.assign((std::size_t)n * (std::size_t)n, 0);
     head_.clear();
     head_.reserve((std::size_t)std::min<index_t>(n * 4, 2000000));
     head_.max_load_factor(0.7f);
@@ -86,6 +82,7 @@ void ToddIndex::build_sum_buckets_() {
             const std::uint32_t id = get_bucket_id_(hk, sumv);
             ++buckets_[(std::size_t)id].len;
             pair_id_[pair_index_fast_(i, j)] = id;
+            pair_id_[pair_index_fast_(j, i)] = id;
         }
     }
     std::uint32_t off = 0;

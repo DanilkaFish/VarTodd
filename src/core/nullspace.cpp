@@ -6,17 +6,90 @@
 #include "typedef.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <ranges>
 #include <stdexcept>
 
 namespace todd {
-static index_t intersection_count(RowCView a, RowCView b) noexcept {
-    assert(a.blocks() == b.blocks());
-    index_t total = 0;
-    for (index_t k = 0; k < a.blocks(); ++k)
-        total += popcount64(a.data()[k] & b.data()[k]);
-    return total;
+
+namespace {
+
+static void or_shifted(RowView dst, index_t offset, RowCView src) noexcept;
+
+// Build both TOHPE and full-TODD data from one elimination pass over L(P).
+static auto build_matrix_with_data_precompute(const Matrix& P)
+    -> std::pair<Matrix, MatrixWithData::FullToddData> {
+    if (P.rows() == 0) {
+        return {Matrix(0, 0), MatrixWithData::FullToddData{}};
+    }
+
+    Matrix   L = L_expansion(P);
+    Matrix   Y = Matrix::identity(P.rows());
+    PivotMap pivots;
+    pivots.reset(L.cols());
+    gauss_elimination_inplace_rref(L, Y, pivots);
+
+    Matrix tohpe_basis = extract_basis(Y, pivots);
+#ifndef NDEBUG
+    assert(tohpe_basis == get_tohpe_basis(P));
+#endif
+
+    MatrixWithData::FullToddData out;
+    const index_t                n         = P.cols();
+    const index_t                full_cols = L.cols();
+
+    out.pivot_row_of_col.assign((std::size_t)full_cols, -1);
+    std::vector<index_t> pivot_source_rows;
+    pivot_source_rows.reserve(pivots.size());
+    for (index_t pivot_col = 0; pivot_col < full_cols; ++pivot_col) {
+        auto row = pivots.get(pivot_col);
+        if (row != PivotMap::npos) {
+            out.pivot_row_of_col[(std::size_t)pivot_col] = (std::int64_t)pivot_source_rows.size();
+            pivot_source_rows.push_back((index_t)row);
+        }
+    }
+
+    out.offset.assign((std::size_t)n, 0);
+    if (n > 0) {
+        out.offset[(std::size_t)(n - 1)] = 0;
+        for (index_t b = n - 1; b > 0; --b) {
+            out.offset[(std::size_t)(b - 1)] = out.offset[(std::size_t)b] + (std::uint64_t)(b + 1);
+        }
+    }
+
+    out.nonpivot_index.assign((std::size_t)full_cols, -1);
+    index_t nonpiv_cols = 0;
+    for (index_t col = 0; col < full_cols; ++col) {
+        if (out.pivot_row_of_col[(std::size_t)col] < 0) {
+            out.nonpivot_index[(std::size_t)col] = (std::int64_t)nonpiv_cols;
+            ++nonpiv_cols;
+        }
+    }
+    out.nonpiv_cols = nonpiv_cols;
+
+    Matrix               LY_nonpivot((index_t)pivot_source_rows.size(), nonpiv_cols + P.rows());
+    std::vector<uint8_t> is_zero(LY_nonpivot.rows(), true);
+    for (index_t r = 0; r < LY_nonpivot.rows(); ++r) {
+        auto       dst = LY_nonpivot[r];
+        const auto lr  = L[pivot_source_rows[(std::size_t)r]];
+        for (auto p = lr.find_first(); p != Row::npos; p = lr.find_next(p)) {
+            const std::int64_t idx = out.nonpivot_index[(std::size_t)p];
+            if (idx >= 0) {
+                dst.set((index_t)idx);
+                is_zero[r] = false;
+            }
+        }
+
+        const auto yr = Y[pivot_source_rows[(std::size_t)r]];
+        if (!yr.none()) {
+            or_shifted(dst, nonpiv_cols, yr);
+            is_zero[r] = false;
+        }
+    }
+    out.is_zero     = std::move(is_zero);
+    out.LY_nonpivot = std::move(LY_nonpivot);
+    return {std::move(tohpe_basis), std::move(out)};
 }
 
 static void or_shifted(RowView dst, index_t offset, RowCView src) noexcept {
@@ -45,6 +118,8 @@ static void or_shifted(RowView dst, index_t offset, RowCView src) noexcept {
     if (dst_blocks != 0)
         d[dst_blocks - 1] &= tail_mask_bits(dst.size());
 }
+
+} // namespace
 
 void CountWS::reset(std::size_t K) {
     if (cnt.size() < K) {
@@ -95,6 +170,26 @@ void CountWS::argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) co
     };
 
     n = std::min(n, used.size());
+    if (n <= 8) {
+        scratch_out.reserve(n);
+        for (auto id : used) {
+            auto it = scratch_out.begin();
+            while (it != scratch_out.end() && better(*it, id))
+                ++it;
+            if (it == scratch_out.end()) {
+                if (scratch_out.size() < n)
+                    scratch_out.push_back(id);
+                continue;
+            }
+            if (scratch_out.size() < n) {
+                scratch_out.insert(it, id);
+                continue;
+            }
+            scratch_out.insert(it, id);
+            scratch_out.pop_back();
+        }
+        return;
+    }
     if (n == used.size()) {
         scratch_out.assign(used.begin(), used.end());
         std::ranges::sort(scratch_out, better);
@@ -118,88 +213,12 @@ void CountWS::argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) co
 }
 
 MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P_} {
-    if (P_.rows() == 0) {
-        tohpe_basis_ = Matrix(0, 0);
-        return;
-    }
-
-    tohpe_basis_ = get_tohpe_basis(P_);
+    auto precomputed = build_matrix_with_data_precompute(P_);
+    tohpe_basis_     = std::move(precomputed.first);
+    full_todd_       = std::move(precomputed.second);
 }
 
-const MatrixWithData::FullToddData& MatrixWithData::full_todd() const {
-    if (!full_todd_) {
-        full_todd_ = build_full_todd();
-    }
-    return *full_todd_;
-}
-
-MatrixWithData::FullToddData MatrixWithData::build_full_todd() const {
-    FullToddData out;
-    if (P_.rows() == 0) {
-        return out;
-    }
-
-    Matrix   L = L_expansion(P_);
-    Matrix   Y = Matrix::identity(P_.rows());
-    PivotMap pivots;
-    pivots.reset(L.cols());
-    gauss_elimination_inplace_rref(L, Y, pivots);
-
-    const index_t n         = P_.cols();
-    const index_t full_cols = L.cols();
-
-    out.pivot_row_of_col.assign((std::size_t)full_cols, -1);
-    std::vector<index_t> pivot_source_rows;
-    pivot_source_rows.reserve(pivots.size());
-    for (index_t pivot_col = 0; pivot_col < full_cols; ++pivot_col) {
-        auto row = pivots.get(pivot_col);
-        if (row != PivotMap::npos) {
-            out.pivot_row_of_col[(std::size_t)pivot_col] = (std::int64_t)pivot_source_rows.size();
-            pivot_source_rows.push_back((index_t)row);
-        }
-    }
-
-    out.offset.assign((std::size_t)n, 0);
-    if (n > 0) {
-        out.offset[(std::size_t)(n - 1)] = 0;
-        for (index_t b = n - 1; b > 0; --b) {
-            out.offset[(std::size_t)(b - 1)] = out.offset[(std::size_t)b] + (std::uint64_t)(b + 1);
-        }
-    }
-
-    out.nonpivot_index.assign((std::size_t)full_cols, -1);
-    index_t nonpiv_cols = 0;
-    for (index_t col = 0; col < full_cols; ++col) {
-        if (out.pivot_row_of_col[(std::size_t)col] < 0) {
-            out.nonpivot_index[(std::size_t)col] = (std::int64_t)nonpiv_cols;
-            ++nonpiv_cols;
-        }
-    }
-    out.nonpiv_cols = nonpiv_cols;
-
-    Matrix               LY_nonpivot((index_t)pivot_source_rows.size(), nonpiv_cols + P_.rows());
-    std::vector<uint8_t> is_zero(LY_nonpivot.rows(), true);
-    for (index_t r = 0; r < LY_nonpivot.rows(); ++r) {
-        auto       dst = LY_nonpivot[r];
-        const auto lr  = L[pivot_source_rows[(std::size_t)r]];
-        for (auto p = lr.find_first(); p != Row::npos; p = lr.find_next(p)) {
-            const std::int64_t idx = out.nonpivot_index[(std::size_t)p];
-            if (idx >= 0) {
-                dst.set((index_t)idx);
-                is_zero[r] = false;
-            }
-        }
-
-        const auto yr = Y[pivot_source_rows[(std::size_t)r]];
-        if (!yr.none()) {
-            or_shifted(dst, nonpiv_cols, yr);
-            is_zero[r] = false;
-        }
-    }
-    out.is_zero     = std::move(is_zero);
-    out.LY_nonpivot = std::move(LY_nonpivot);
-    return out;
-}
+const MatrixWithData::FullToddData& MatrixWithData::full_todd() const { return full_todd_; }
 
 Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z)
     : M_{M}, pair_endpoints_(M->P().rows()), z_{std::move(z)}, special_{-1} {
@@ -268,15 +287,11 @@ int Witness::rank_divergence(RowCView y) const {
     if (S && y.test(special_))
         ++ones_S;
     int diff_pairs = 0;
-    if (pair_endpoints_disjoint_) {
-        diff_pairs = (int)intersection_count(y, pair_endpoints_);
-    } else {
-        for (const auto& pr : pairs_) {
-            const int i = pr.first;
-            const int j = pr.second;
-            if (y.test(i) ^ y.test(j))
-                ++diff_pairs;
-        }
+    for (const auto& pr : pairs_) {
+        const int i = pr.first;
+        const int j = pr.second;
+        if (y.test(i) ^ y.test(j))
+            ++diff_pairs;
     }
     if (parity == 0)
         return ones_S + 2 * diff_pairs;
@@ -352,7 +367,11 @@ Matrix NullSpace::apply(RowCView y, std::vector<std::uint8_t>& scratch_killed) c
     return new_P;
 }
 
-TohpeGenerator::TohpeGenerator(std::shared_ptr<MatrixWithData> M) : M_{M} {}
+TohpeGenerator::TohpeGenerator(std::shared_ptr<MatrixWithData> M) : M_{M} {
+    const auto n = M_->P().rows();
+    scratch_ones_.resize((std::size_t)n);
+    scratch_zeros_.resize((std::size_t)n);
+}
 
 NullSpace TohpeGenerator::make(index_t row) const {
     return NullSpace(M_, std::make_unique<TohpeWitness>(TohpeWitness(M_, M_->P()[row])));
@@ -377,38 +396,10 @@ NullSpace TohpeGenerator::make(RowCView z, std::uint32_t bucket_id) const {
 
 Row TohpeGenerator::best_z(RowCView y) const {
     const Matrix&    P   = M_->P();
-    const ToddIndex& idx = M_->index();
-    const index_t    n   = P.rows();
-
-    std::vector<index_t> ones;
-    std::vector<index_t> zeros;
-    ones.reserve((std::size_t)y.count());
-    zeros.reserve((std::size_t)(n - y.count()));
-
-    for (index_t i = 0; i < n; ++i) {
-        (y.test(i) ? ones : zeros).push_back(i);
-    }
-
-    ws_.reset(idx.buckets_num());
-    ws_.parity = y.count() % 2;
-    for (index_t i : ones) {
-        ws_.add(idx.single_id()[(std::size_t)i], 1);
-
-        for (index_t j : zeros) {
-            const auto id = idx.pair_bucket_id(i, j);
-            ws_.add(id, 2);
-        }
-    }
-    if (ws_.parity) {
-        for (index_t i : zeros) {
-            ws_.add(idx.single_id()[(std::size_t)i], 2);
-        }
-    }
-    if (ws_.used.empty())
+    best_z_n_details_into(y, 1, scratch_z_infos_);
+    if (scratch_z_infos_.empty())
         return Row(P.cols());
-
-    const std::uint32_t best_id = ws_.argmax();
-    return idx.key_of((std::size_t)best_id); // copy out
+    return Row(scratch_z_infos_.front().z);
 }
 
 std::vector<std::pair<Row, index_t>> TohpeGenerator::best_z_n(RowCView y, index_t num_samples) const {
@@ -435,27 +426,35 @@ void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
     const index_t    n       = P.rows();
     const index_t    y_count = y.count();
 
-    scratch_ones_.clear();
-    scratch_zeros_.clear();
-    scratch_ones_.reserve((std::size_t)y_count);
-    scratch_zeros_.reserve((std::size_t)(n - y_count));
+    if (scratch_ones_.size() < (std::size_t)n)
+        scratch_ones_.resize((std::size_t)n);
+    if (scratch_zeros_.size() < (std::size_t)n)
+        scratch_zeros_.resize((std::size_t)n);
 
+    std::size_t ones_size  = 0;
+    std::size_t zeros_size = 0;
     for (index_t i = 0; i < n; ++i) {
-        (y.test(i) ? scratch_ones_ : scratch_zeros_).push_back(i);
+        if (y.test(i))
+            scratch_ones_[ones_size++] = i;
+        else
+            scratch_zeros_[zeros_size++] = i;
     }
 
     ws_.reset(idx.buckets_num());
     ws_.parity = y_count % 2;
-    for (index_t i : scratch_ones_) {
+    for (std::size_t oi = 0; oi < ones_size; ++oi) {
+        const index_t i = scratch_ones_[oi];
         ws_.add(idx.single_id()[(std::size_t)i], 1);
 
-        for (index_t j : scratch_zeros_) {
+        for (std::size_t zi = 0; zi < zeros_size; ++zi) {
+            const index_t j = scratch_zeros_[zi];
             const auto id = idx.pair_bucket_id(i, j);
             ws_.add(id, 2);
         }
     }
     if (ws_.parity) {
-        for (index_t i : scratch_zeros_) {
+        for (std::size_t zi = 0; zi < zeros_size; ++zi) {
+            const index_t i = scratch_zeros_[zi];
             ws_.add(idx.single_id()[(std::size_t)i], 2);
         }
     }
