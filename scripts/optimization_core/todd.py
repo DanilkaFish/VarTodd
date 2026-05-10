@@ -17,7 +17,7 @@ class Todd:
         counter = 0
         best_counter = 0
         nodes = [root]
-        print(best_node.state.rows)
+        # print(best_node.state.rows)
         for i in range(self.depth):
             new_nodes = []
             counter = max(counter, len(nodes))
@@ -46,7 +46,8 @@ class Todd:
             if not new_nodes:
                 break 
             nodes = heapq.nlargest(width.at(best_node.state.rows), new_nodes, lambda x : x.incoming.cand.final_score)
-            print(best_node.state.rows)
+            # if i % 10 == 0:
+            #     print(best_node.state.rows)
         if with_report:
             best_counter = min(counter, best_counter)
             return best_node, (counter, best_counter)

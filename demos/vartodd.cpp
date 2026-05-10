@@ -23,7 +23,9 @@ int main(int argc, char* argv[]) {
         ("fscore-wred,fr", po::value<int>()->default_value(-1), "finalization score wred")
         ("min-reduction", po::value<int>()->default_value(1), "minimum reduction")
         ("seed,s", po::value<int>()->default_value(4), "seed")
-        ("try-only-tohpe,ot", po::value<bool>()->default_value(1), "only tohpe")
+        ("enable-tohpe", po::value<bool>()->default_value(1), "run TOHPE stage")
+        ("enable-todd", po::value<bool>()->default_value(1), "run full Todd stage")
+        ("try-only-tohpe,ot", po::value<bool>()->default_value(1), "skip full Todd stage when TOHPE finds enough actions")
     ;
     
     po::positional_options_description p;
@@ -60,6 +62,8 @@ int main(int argc, char* argv[]) {
     policy_cfg.min_z_to_research = vm["max-z"].as<int>();
     policy_cfg.gen_part = vm["max-z-fraction"].as<double>();
     policy_cfg.try_only_tohpe = vm["try-only-tohpe"].as<bool>();
+    policy_cfg.enable_tohpe = vm["enable-tohpe"].as<bool>();
+    policy_cfg.enable_todd = vm["enable-todd"].as<bool>();
     policy_cfg.escore.weights[0] = vm["escore-wred"].as<int>();
     policy_cfg.fscore.weights[0] = vm["fscore-wred"].as<int>();
     policy_cfg.min_reduction = vm["min-reduction"].as<int>();
@@ -68,7 +72,7 @@ int main(int argc, char* argv[]) {
 	auto finit_matrix = init_matrix;
 	std::cerr << init_matrix.rows() << " " << init_matrix.cols() << std::endl;
 	auto md_ptr = std::make_shared<MatrixWithData>(MatrixWithData(std::move(init_matrix)));
-    auto result = policy_iteration_impl(md_ptr, policy_cfg, vm["seed"].as<int>(), 1);
+	auto result = policy_iteration_impl(md_ptr, policy_cfg, vm["seed"].as<int>(), 1);
 	auto rank = result.states.back().rows();
 	while (result.states.size() >= 1) {
 		std::cerr << "total reduction : " << result.chosen.back().reduction << "    from source -- "

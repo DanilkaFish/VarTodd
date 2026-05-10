@@ -16,7 +16,29 @@ from todd import Todd
 
 DEFAULT_MATRIX_PATH = "npy/gf2^9.npy"
 
-DEFAULT_MATRIX_PATH = "/home/danilkafish/Projects/VarTodd/data/init_npy/other/mod_adder_1024.npy"
+DEFAULT_MATRIX_PATH = "data/init_npy/other/ham15_high.npy"
+# DEFAULT_MATRIX_PATH = "data/init_npy/gf_mult_Vandaele_wo_ancilla/gf2^64_644310.npy"
+# DEFAULT_MATRIX_PATH = "data/init_npy/gf_mult_Vandaele_wo_ancilla/gf2^32_3228310.npy"
+
+
+def trim_trailing_zero_cols(arr: np.ndarray) -> np.ndarray:
+    if arr.ndim != 2:
+        raise ValueError(f"expected 2D matrix, got shape={arr.shape}")
+    if arr.shape[1] == 0:
+        return arr
+
+    active = np.any(arr != 0, axis=0)
+    if not np.any(active):
+        return arr[:, :0]
+
+    width = int(np.flatnonzero(active)[-1]) + 1
+    if width == arr.shape[1]:
+        return arr
+    return arr[:, :width]
+
+
+def load_matrix_array(path: str | os.PathLike[str]) -> np.ndarray:
+    return trim_trailing_zero_cols(np.load(path))
 
 def _worker_run_one_from_template(
     seed: int,
@@ -25,11 +47,24 @@ def _worker_run_one_from_template(
     bs_width: RankSchedule = RankSchedule.constant(1),
     todd_width: RankSchedule = RankSchedule.constant(1),
 ):
-    path = deepcopy(path)
-    todd = deepcopy(todd)
-    # self.todd = Todd(self.dao, max_depth)
+    # Todd.run only reads the incoming path and creates new child nodes.
+    # Deep-copying a GF(2^64) path can recurse through ~1000 Node.parent links.
     node, counters = todd.run(path, bs_width, todd_width, True, seed)
     return seed, node, counters
+
+
+def _copy_path_header(path: Path) -> Path:
+    new_path = Path()
+    new_path.final_node = path.final_node
+    new_path.ranks_thr = list(path.ranks_thr)
+    new_path.daos = deepcopy(path.daos)
+    new_path.active_params = deepcopy(path.active_params)
+    new_path.x0s = deepcopy(path.x0s)
+    return new_path
+
+
+def _copy_path_headers(paths: Sequence[Path]) -> List[Path]:
+    return [_copy_path_header(path) for path in paths]
 
 
 def find_rank(path, rank):
@@ -40,8 +75,8 @@ def find_rank(path, rank):
         
 def get_matrix(name: Optional[str] = None) -> Matrix:
     if name is None:
-        return Matrix.from_numpy(np.load(DEFAULT_MATRIX_PATH))
-    return Matrix.from_numpy(np.load(f"npy/{name}.npy"))
+        return Matrix.from_numpy(load_matrix_array(DEFAULT_MATRIX_PATH))
+    return Matrix.from_numpy(load_matrix_array(f"npy/{name}.npy"))
 
 
 #--------------------------- RANK ----------------------------
@@ -179,6 +214,9 @@ def dao_rank_to_str(daos: List[Dao], ranks: List[int]):
     # dict["max_reduction"] = int_rank_shedule_to_str([dao.mode.max_reduction for dao in daos], ranks)
     out["pool_scores"] = score_rank_shedule_to_str([dao.mode.pool_scores for dao in daos], ranks)
     out["final_scores"] = score_rank_shedule_to_str([dao.mode.final_scores for dao in daos], ranks)
+    out["enable_tohpe"] = int_rank_shedule_to_str([dao.mode.enable_tohpe for dao in daos], ranks)
+    out["enable_todd"] = int_rank_shedule_to_str([dao.mode.enable_todd for dao in daos], ranks)
+    out["try_only_tohpe"] = int_rank_shedule_to_str([dao.mode.try_only_tohpe for dao in daos], ranks)
     out["min_z_to_research"] = int_rank_shedule_to_str([dao.mode.min_z_to_research for dao in daos], ranks)
     out["gen_part"] = float_rank_shedule_to_str([dao.mode.gen_part for dao in daos], ranks)
     # dict["temperature"] = float_rank_shedule_to_str([dao.mode.temperature for dao in daos], ranks)
@@ -391,7 +429,6 @@ class BaseEvaluator:
         self.dao: Dao = Dao()
         if mat is None and path_name == "init":
             mat = get_matrix()
-            print(mat.rows)
             self.init_rank_thr = mat.rows
         elif path_name != "init":
             if init_rank_thr is None:
@@ -534,13 +571,13 @@ class BaseEvaluator:
             self.best_evals = [eval_offset + e for e in other.best_evals]
             self.best_eval = eval_offset + other.best_eval
             self._best_rank = other._best_rank
-            self.best_paths = deepcopy(other.best_paths)
+            self.best_paths = _copy_path_headers(other.best_paths)
             self.best_seed = getattr(other, "best_seed", None)
         elif other._best_rank == self._best_rank:
-            self.best_paths.extend(deepcopy(other.best_paths))
+            self.best_paths.extend(_copy_path_headers(other.best_paths))
             self.best_seen += other.best_seen
 
-    def run(self, params, seeds, max_workers=24):
+    def run(self, params, seeds, max_workers=1):
         if len(params) != len(self.active_params):
             raise RuntimeError(f"Num of params {len(params)} is not equal to the num of active params {len(self.active_params)}")
         self.insert(params)
@@ -763,6 +800,16 @@ class BaseEvaluator:
         if vals is not None:
             x = list(zip(x, vals))
         self.dao.mode.try_only_tohpe = _to_rank_schedule(x)
+
+    def set_enable_tohpe(self, x: Any, vals=None):
+        if vals is not None:
+            x = list(zip(x, vals))
+        self.dao.mode.enable_tohpe = _to_rank_schedule(x)
+
+    def set_enable_todd(self, x: Any, vals=None):
+        if vals is not None:
+            x = list(zip(x, vals))
+        self.dao.mode.enable_todd = _to_rank_schedule(x)
 
     def set_max_from_single_ns(self, x: Any, vals=None):
         if vals is not None:
