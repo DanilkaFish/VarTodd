@@ -15,15 +15,17 @@ from scripts.optimization_core.helper import (
     Matrix,
 )
 
-
-def _int_env(name: str, default: int) -> int:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        return default
+MAX_DEPTH = 1800
+EVAL_SEEDS = 1
+BASE_SEED = 40
+PSO_ITERS = 32
+PSO_PARTICLES = 8
+PSO_SEED_WORKERS = 2
+PSO_WORKERS: Optional[int] = None
+REFINE_ONCE = True
+PSO_REFINE_ITERS = 8
+PSO_REFINE_PARTICLES = 8
+PSO_REFINE_SEED_WORKERS = 2
 
 
 def _sigmoid(x: float) -> float:
@@ -58,11 +60,11 @@ class Evaluator(BaseEvaluator):
     def _pool_score(self) -> ExplorationScore:
         weights = _normalize(
             [
-                -1.0 + 2 * self.map_par(_sigmoid, 0),
                 self.map_par(_signed, 0),
                 self.map_par(_signed, 0),
                 self.map_par(_signed, 0),
-                0.0,
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
             ]
         )
         return ExplorationScore(weights=weights, centers=[0.0] * 5, pow=1)
@@ -70,11 +72,11 @@ class Evaluator(BaseEvaluator):
     def _final_score(self) -> FinalizationScore:
         weights = _normalize(
             [
-                -1.0 + 2 * self.map_par(_sigmoid, 0),
                 self.map_par(_signed, 0),
                 self.map_par(_signed, 0),
                 self.map_par(_signed, 0),
-                0.0,
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
                 0.0,
             ]
         )
@@ -95,8 +97,8 @@ class Evaluator(BaseEvaluator):
         self.set_final_scores(final_score)
         self.set_min_pool_size(1)
         self.set_temperature(0.01 + 0.09 * temp_bias)
-        self.set_num_samples(8 + int(14 * sample_budget))
-        self.set_max_pool_size(2 + int(2 * pool_budget))
+        self.set_num_samples(10 + int(40 * sample_budget))
+        self.set_max_pool_size(10 + int(30 * pool_budget))
         self.set_max_tohpe(5 + int(3*sample_budget))
         self.set_try_only_tohpe(1)
         self.set_enable_tohpe(1)
@@ -104,8 +106,8 @@ class Evaluator(BaseEvaluator):
         self.set_max_reduction(128)
         self.set_min_reduction(1)
         self.set_max_from_single_ns(4 + int(12 * single_budget))
-        self.set_tohpe_num_best(2 + int(2 * breadth_budget))
-        self.set_gen_part(0.8 + 0.2 * breadth_budget)
+        self.set_tohpe_num_best(4 + int(10 * breadth_budget))
+        self.set_gen_part(0.5 + 0.5 * breadth_budget)
         self.set_todd_width(1)
         self.set_beamsearch_width(1)
 
@@ -170,7 +172,7 @@ def run_pso(
         return np.asarray([], dtype=float)
 
     if workers is None:
-        workers = _int_env("VARTODD_PSO_WORKERS", min(particles, os.cpu_count() or 1))
+        workers = PSO_WORKERS if PSO_WORKERS is not None else min(particles, os.cpu_count() or 1)
     workers = max(1, min(int(workers), particles))
     seed_workers = max(1, int(seed_workers))
     executor = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
@@ -192,7 +194,7 @@ def run_pso(
         n_particles=particles,
         dimensions=n_params,
         options={"c1": 0.55, "c2": 0.45, "w": 0.72},
-        bounds=(np.full(n_params, -1.0), np.full(n_params, 1.0)),
+        bounds=(np.full(n_params, -2.0), np.full(n_params, 2.0)),
     )
 
     _, best_position = optimizer.optimize(objective, iters=iters, verbose=True)
@@ -202,37 +204,29 @@ def run_pso(
 def entrypoint(mat: Matrix):
     fun = Evaluator(
         mat=mat,
-        max_depth=_int_env("VARTODD_MAX_DEPTH", 1800),
-        seeds=_make_seeds(_int_env("VARTODD_EVAL_SEEDS", 1), _int_env("VARTODD_SEED", 40)),
+        max_depth=MAX_DEPTH,
+        seeds=_make_seeds(EVAL_SEEDS, BASE_SEED),
         enable_todd=0,
     )
-    fun = Evaluator(
-        path_name="i5103_m5103_f3771_d78840cd52f1", 
-        init_rank_thr=3800,
-        max_depth=_int_env("VARTODD_MAX_DEPTH", 1800),
-        seeds=_make_seeds(_int_env("VARTODD_EVAL_SEEDS", 2), _int_env("VARTODD_SEED", 40)),
-        enable_todd=0,
-        )
-    # xopt = run_pso(
-    #     fun,
-    #     iters=_int_env("VARTODD_PSO_ITERS", 32),
-    #     particles=_int_env("VARTODD_PSO_PARTICLES", 4),
-    #     seed_workers=_int_env("VARTODD_SEED_WORKERS", 1),
-    # )
-    # fun(xopt)
 
-    # if fun.best_paths and _int_env("VARTODD_REFINE_ONCE", 1):
-    #     best_rank = fun.best_paths[0].final_node.state.rows
-    #     rank_thr = max(best_rank + 1, (fun.init_rank + best_rank) // 2)
-    #     x_active = fun.set_up_new_init(0, rank_thr=rank_thr, xopt=xopt)
-    fun.enable_todd=1
-    # if x_active is not None:
     xopt = run_pso(
         fun,
-        iters=_int_env("VARTODD_PSO_REFINE_ITERS", 2),
-        particles=_int_env("VARTODD_PSO_REFINE_PARTICLES", 2),
-        seed_workers=_int_env("VARTODD_SEED_WORKERS", 2),
+        iters=PSO_ITERS,
+        particles=PSO_PARTICLES,
+        seed_workers=PSO_SEED_WORKERS,
     )
-    fun(xopt)
+
+    if fun.best_paths and REFINE_ONCE:
+        best_rank = fun.best_paths[0].final_node.state.rows
+        rank_thr = best_rank + 30
+        x_active = fun.set_up_new_init(0, rank_thr=rank_thr, xopt=xopt)
+        fun.enable_todd=1
+        if x_active is not None:
+            xopt = run_pso(
+                fun,
+                iters=PSO_REFINE_ITERS,
+                particles=PSO_REFINE_PARTICLES,
+                seed_workers=PSO_REFINE_SEED_WORKERS,
+            )
 
     return fun.get_best()

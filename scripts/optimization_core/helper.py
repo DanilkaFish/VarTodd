@@ -20,6 +20,10 @@ DEFAULT_MATRIX_PATH = "data/init_npy/other/ham15_high.npy"
 # DEFAULT_MATRIX_PATH = "data/init_npy/gf_mult_Vandaele_wo_ancilla/gf2^64_644310.npy"
 # DEFAULT_MATRIX_PATH = "data/init_npy/gf_mult_Vandaele_wo_ancilla/gf2^32_3228310.npy"
 
+DEFAULT_SEED_WORKERS = min(4, os.cpu_count() or 1)
+EXECUTOR_KIND = "process"
+PROGRAM_ID: Optional[str] = None
+
 
 def trim_trailing_zero_cols(arr: np.ndarray) -> np.ndarray:
     if arr.ndim != 2:
@@ -426,6 +430,7 @@ class BaseEvaluator:
         self.best_eval = 0
         self.total_eval = 0
         self.best_seen = 0
+        self.best_seed = None
         self.dao: Dao = Dao()
         if mat is None and path_name == "init":
             mat = get_matrix()
@@ -572,7 +577,7 @@ class BaseEvaluator:
             self.best_eval = eval_offset + other.best_eval
             self._best_rank = other._best_rank
             self.best_paths = _copy_path_headers(other.best_paths)
-            self.best_seed = getattr(other, "best_seed", None)
+            self.best_seed = other.best_seed
         elif other._best_rank == self._best_rank:
             self.best_paths.extend(_copy_path_headers(other.best_paths))
             self.best_seen += other.best_seen
@@ -584,10 +589,7 @@ class BaseEvaluator:
         self.reinit()
         # self.policy_setup(params)
         if max_workers is None:
-            default_workers = min(4, os.cpu_count() or 1)
-            max_workers = int(
-                os.environ.get("VARTODD_SEED_WORKERS", os.environ.get("VARTODD_MAX_WORKERS", default_workers))
-            )
+            max_workers = DEFAULT_SEED_WORKERS
         max_workers = max(1, min(int(max_workers), len(seeds)))
         if max_workers == 1:
             results = [
@@ -595,13 +597,13 @@ class BaseEvaluator:
                 for seed in seeds
             ]
         else:
-            executor_kind = os.environ.get("VARTODD_EXECUTOR", "process").strip().lower()
+            executor_kind = EXECUTOR_KIND.strip().lower()
             if executor_kind in {"process", "processes", "proc"}:
                 executor_cls = ProcessPoolExecutor
             elif executor_kind in {"thread", "threads", "threading"}:
                 executor_cls = ThreadPoolExecutor
             else:
-                raise ValueError("VARTODD_EXECUTOR must be 'thread' or 'process'")
+                raise ValueError("EXECUTOR_KIND must be 'thread' or 'process'")
 
             ex = self._get_executor(executor_cls, executor_kind, max_workers)
             futures = [
@@ -696,9 +698,8 @@ class BaseEvaluator:
             if self.init_rank_thr is not None
             else init_rank
         )
-        program_id = os.getenv("GIGAEVO_PROGRAM_ID")
-        if program_id:
-            return f"{name}i{init_rank}_m{mid_rank}_f{rank}_{program_id[:8]}"
+        if PROGRAM_ID:
+            return f"{name}i{init_rank}_m{mid_rank}_f{rank}_{PROGRAM_ID[:8]}"
         h = hashlib.blake2b(digest_size=6)
         h.update(str(init_rank).encode("utf-8"))
         h.update(str(mid_rank).encode("utf-8"))

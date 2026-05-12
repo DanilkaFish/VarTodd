@@ -3,47 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional
 
-#TODO ambiuguity of lib version
-try:
-    from pyvartodd.Release.pyvartodd import (  # type: ignore
-        CandidateExport,
-        ExplorationScore,
-        FinalizationScore,
-        Matrix,
-        PolicyConfig,
-        Result,
-        ScoringFunction,
-        Stats,
-        Tensor3D,
-        policy_iteration,
-    )
-except Exception:
-    try:
-        from pyvartodd.Debug.pyvartodd import (  # type: ignore
-            CandidateExport,
-            ExplorationScore,
-            FinalizationScore,
-            Matrix,
-            PolicyConfig,
-            Result,
-            ScoringFunction,
-            Stats,
-            Tensor3D,
-            policy_iteration,
-        )
-    except Exception:
-        from pyvartodd.pyvartodd import (  # type: ignore
-            CandidateExport,
-            ExplorationScore,
-            FinalizationScore,
-            Matrix,
-            PolicyConfig,
-            Result,
-            ScoringFunction,
-            Stats,
-            Tensor3D,
-            policy_iteration,
-        )
+from pyvartodd.Release.pyvartodd import (  # type: ignore
+    CandidateExport,
+    ExplorationScore,
+    FinalizationScore,
+    Matrix,
+    PolicyConfig,
+    Result,
+    ScoringFunction,
+    Stats,
+    Tensor3D,
+    policy_iteration,
+)
 
 
 @dataclass(slots=True)
