@@ -4,6 +4,7 @@
 #include "todd_generator.hpp"
 #include "typedef.hpp"
 
+#include <array>
 #include <algorithm>
 #include <memory>
 #include <pybind11/numpy.h>
@@ -291,7 +292,6 @@ py::class_<PyRNG>(m, "RNG")
     .def("rand_double", &PyRNG::rand_double, py::arg("low") = 0.0, py::arg("high") = 1.0)
     .def("random", &PyRNG::random_raw)
     .def("seed", &PyRNG::seed)
-    .def("sample_unique_bitvecs", &PyRNG::sample_unique_bitvectors)
     .def("sample_bitvec", &PyRNG::sample_bitvector);
 
 py::class_<CandidateExport>(m, "CandidateExport")
@@ -356,13 +356,15 @@ py::class_<CandidateExport>(m, "CandidateExport")
 py::class_<Stats>(m, "Stats")
     .def(py::init<>())
     .def_readwrite("total", &Stats::total)
+    .def_readwrite("z_researched", &Stats::z_researched)
     .def_readwrite("nonzero", &Stats::nonzero)
+    .def_readwrite("evaluated", &Stats::evaluated)
+    .def_readwrite("rejected", &Stats::rejected)
     .def_readwrite("mean_mr", &Stats::mean_mr)
     .def_readwrite("mean_basis", &Stats::mean_basis)
     .def_readwrite("mean_reduction", &Stats::mean_reduction)
     .def_readwrite("mean_score", &Stats::mean_score)
     .def_readwrite("accepted", &Stats::accepted)
-    .def_readwrite("accepted_non_improving", &Stats::accepted_non_improving)
     .def_readwrite("accepted_tohpe", &Stats::accepted_tohpe)
     .def_readwrite("max_tohpe_dim", &Stats::max_final_tohpe_dim)
     .def_readwrite("mean_tohpe_dim", &Stats::mean_final_tohpe_dim)
@@ -372,6 +374,7 @@ py::class_<Stats>(m, "Stats")
     .def_readwrite("max_bucket", &Stats::max_bucket)
     .def("__repr__", [](const Stats& s) {
         return "Stats(total=" + std::to_string((unsigned long long)s.total) +
+                ", z_researched=" + std::to_string((unsigned long long)s.z_researched) +
                 ", nonzero=" + std::to_string((unsigned long long)s.nonzero) +
                 ", mean_score=" + std::to_string(s.mean_score) + ", max_score=" + std::to_string(s.max_pool_score) +
                 ", max_basis=" + std::to_string((long long)s.max_basis) +
@@ -381,13 +384,13 @@ py::class_<Stats>(m, "Stats")
         [](const Stats& s) {
             return py::make_tuple(
                 s.total,
+                s.z_researched,
                 s.nonzero,
                 s.mean_mr,
                 s.mean_basis,
                 s.mean_reduction,
                 s.mean_score,
                 s.accepted,
-                s.accepted_non_improving,
                 s.accepted_tohpe,
                 s.max_final_tohpe_dim,
                 s.mean_final_tohpe_dim,
@@ -398,26 +401,59 @@ py::class_<Stats>(m, "Stats")
             );
         },
         [](py::tuple t) {
-            if (t.size() != 15)
+            if (t.size() != 14 && t.size() != 15 && t.size() != 16)
                 throw std::runtime_error("Invalid state!");
 
             Stats s;
-            
             s.total = t[0].cast<decltype(s.total)>();
-            s.nonzero = t[1].cast<decltype(s.nonzero)>();
-            s.mean_mr = t[2].cast<decltype(s.mean_mr)>();
-            s.mean_basis = t[3].cast<decltype(s.mean_basis)>();
-            s.mean_reduction = t[4].cast<decltype(s.mean_reduction)>();
-            s.mean_score = t[5].cast<decltype(s.mean_score)>();
-            s.accepted = t[6].cast<decltype(s.accepted)>();
-            s.accepted_non_improving = t[7].cast<decltype(s.accepted_non_improving)>();
-            s.accepted_tohpe = t[8].cast<decltype(s.accepted_tohpe)>();
-            s.max_final_tohpe_dim = t[9].cast<decltype(s.max_final_tohpe_dim)>();
-            s.mean_final_tohpe_dim = t[10].cast<decltype(s.mean_final_tohpe_dim)>();
-            s.max_pool_score = t[11].cast<decltype(s.max_pool_score)>();
-            s.max_basis = t[12].cast<decltype(s.max_basis)>();
-            s.max_reduction = t[13].cast<decltype(s.max_reduction)>();
-            s.max_bucket = t[14].cast<decltype(s.max_bucket)>();
+            if (t.size() == 16) {
+                s.z_researched = t[1].cast<decltype(s.z_researched)>();
+                s.nonzero = t[2].cast<decltype(s.nonzero)>();
+                s.mean_mr = t[3].cast<decltype(s.mean_mr)>();
+                s.mean_basis = t[4].cast<decltype(s.mean_basis)>();
+                s.mean_reduction = t[5].cast<decltype(s.mean_reduction)>();
+                s.mean_score = t[6].cast<decltype(s.mean_score)>();
+                s.accepted = t[7].cast<decltype(s.accepted)>();
+                s.accepted_tohpe = t[9].cast<decltype(s.accepted_tohpe)>();
+                s.max_final_tohpe_dim = t[10].cast<decltype(s.max_final_tohpe_dim)>();
+                s.mean_final_tohpe_dim = t[11].cast<decltype(s.mean_final_tohpe_dim)>();
+                s.max_pool_score = t[12].cast<decltype(s.max_pool_score)>();
+                s.max_basis = t[13].cast<decltype(s.max_basis)>();
+                s.max_reduction = t[14].cast<decltype(s.max_reduction)>();
+                s.max_bucket = t[15].cast<decltype(s.max_bucket)>();
+            } else if (t.size() == 15 && py::isinstance<py::int_>(t[2])) {
+                s.z_researched = t[1].cast<decltype(s.z_researched)>();
+                s.nonzero = t[2].cast<decltype(s.nonzero)>();
+                s.mean_mr = t[3].cast<decltype(s.mean_mr)>();
+                s.mean_basis = t[4].cast<decltype(s.mean_basis)>();
+                s.mean_reduction = t[5].cast<decltype(s.mean_reduction)>();
+                s.mean_score = t[6].cast<decltype(s.mean_score)>();
+                s.accepted = t[7].cast<decltype(s.accepted)>();
+                s.accepted_tohpe = t[8].cast<decltype(s.accepted_tohpe)>();
+                s.max_final_tohpe_dim = t[9].cast<decltype(s.max_final_tohpe_dim)>();
+                s.mean_final_tohpe_dim = t[10].cast<decltype(s.mean_final_tohpe_dim)>();
+                s.max_pool_score = t[11].cast<decltype(s.max_pool_score)>();
+                s.max_basis = t[12].cast<decltype(s.max_basis)>();
+                s.max_reduction = t[13].cast<decltype(s.max_reduction)>();
+                s.max_bucket = t[14].cast<decltype(s.max_bucket)>();
+            } else {
+                const bool legacy_extra_counter = t.size() == 15;
+                const std::size_t skip = legacy_extra_counter ? 1 : 0;
+                s.z_researched = s.total;
+                s.nonzero = t[1].cast<decltype(s.nonzero)>();
+                s.mean_mr = t[2].cast<decltype(s.mean_mr)>();
+                s.mean_basis = t[3].cast<decltype(s.mean_basis)>();
+                s.mean_reduction = t[4].cast<decltype(s.mean_reduction)>();
+                s.mean_score = t[5].cast<decltype(s.mean_score)>();
+                s.accepted = t[6].cast<decltype(s.accepted)>();
+                s.accepted_tohpe = t[7 + skip].cast<decltype(s.accepted_tohpe)>();
+                s.max_final_tohpe_dim = t[8 + skip].cast<decltype(s.max_final_tohpe_dim)>();
+                s.mean_final_tohpe_dim = t[9 + skip].cast<decltype(s.mean_final_tohpe_dim)>();
+                s.max_pool_score = t[10 + skip].cast<decltype(s.max_pool_score)>();
+                s.max_basis = t[11 + skip].cast<decltype(s.max_basis)>();
+                s.max_reduction = t[12 + skip].cast<decltype(s.max_reduction)>();
+                s.max_bucket = t[13 + skip].cast<decltype(s.max_bucket)>();
+            }
             
             return s;
         }
@@ -545,63 +581,96 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
 
     py::class_<PolicyConfig>(m, "PolicyConfig")
         .def(py::init<>())
-        .def(py::init<ExplorationScore, FinalizationScore, std::string, float, float, float, Int, Int, Int, Int, Int,
-                      Int, Int, Int, Int, Int, Int, bool, bool, bool>(),
-             py::arg("ExplorationScore") = ExplorationScore(), 
-             py::arg("FinalizationScore") = FinalizationScore(),
-             py::arg("selection") = "greedy",
-             py::arg("temperature") = 0.0f, 
-             py::arg("non_improving_prob") = 0.0f,
-             py::arg("gen_part") = 1.0f, 
-             py::arg("num_samples") = 64, 
-             py::arg("num_candidates") = 1,
-             py::arg("top_pool") = 1, 
-             py::arg("max_from_single_ns") = 10, 
-             py::arg("min_reduction") = 0,
-             py::arg("max_reduction") = k_single_sentinel<Int>(), 
-             py::arg("min_z_to_research") = 1 << 30,
-             py::arg("max_z_to_research") = 1 << 30,
-             py::arg("min_pool_size") = 1, 
-             py::arg("max_tohpe") = 1, 
-             py::arg("tohpe_sample") = 1, 
-             py::arg("try_only_tohpe") = true,
-             py::arg("enable_tohpe") = true,
-             py::arg("enable_todd") = true)
-        .def_readwrite("num_samples", &PolicyConfig::num_samples)
+        .def(py::init([](ExplorationScore es, FinalizationScore fs, std::string selection, float temperature,
+                         std::array<Int, 3> tohpe_vector_samples, std::array<Int, 3> todd_vector_samples,
+                         float bucket_temperature, float bucket_random_fraction, Int sparse_max_weight,
+                         Int num_candidates, Int top_pool, Int max_from_single_ns,
+                         Int min_reduction, Int max_reduction, Int min_z_to_research, Int max_z_to_research,
+                         Int min_pool_size, Int tohpe_pool_size, Int todd_pool_size, Int min_tohpe_actions,
+                         Int min_todd_actions, Int tohpe_sample, Int max_per_signature) {
+                 PolicyConfig c;
+                 c.escore                 = std::move(es);
+                 c.fscore                 = std::move(fs);
+                 c.selection              = std::move(selection);
+                 c.temperature            = temperature;
+                 c.tohpe_vector_samples   = tohpe_vector_samples;
+                 c.todd_vector_samples    = todd_vector_samples;
+                 c.bucket_temperature     = bucket_temperature;
+                 c.bucket_random_fraction = bucket_random_fraction;
+                 c.sparse_max_weight      = sparse_max_weight;
+                 c.num_candidates         = num_candidates;
+                 c.top_pool               = top_pool;
+                 c.max_from_single_ns     = max_from_single_ns;
+                 c.min_reduction          = min_reduction;
+                 c.max_reduction          = max_reduction;
+                 c.min_z_to_research      = min_z_to_research;
+                 c.max_z_to_research      = max_z_to_research;
+                 c.min_pool_size          = min_pool_size;
+                 c.tohpe_pool_size        = tohpe_pool_size;
+                 c.todd_pool_size         = todd_pool_size;
+                 c.min_tohpe_actions      = min_tohpe_actions;
+                 c.min_todd_actions       = min_todd_actions;
+                 c.tohpe_sample           = tohpe_sample;
+                 c.max_per_signature      = max_per_signature;
+                 return c;
+             }),
+             py::arg("ExplorationScore") = ExplorationScore(), py::arg("FinalizationScore") = FinalizationScore(),
+             py::arg("selection") = "greedy", py::arg("temperature") = 0.0f,
+             py::arg("tohpe_vector_samples") = std::array<Int, 3>{16, 32, 16},
+             py::arg("todd_vector_samples") = std::array<Int, 3>{16, 32, 16},
+             py::arg("bucket_temperature") = 0.0f, py::arg("bucket_random_fraction") = 0.0f,
+             py::arg("sparse_max_weight") = 8, py::arg("num_candidates") = 1,
+             py::arg("top_pool") = 1, py::arg("max_from_single_ns") = 10, py::arg("min_reduction") = 0,
+             py::arg("max_reduction") = k_single_sentinel<Int>(), py::arg("min_z_to_research") = 1 << 30,
+             py::arg("max_z_to_research") = 1 << 30, py::arg("min_pool_size") = 1,
+             py::arg("tohpe_pool_size") = 1, py::arg("todd_pool_size") = 1, py::arg("min_tohpe_actions") = 0,
+             py::arg("min_todd_actions") = 0, py::arg("tohpe_sample") = 1, py::arg("max_per_signature") = 2)
+        .def_readwrite("tohpe_vector_samples", &PolicyConfig::tohpe_vector_samples)
+        .def_readwrite("todd_vector_samples", &PolicyConfig::todd_vector_samples)
+        .def_readwrite("sparse_max_weight", &PolicyConfig::sparse_max_weight)
         .def_readwrite("num_candidates", &PolicyConfig::num_candidates)
         .def_readwrite("top_pool", &PolicyConfig::top_pool)
         .def_readwrite("selection", &PolicyConfig::selection)
         .def_readwrite("temperature", &PolicyConfig::temperature)
-        .def_readwrite("non_improving_prob", &PolicyConfig::non_improving_prob)
         .def_readwrite("max_from_single_ns", &PolicyConfig::max_from_single_ns)
         .def_readwrite("min_reduction", &PolicyConfig::min_reduction)
         .def_readwrite("max_reduction", &PolicyConfig::max_reduction)
         .def_readwrite("min_pool_size", &PolicyConfig::min_pool_size)
         .def_readwrite("min_z_to_research", &PolicyConfig::min_z_to_research)
         .def_readwrite("max_z_to_research", &PolicyConfig::max_z_to_research)
-        .def_readwrite("gen_part", &PolicyConfig::gen_part)
-        .def_readwrite("max_tohpe", &PolicyConfig::max_tohpe)
-        .def_readwrite("try_only_tohpe", &PolicyConfig::try_only_tohpe)
-        .def_readwrite("enable_tohpe", &PolicyConfig::enable_tohpe)
-        .def_readwrite("enable_todd", &PolicyConfig::enable_todd)
+        .def_readwrite("tohpe_pool_size", &PolicyConfig::tohpe_pool_size)
+        .def_readwrite("todd_pool_size", &PolicyConfig::todd_pool_size)
+        .def_readwrite("min_tohpe_actions", &PolicyConfig::min_tohpe_actions)
+        .def_readwrite("min_todd_actions", &PolicyConfig::min_todd_actions)
         .def_readwrite("tohpe_sample", &PolicyConfig::tohpe_sample)
+        .def_readwrite("bucket_temperature", &PolicyConfig::bucket_temperature)
+        .def_readwrite("bucket_random_fraction", &PolicyConfig::bucket_random_fraction)
+        .def_readwrite("max_per_signature", &PolicyConfig::max_per_signature)
         .def("__repr__", [](const PolicyConfig& c) {
-            return "PolicyConfig(num_samples=" + std::to_string((long long)c.num_samples) +
+            auto caps_to_string = [](std::array<Int, 3> caps) {
+                return "[" + std::to_string((long long)caps[0]) + ", " + std::to_string((long long)caps[1]) + ", " +
+                       std::to_string((long long)caps[2]) + "]";
+            };
+            return "PolicyConfig(tohpe_vector_samples=" + caps_to_string(c.tohpe_vector_samples) +
+                   ", todd_vector_samples=" + caps_to_string(c.todd_vector_samples) +
+                   ", sparse_max_weight=" + std::to_string((long long)c.sparse_max_weight) +
                    ", num_candidates=" + std::to_string((long long)c.num_candidates) +
                    ", top_pool=" + std::to_string((long long)c.top_pool) + ", selection='" + c.selection + "'" +
                    ", temperature=" + std::to_string(c.temperature) +
-                   ", non_improving_prob=" + std::to_string((long long)c.non_improving_prob) +
                    ", max_from_single_ns=" + std::to_string((long long)c.max_from_single_ns) +
                    ", min_reduction=" + std::to_string((long long)c.min_reduction) +
                    ", max_reduction=" + std::to_string((long long)c.max_reduction) +
                    ", min_pool_size=" + std::to_string((long long)c.min_pool_size) +
                    ", min_z_to_research=" + std::to_string((long long)c.min_z_to_research) +
-                   ", gen_part=" + std::to_string((long long)c.gen_part) +
-                   ", max_tohpe=" + std::to_string((long long)c.max_tohpe) +
-                   ", try_only_tohpe=" + std::to_string((long long)c.try_only_tohpe) +
-                   ", enable_tohpe=" + std::to_string((long long)c.enable_tohpe) +
-                   ", enable_todd=" + std::to_string((long long)c.enable_todd) +
-                   ", tohpe_sample=" + std::to_string((long long)c.tohpe_sample) + ")";
+                   ", max_z_to_research=" + std::to_string((long long)c.max_z_to_research) +
+                   ", tohpe_pool_size=" + std::to_string((long long)c.tohpe_pool_size) +
+                   ", todd_pool_size=" + std::to_string((long long)c.todd_pool_size) +
+                   ", min_tohpe_actions=" + std::to_string((long long)c.min_tohpe_actions) +
+                   ", min_todd_actions=" + std::to_string((long long)c.min_todd_actions) +
+                   ", tohpe_sample=" + std::to_string((long long)c.tohpe_sample) +
+                   ", bucket_temperature=" + std::to_string(c.bucket_temperature) +
+                   ", bucket_random_fraction=" + std::to_string(c.bucket_random_fraction) +
+                   ", max_per_signature=" + std::to_string((long long)c.max_per_signature) + ")";
         });
 
     m.def(

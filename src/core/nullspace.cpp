@@ -220,8 +220,7 @@ MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P_} {
 
 const MatrixWithData::FullToddData& MatrixWithData::full_todd() const { return full_todd_; }
 
-Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z)
-    : M_{M}, pair_endpoints_(M->P().rows()), z_{std::move(z)}, special_{-1} {
+Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move(z)}, special_{-1} {
     const ToddIndex& idx = M_->index();
 
     const SumEntry* ptr = nullptr;
@@ -233,7 +232,7 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z)
 }
 
 Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntry* ptr, index_t len)
-    : M_{M}, pair_endpoints_(M->P().rows()), z_{std::move(z)}, special_{-1} {
+    : M_{M}, z_{std::move(z)}, special_{-1} {
     init_from_entries_(ptr, len);
 }
 
@@ -253,8 +252,6 @@ void Witness::init_from_entries_(const SumEntry* ptr, index_t len) {
         break;
     }
 
-    Row seen_endpoints(P.rows());
-
     for (index_t t = 0; t < len; ++t) {
         if (!ptr[t].is_pair())
             continue;
@@ -263,12 +260,6 @@ void Witness::init_from_entries_(const SumEntry* ptr, index_t len) {
         assert(P[b].count() != 0);
         assert(special_ != a);
         assert(special_ != b);
-        if (seen_endpoints.test(a) || seen_endpoints.test(b))
-            pair_endpoints_disjoint_ = false;
-        seen_endpoints.set(a);
-        seen_endpoints.set(b);
-        pair_endpoints_.set(a);
-        pair_endpoints_.set(b);
         pairs_.emplace_back((int)a, (int)b);
     }
 }

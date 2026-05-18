@@ -414,7 +414,7 @@ index_t PyRNG::random_raw() { return rng(); }
 
 void PyRNG::seed(index_t seed_val) { rng.seed(seed_val); }
 
-auto& PyRNG::get_engine() { return rng; }
+std::minstd_rand& PyRNG::get_engine() { return rng; }
 
 static inline Row mask_to_bv(index_t dim, uint64_t mask) {
     Row v(dim);
@@ -441,7 +441,7 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
     return out;
 }
 
-inline std::vector<uint32_t> PyRNG::floyd_sample_0n(uint32_t n, index_t k)
+std::vector<uint32_t> PyRNG::floyd_sample_0n(uint32_t n, index_t k)
 {
     std::unordered_map<uint32_t, uint32_t> map;
     map.reserve(k * 2);
@@ -464,7 +464,7 @@ inline std::vector<uint32_t> PyRNG::floyd_sample_0n(uint32_t n, index_t k)
 }
 
 // Floyd sampling without replacement from [1..n], returns k unique ints, no retries.
-inline std::vector<uint32_t> PyRNG::floyd_sample_1n(uint32_t n, index_t k)
+std::vector<uint32_t> PyRNG::floyd_sample_1n(uint32_t n, index_t k)
 {
     std::unordered_map<uint32_t, uint32_t> map;
     map.reserve(k * 2);
@@ -483,69 +483,6 @@ inline std::vector<uint32_t> PyRNG::floyd_sample_1n(uint32_t n, index_t k)
 
         map[t] = y;
         out.push_back(x);
-    }
-    return out;
-}
-
-std::vector<Row> PyRNG::sample_unique_bitvectors(index_t dim, index_t num_samples, float generator_part) {
-    if (dim == 0 )
-        return {};
-
-    std::vector<Row> out;
-    uint32_t g = dim * generator_part;
-
-    // For dim > 30 sample generators and neglect collisions for sampling 
-    if (dim > 30) {
-        out.reserve(g + num_samples);
-
-        auto bits = floyd_sample_0n(dim, g);
-        for (auto b : bits) {
-            Row v(dim);
-            v.set(b);
-            out.push_back(std::move(v));
-        }
-        for (index_t i = 0; i < num_samples; i++) {
-            out.push_back(sample_bitvector(dim));
-        }
-        return out;
-    }
-    
-    const index_t Nminus1 = (1ULL << dim) - 1;
-
-    // When g + num_samples greaters than number of space vectors than return all the vectors
-    if (Nminus1 <= g + num_samples) {
-        out.reserve(Nminus1);
-        for (index_t i = 1; i < Nminus1 + 1; i++) 
-            out.push_back(mask_to_bv(dim, i));
-        return out;
-    }
-
-    // For dim <= 30 sample without collisions
-    out.reserve(g + num_samples);
-    // 1) sample generators
-    std::vector<uint32_t> gen_masks;
-    gen_masks.reserve(g);
-    auto bits = floyd_sample_0n(dim, g);
-    for (auto b : bits) { 
-        gen_masks.push_back(1u << b);
-        out.push_back(mask_to_bv(dim, 1u << b)); 
-    }
-    std::sort(gen_masks.begin(), gen_masks.end());
-
-    // 2) sample other 
-    auto compact = floyd_sample_1n(Nminus1 - g, num_samples);
-    auto compact_to_mask = [&](uint32_t c) -> uint32_t {
-        uint32_t x = c;
-        for (uint32_t e: gen_masks) {
-            if (e <= x) x++;
-            else break;
-        }
-        return x;
-    };
-
-    for (uint32_t c: compact) {
-        uint32_t m = compact_to_mask(c);
-        out.push_back(mask_to_bv(dim, m));
     }
     return out;
 }
