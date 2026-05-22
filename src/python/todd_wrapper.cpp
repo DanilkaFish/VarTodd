@@ -6,6 +6,7 @@
 
 #include <array>
 #include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <pybind11/numpy.h>
 #include <pybind11/operators.h>
@@ -33,6 +34,74 @@ static Row bitvec_from_list(std::size_t n, const std::vector<bool>& bits) {
         if (bits[i])
             bv.set(i);
     return bv;
+}
+
+static Matrix matrix_from_numpy(py::array_t<bool, py::array::c_style | py::array::forcecast> A) {
+    if (A.ndim() != 2)
+        throw py::value_error("Matrix.from_numpy expects 2D array");
+
+    struct RowEntry {
+        Row         row;
+        std::size_t order;
+    };
+
+    std::vector<RowEntry> entries;
+    entries.reserve(static_cast<std::size_t>(A.shape(0)));
+    auto buf = A.unchecked<2>();
+
+    for (index_t i = 0; i < static_cast<index_t>(A.shape(0)); ++i) {
+        Row row(static_cast<index_t>(A.shape(1)));
+        for (index_t j = 0; j < static_cast<index_t>(A.shape(1)); ++j) {
+            if (buf(i, j))
+                row.set(j);
+        }
+        if (!row.none())
+            entries.push_back({std::move(row), static_cast<std::size_t>(i)});
+    }
+
+    if (entries.empty())
+        return Matrix(0, 0);
+
+    std::ranges::sort(entries, [](const RowEntry& lhs, const RowEntry& rhs) { return (lhs.row <=> rhs.row) < 0; });
+
+    std::vector<RowEntry> kept;
+    kept.reserve(entries.size());
+    index_t active_cols = 0;
+    for (std::size_t i = 0; i < entries.size();) {
+        std::size_t j = i + 1;
+        while (j < entries.size() && entries[i].row == entries[j].row)
+            ++j;
+        if (((j - i) & 1u) != 0) {
+            auto first = entries.begin() + static_cast<std::ptrdiff_t>(i);
+            auto last  = entries.begin() + static_cast<std::ptrdiff_t>(j);
+            auto best  = std::min_element(first, last, [](const RowEntry& lhs, const RowEntry& rhs) {
+                return lhs.order < rhs.order;
+            });
+            RowCView row = best->row.cview();
+            for (auto p = row.find_first(); p != RowCView::npos; p = row.find_next(p))
+                active_cols = std::max(active_cols, static_cast<index_t>(p + 1));
+            kept.push_back({std::move(best->row), best->order});
+        }
+        i = j;
+    }
+
+    if (kept.empty())
+        return Matrix(0, 0);
+
+    std::ranges::sort(kept, [](const RowEntry& lhs, const RowEntry& rhs) { return lhs.order < rhs.order; });
+
+    Matrix M(0, active_cols);
+    M.reserve_rows(static_cast<index_t>(kept.size()));
+    for (const RowEntry& entry : kept) {
+        Row cropped(active_cols);
+        RowCView row = entry.row.cview();
+        for (auto p = row.find_first(); p != RowCView::npos && static_cast<index_t>(p) < active_cols;
+             p = row.find_next(p)) {
+            cropped.set(static_cast<index_t>(p));
+        }
+        M.push_back(cropped);
+    }
+    return M;
 }
 
 static py::tuple candidate_to_tuple(const CandidateExport& c) {
@@ -145,19 +214,7 @@ py::class_<Matrix>(m, "Matrix")
     .def_static("zeros", &Matrix::zeros, py::arg("rows"), py::arg("cols"))
     .def_static("identity", &Matrix::identity, py::arg("n"))
     .def_static("from_rows", &Matrix::from_rows, py::arg("rows"))
-    .def_static("from_numpy",
-                [](py::array_t<bool, py::array::c_style | py::array::forcecast> A) {
-                    if (A.ndim() != 2)
-                        throw py::value_error("Matrix.from_numpy expects 2D array");
-                    Matrix M(A.shape(0), A.shape(1));
-                    auto   buf = A.unchecked<2>();
-                    for (index_t i = 0; i < M.rows(); ++i) {
-                        for (index_t j = 0; j < M.cols(); ++j)
-                            if (buf(i, j))
-                                M[i].set(j);
-                    }
-                    return M;
-                })
+    .def_static("from_numpy", &matrix_from_numpy)
     .def("to_numpy",
             [](const Matrix& M) {
                 py::array_t<bool> out({M.rows(), M.cols()});
@@ -220,21 +277,9 @@ py::class_<Matrix>(m, "Matrix")
             }
             return arr;
         },
-        [](py::array_t<bool, 16> arr) {
-            if (arr.ndim() != 2) {
-                throw std::runtime_error("Invalid state: expected 2D numpy array");
-            }
-
-            Matrix M(arr.shape(0), arr.shape(1));
-            auto   buf = arr.unchecked<2>();
-            for (index_t i = 0; i < M.rows(); ++i) {
-                for (index_t j = 0; j < M.cols(); ++j) {
-                    if (buf(i, j)) {
-                        M[i].set(j);
-                    }
-                }
-            }
-            return M;
+        [](py::array_t<bool> arr) {
+            py::array_t<bool, py::array::c_style | py::array::forcecast> compact(arr);
+            return matrix_from_numpy(compact);
         }));
 py::class_<Tensor3D>(m, "Tensor3D")
     .def(py::init<index_t>())

@@ -1,8 +1,5 @@
 import hashlib
-import json
 import os
-import re
-from pathlib import Path as FsPath
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
@@ -14,6 +11,7 @@ from node import ExplorationScore, FinalizationScore, Matrix, Node, Tensor3D
 from path_store import PathStore, X0_LENGTH
 from todd import Todd
 
+MIN_SAVED_PATH_MARGIN = 10
 DEFAULT_MATRIX_PATH = "npy/gf2^9.npy"
 
 DEFAULT_MATRIX_PATH = "data/init_npy/other/ham15_high.npy"
@@ -22,7 +20,7 @@ DEFAULT_MATRIX_PATH = "data/init_npy/other/ham15_high.npy"
 
 DEFAULT_SEED_WORKERS = min(4, os.cpu_count() or 1)
 EXECUTOR_KIND = "process"
-PROGRAM_ID: Optional[str] = None
+PROGRAM_ID: Optional[str] = os.getenv("GIGAEVO_PROGRAM_ID")
 
 
 def trim_trailing_zero_cols(arr: np.ndarray) -> np.ndarray:
@@ -41,8 +39,27 @@ def trim_trailing_zero_cols(arr: np.ndarray) -> np.ndarray:
     return arr[:, :width]
 
 
+def normalize_matrix_array(arr: np.ndarray) -> np.ndarray:
+    arr = trim_trailing_zero_cols(arr)
+    arr = np.asarray(arr != 0, dtype=np.bool_)
+
+    if arr.shape[0] == 0 or arr.shape[1] == 0:
+        return arr[:0, :0]
+
+    arr = arr[np.any(arr, axis=1)]
+    if arr.shape[0] == 0:
+        return arr[:, :0]
+
+    rows, first_indices, counts = np.unique(arr, axis=0, return_index=True, return_counts=True)
+    keep = (counts & 1) == 1
+    order = np.argsort(first_indices[keep])
+    rows = rows[keep][order]
+    return trim_trailing_zero_cols(np.ascontiguousarray(rows))
+
+
 def load_matrix_array(path: str | os.PathLike[str]) -> np.ndarray:
-    return trim_trailing_zero_cols(np.load(path))
+    return normalize_matrix_array(np.load(path))
+
 
 def _worker_run_one_from_template(
     seed: int,
@@ -62,6 +79,8 @@ def _copy_path_header(path: Path) -> Path:
     new_path.final_node = path.final_node
     new_path.ranks_thr = list(path.ranks_thr)
     new_path.daos = deepcopy(path.daos)
+    new_path.bs_widths = deepcopy(path.bs_widths)
+    new_path.todd_widths = deepcopy(path.todd_widths)
     new_path.active_params = deepcopy(path.active_params)
     new_path.x0s = deepcopy(path.x0s)
     return new_path
@@ -99,6 +118,24 @@ def _to_rank_schedule(x: Any) -> "RankSchedule":
     if _is_rank_list(x):
         return RankSchedule.from_any(list(x))
     return RankSchedule.constant(x)
+
+def _to_sample_caps(x: Any) -> List[int]:
+    if isinstance(x, bool) or isinstance(x, (int, float)):
+        return [max(0, int(x)), 0, 0]
+    values = list(x)
+    if len(values) != 3:
+        raise ValueError(f"sample caps must have exactly 3 values: [one_hot, sparse, dense], got {x!r}")
+    return [max(0, int(v)) for v in values]
+
+def _to_caps_rank_schedule(x: Any) -> "RankSchedule":
+    """Accept RankSchedule | [(rank, [one_hot, sparse, dense]), ...] | caps."""
+    if isinstance(x, RankSchedule):
+        return x
+    if isinstance(x, zip):
+        x = [obj for obj in x]
+    if _is_rank_list(x):
+        return RankSchedule.from_any([(rank, _to_sample_caps(value)) for (rank, value) in x])
+    return RankSchedule.constant(_to_sample_caps(x))
 
 def _to_erank_schedule(x: Any) -> "RankSchedule":
     """Accept RankSchedule | [(rank, value), ...] | scalar and return RankSchedule."""
@@ -171,6 +208,22 @@ def int_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
                 break
     return [tuple(output_r), tuple(output_v)]
 
+def caps_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
+    output_r = []
+    output_v = []
+    for i, ds in enumerate(dss):
+        down = ranks[i]
+        up = ranks[i-1] if i > 0 else 1000000
+        for r, v in ds.points:
+            if r < up and r >= down:
+                output_r.append(r)
+                output_v.append(tuple(_to_sample_caps(v)))
+            elif r < down:
+                output_r.append(down)
+                output_v.append(tuple(_to_sample_caps(v)))
+                break
+    return [tuple(output_r), tuple(output_v)]
+
 def score_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
     output_r = []
     output_v = []
@@ -208,37 +261,24 @@ def score_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
     
 def dao_rank_to_str(daos: List[Dao], ranks: List[int]):
     out = {}
-    out["num_samples"] = int_rank_shedule_to_str([dao.mode.num_samples for dao in daos], ranks)
+    out["tohpe_vector_samples"] = caps_rank_shedule_to_str([dao.mode.tohpe_vector_samples for dao in daos], ranks)
+    out["todd_vector_samples"] = caps_rank_shedule_to_str([dao.mode.todd_vector_samples for dao in daos], ranks)
     out["top_pool"] = int_rank_shedule_to_str([dao.mode.top_pool for dao in daos], ranks)
-    # dict["try_only_tohpe"] = int_rank_shedule_to_str([dao.mode.try_only_tohpe for dao in daos], ranks)
-    # dict["max_tohpe"] = int_rank_shedule_to_str([dao.mode.max_tohpe for dao in daos], ranks)
-    # dict["num_tohpe_sample"] = int_rank_shedule_to_str([dao.mode.num_tohpe_sample for dao in daos], ranks)
-    # dict["max_from_single_ns"] = int_rank_shedule_to_str([dao.mode.max_from_single_ns for dao in daos], ranks)
-    # dict["min_reduction"] = int_rank_shedule_to_str([dao.mode.min_reduction for dao in daos], ranks)
-    # dict["max_reduction"] = int_rank_shedule_to_str([dao.mode.max_reduction for dao in daos], ranks)
+    out["tohpe_pool_size"] = int_rank_shedule_to_str([dao.mode.tohpe_pool_size for dao in daos], ranks)
+    out["todd_pool_size"] = int_rank_shedule_to_str([dao.mode.todd_pool_size for dao in daos], ranks)
     out["pool_scores"] = score_rank_shedule_to_str([dao.mode.pool_scores for dao in daos], ranks)
     out["final_scores"] = score_rank_shedule_to_str([dao.mode.final_scores for dao in daos], ranks)
-    out["enable_tohpe"] = int_rank_shedule_to_str([dao.mode.enable_tohpe for dao in daos], ranks)
-    out["enable_todd"] = int_rank_shedule_to_str([dao.mode.enable_todd for dao in daos], ranks)
-    out["try_only_tohpe"] = int_rank_shedule_to_str([dao.mode.try_only_tohpe for dao in daos], ranks)
     out["min_z_to_research"] = int_rank_shedule_to_str([dao.mode.min_z_to_research for dao in daos], ranks)
-    out["gen_part"] = float_rank_shedule_to_str([dao.mode.gen_part for dao in daos], ranks)
     # dict["temperature"] = float_rank_shedule_to_str([dao.mode.temperature for dao in daos], ranks)
-    # dict["non_improving_prob"] = float_rank_shedule_to_str(dao.mode.non_improving_prob)
     return out
 
-def print_uniform_by_rank(best_ranks, best_evals, max_lines=10):
+def _selected_rank_steps(best_ranks, max_lines=10):
     """
-    Print entries with uniformly spaced rank values, always including the last entry.
+    Return entries with uniformly spaced rank values, always including the last entry.
     """
-    s = ""
     n = len(best_ranks)
     if n <= max_lines:
-        for i, (rank, eval_step) in enumerate(zip(best_ranks, best_evals)):
-            if i == n - 1:
-                s += "Final "
-            s += f"Rank={rank} at eval={eval_step}\n"
-        return s
+        return list(range(n))
     
     # Get unique ranks and their first occurrence
     rank_to_step = {}
@@ -275,111 +315,40 @@ def print_uniform_by_rank(best_ranks, best_evals, max_lines=10):
         
         selected_steps = sorted(set(selected_steps))
     
-    for i, step in enumerate(selected_steps):
+    return selected_steps
+
+
+def print_uniform_by_rank(best_ranks, best_evals, max_lines=10, init_events=None):
+    """
+    Print rank improvements with init-rank timeline events.
+    """
+    selected_steps = _selected_rank_steps(best_ranks, max_lines=max_lines)
+    init_events = sorted(
+        {
+            (max(1, int(eval_step)), int(init_rank))
+            for eval_step, init_rank in (init_events or [])
+        }
+    )
+
+    s = ""
+    next_init = 0
+    for step in selected_steps:
         rank = best_ranks[step]
         eval_step = best_evals[step]
-        if i == len(selected_steps) - 1:
-            s+= "Final "
+        while next_init < len(init_events) and init_events[next_init][0] <= eval_step:
+            init_eval, init_rank = init_events[next_init]
+            s += f"init={init_rank} since eval={init_eval}\n"
+            next_init += 1
         s += f"Rank={rank} at eval={eval_step}\n"
+    while next_init < len(init_events):
+        init_eval, init_rank = init_events[next_init]
+        s += f"init={init_rank} since eval={init_eval}\n"
+        next_init += 1
     return s
 
 
 def summarize_path_backups(root_dir: str = "data/path_backups", top_k: int = 10, init_word: str = "init") -> str:
-    root = FsPath(root_dir)
-    if not root.exists() or not root.is_dir():
-        return (
-            "best_paths=[]\n"
-            "count_total=0\n"
-            "count_full=0\n"
-            "count_partial=0\n"
-            "best_rank_count=0"
-        )
-
-    top_k = max(1, int(top_k))
-    records = []
-    count_full = 0
-    count_partial = 0
-    name_re = re.compile(r"i(?P<init>\d+)_m(?P<thr>\d+)_f(?P<final>\d+)")
-
-    for backup_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        meta_path = backup_dir / "meta.json"
-        matrices_path = backup_dir / "matrices.npz"
-        if not meta_path.exists() or not matrices_path.exists():
-            continue
-
-        try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            paths_meta = meta.get("paths", [])
-            if not paths_meta:
-                continue
-
-            best_rank = None
-            with np.load(matrices_path) as data:
-                for p in paths_meta:
-                    keys = p.get("matrix_keys", [])
-                    if not keys:
-                        continue
-                    last_key = keys[-1]
-                    if last_key not in data:
-                        continue
-                    rank = int(data[last_key].shape[0])
-                    if best_rank is None or rank < best_rank:
-                        best_rank = rank
-
-            if best_rank is None:
-                continue
-
-            init_rank = None
-            init_thr_rank = None
-            match = name_re.search(backup_dir.name)
-            if match:
-                init_rank = int(match.group("init"))
-                init_thr_rank = int(match.group("thr"))
-                if init_thr_rank == init_rank:
-                    count_full += 1
-                elif init_thr_rank < init_rank:
-                    count_partial += 1
-
-            records.append(
-                (
-                    backup_dir.name,
-                    best_rank,
-                    init_thr_rank if init_thr_rank is not None else -1,
-                    init_rank,
-                )
-            )
-        except Exception:
-            continue
-
-    records.sort(key=lambda x: (x[1], -x[2], x[0]))
-
-    def _take_with_rank_cap(items, limit: int, per_rank_cap: int = 2):
-        out = []
-        rank_counts = {}
-        for name, rank, _init_thr, _init_rank in items:
-            if len(out) >= limit:
-                break
-            count = rank_counts.get(rank, 0)
-            if count >= per_rank_cap:
-                continue
-            out.append(name)
-            rank_counts[rank] = count + 1
-        return out
-
-    best_paths = _take_with_rank_cap(records, top_k)
-    total = len(records)
-    best_rank = min((r[1] for r in records), default=None)
-    best_rank_count = (
-        sum(1 for r in records if r[1] == best_rank) if best_rank is not None else 0
-    )
-    return (
-        f"best_paths={best_paths}\n"
-        f"count_total={total}\n"
-        f"count_full={count_full}\n"
-        f"count_partial={count_partial}\n"
-        f"best_rank_count={best_rank_count}"
-    )
+    return PathStore(root_dir=root_dir).summarize(top_k=top_k)
 
 class BaseEvaluator:
     todd: Todd
@@ -397,6 +366,7 @@ class BaseEvaluator:
     current_path: Path
     best_ranks: List[int]
     best_evals: List[int]
+    init_events: List[Tuple[int, int]]
 
     # Backward-compatible alias for typo "best_pathes"
     @property
@@ -407,6 +377,73 @@ class BaseEvaluator:
     def best_pathes(self, value: List[Path]) -> None:
         self.best_paths = value
 
+    @classmethod
+    def from_saved_path(
+        cls,
+        path_name: str,
+        rank_thr: Optional[int] = None,
+        margin: int = MIN_SAVED_PATH_MARGIN,
+        root_dir: str = "data/path_backups",
+        **kwargs: Any,
+    ) -> "BaseEvaluator":
+        if rank_thr is None:
+            rank_thr = cls._default_saved_path_rank_thr(path_name, margin=margin, root_dir=root_dir)
+        kwargs["path_name"] = path_name
+        kwargs["init_rank_thr"] = rank_thr
+        kwargs["path_root_dir"] = root_dir
+        return cls(**kwargs)
+
+    @staticmethod
+    def _path_rank_range(path: Path) -> Tuple[Optional[int], Optional[int]]:
+        if path.final_node is None:
+            return None, None
+        ranks = [int(node.state.rows) for node in path.final_node.path_from_root()]
+        if not ranks:
+            return None, None
+        return min(ranks), max(ranks)
+
+    @staticmethod
+    def _default_saved_path_rank_thr(
+        path_name: str,
+        *,
+        margin: int = MIN_SAVED_PATH_MARGIN,
+        root_dir: str = "data/path_backups",
+        dao_fallback: Optional[Dao] = None,
+    ) -> int:
+        store = PathStore(root_dir=root_dir)
+        paths = store.load(path_name, dao_fallback=dao_fallback or Dao())
+        if not paths:
+            raise RuntimeError(f"Empty paths for path_name={path_name}")
+        final_rank = int(paths[0].final_node.state.rows)
+        min_rank, max_rank = BaseEvaluator._path_rank_range(paths[0])
+        if min_rank is None or max_rank is None:
+            return final_rank + max(MIN_SAVED_PATH_MARGIN, int(margin))
+        requested = final_rank + max(MIN_SAVED_PATH_MARGIN, int(margin))
+        return max(min_rank - 1, min(requested, max_rank - 1))
+
+    @staticmethod
+    def _clamp_saved_path_rank_thr(path: Path, rank_thr: int) -> int:
+        final_rank = int(path.final_node.state.rows)
+        requested = max(int(rank_thr), final_rank + MIN_SAVED_PATH_MARGIN)
+        min_rank, max_rank = BaseEvaluator._path_rank_range(path)
+        if min_rank is None or max_rank is None:
+            return requested
+        if int(rank_thr) >= max_rank:
+            return int(rank_thr)
+        return max(min_rank - 1, min(requested, max_rank - 1))
+
+    @staticmethod
+    def _validate_saved_path_threshold(path: Path, path_name: str, rank_thr: int) -> None:
+        if path.branch_path_at(rank_thr=rank_thr) is not None:
+            return
+        min_rank, max_rank = BaseEvaluator._path_rank_range(path)
+        raise ValueError(
+            f"cannot extract init matrix at rank_thr={rank_thr} from {path_name} "
+            f"(path rank range {min_rank}-{max_rank}). "
+            f"Use Evaluator.from_saved_path({path_name!r}, margin=<chosen_margin>, max_depth=...) "
+            f"or choose rank_thr below {max_rank}."
+        )
+
     def __init__(
         self,
         path_name: str = "init",
@@ -416,55 +453,45 @@ class BaseEvaluator:
         fin_rank: int = 161,
         shedule: str = "rank",
         fill_tcounts: bool = False,
+        path_root_dir: str = "data/path_backups",
     ):
         self.with_report = False
         self.current_path = Path()
         self.is_init = True
         self.loaded_rank = None
         self.loaded_path_name = None
+        self.loaded_path_root_dir = path_root_dir
         self.init_rank_thr = init_rank_thr
         self.best_paths = []
         self.best_ranks = []
         self.best_evals = []
-        self._best_rank = 100000
+        self._best_rank = 10000
         self.best_eval = 0
         self.total_eval = 0
         self.best_seen = 0
         self.best_seed = None
         self.dao: Dao = Dao()
+        self.max_depth = max_depth
         if mat is None and path_name == "init":
             mat = get_matrix()
             self.init_rank_thr = mat.rows
         elif path_name != "init":
             if init_rank_thr is None:
-                raise ValueError("init_rank_thr must be provided when path_name is not 'init'")
-            self.loaded_path_name = path_name
-            self.load_path(path_name)
-            self.loaded_rank = self.best_paths[0].final_node.state.rows
-            init_path = self.best_paths[0].branch_path_at(rank_thr=init_rank_thr)
-            if init_path is None:
-                path_nodes = self.best_paths[0].final_node.path_from_root()
-                ranks = [node.state.rows for node in path_nodes]
-                min_rank = min(ranks) if ranks else None
-                max_rank = max(ranks) if ranks else None
-                raise ValueError(
-                    f"cannot extract init matrix at rank_thr={init_rank_thr} from {path_name} "
-                    f"(path rank range {min_rank}-{max_rank})"
-                )
-            mat = init_path.final_node.state
-            # Preserve incoming info from the loaded path
-            self.current_path = init_path
-            if self.current_path.daos:
-                self.dao = deepcopy(self.current_path.daos[-1])
-            self.best_paths = []
-            self.best_ranks = []
+                init_rank_thr = self._default_saved_path_rank_thr(path_name, root_dir=path_root_dir)
+                self.init_rank_thr = init_rank_thr
+            else:
+                loaded_paths = PathStore(root_dir=path_root_dir).load(path_name, dao_fallback=self.dao)
+                if loaded_paths:
+                    init_rank_thr = self._clamp_saved_path_rank_thr(loaded_paths[0], int(init_rank_thr))
+                    self.init_rank_thr = init_rank_thr
+            mat = self._load_saved_path_as_init(path_name, rank_thr=init_rank_thr, root_dir=path_root_dir)
         if self.current_path.final_node is None:
             self.current_path.final_node = Node(mat)
         self.init_rank = mat.rows
+        self.init_events = [(1, int(self.init_rank))]
         self.fin_rank = fin_rank
         self.shedule = shedule
         self.todd = Todd(self.dao, max_depth)
-        self.max_depth = max_depth
         self.tcount = []
         self.active_params = []
         self.best_params = []
@@ -472,9 +499,56 @@ class BaseEvaluator:
         self._executor_key = None
         # self
         self.x0 = [0 for i in range(X0_LENGTH)]
+        if not self.is_init and self.current_path.x0s:
+            self.x0 = self.current_path.x0s[-1]
 
             
         self.reinit()    
+
+    def _record_init_event(self) -> None:
+        eval_step = max(1, int(self.total_eval))
+        init_rank = int(self.current_path.final_node.state.rows)
+        event = (eval_step, init_rank)
+        if not self.init_events or self.init_events[-1] != event:
+            self.init_events.append(event)
+
+    def _load_saved_path_as_init(
+        self,
+        path_name: str,
+        *,
+        rank_thr: int,
+        root_dir: str = "data/path_backups",
+        xopt=None,
+    ) -> Matrix:
+        self.loaded_path_name = path_name
+        self.loaded_path_root_dir = root_dir
+        self.load_path(path_name, root_dir=root_dir)
+        loaded_path = self.best_paths[0]
+        self.loaded_rank = int(loaded_path.final_node.state.rows)
+        self.init_rank_thr = int(rank_thr)
+        self._validate_saved_path_threshold(loaded_path, path_name, int(rank_thr))
+        PathStore(root_dir=root_dir).record_load(path_name, init_rank_thr=int(rank_thr))
+
+        init_path = loaded_path.branch_path_at(rank_thr=int(rank_thr))
+        self.current_path = init_path
+        self.is_init = False
+        if self.current_path.daos:
+            self.dao = deepcopy(self.current_path.daos[-1])
+        if hasattr(self, "todd"):
+            self.todd = Todd(self.dao, self.max_depth)
+        if xopt is not None and hasattr(self, "active_params"):
+            self.insert(xopt)
+        elif init_path.x0s and hasattr(self, "x0"):
+            self.x0 = init_path.x0s[-1]
+
+        self.best_paths = []
+        self.best_ranks = []
+        self.best_evals = []
+        self._best_rank = 100000
+        self.best_eval = 0
+        self.best_seen = 0
+        self.best_seed = None
+        return init_path.final_node.state
 
     def set_up_new_init(self, path_num:int, rank_thr:int, xopt=None):
 
@@ -486,6 +560,7 @@ class BaseEvaluator:
         self.current_path = new_path
         self.dao = deepcopy(self.current_path.daos[-1])
         self.todd = Todd(self.dao, self.max_depth)
+        self._record_init_event()
         if xopt is not None:
             self.insert(xopt)
         else:
@@ -505,7 +580,7 @@ class BaseEvaluator:
     def best_rank(self):
         return self._best_rank
 
-    def map_par(self, mapping: callable, thr: int, **kwargs):
+    def map_par(self, mapping: callable, thr: int = 0, **kwargs):
         if self.init.rows > thr:
             self.active_params.append(self.idx)
         self.idx += 1
@@ -542,9 +617,9 @@ class BaseEvaluator:
             self._executor_key = key
         return self._executor
 
-    def close_workers(self):
+    def close_workers(self, wait: bool = True, cancel_futures: bool = False):
         if self._executor is not None:
-            self._executor.shutdown(wait=True, cancel_futures=False)
+            self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
             self._executor = None
             self._executor_key = None
 
@@ -569,11 +644,16 @@ class BaseEvaluator:
         eval_offset = self.total_eval
         self.total_eval += other.total_eval
         self.tcount.extend(other.tcount)
+        other_init_events = getattr(other, "init_events", [(1, int(other.init_rank))])
 
         if other._best_rank < self._best_rank:
             self.best_seen = other.best_seen
             self.best_ranks = list(other.best_ranks)
             self.best_evals = [eval_offset + e for e in other.best_evals]
+            self.init_events = [
+                (max(1, eval_offset + eval_step), init_rank)
+                for eval_step, init_rank in other_init_events
+            ]
             self.best_eval = eval_offset + other.best_eval
             self._best_rank = other._best_rank
             self.best_paths = _copy_path_headers(other.best_paths)
@@ -581,6 +661,39 @@ class BaseEvaluator:
         elif other._best_rank == self._best_rank:
             self.best_paths.extend(_copy_path_headers(other.best_paths))
             self.best_seen += other.best_seen
+
+    def _record_run_result(self, seed, node, counters, mats_ranks):
+        rank = node.state.rows
+        mats_ranks.append(rank)
+        self.total_eval += counters[0]
+        self.tcount.append(rank)
+        if rank < self._best_rank:
+            self.best_seen = 0
+            self.best_ranks.append(rank)
+            self.best_evals.append(self.total_eval)
+            self.best_eval = self.total_eval
+            self._best_rank = rank
+            self.best_paths = [
+                self.current_path.branch_path(
+                    node,
+                    self.dao,
+                    self.x0,
+                    self.bs_width,
+                    self.todd_width,
+                )
+            ]
+        if rank == self._best_rank:
+            self.best_paths.append(
+                self.current_path.branch_path(
+                    node,
+                    self.dao,
+                    self.x0,
+                    self.bs_width,
+                    self.todd_width,
+                )
+            )
+            self.best_seen += counters[1]
+            self.best_seed = seed
 
     def run(self, params, seeds, max_workers=1):
         if len(params) != len(self.active_params):
@@ -618,25 +731,14 @@ class BaseEvaluator:
 
         mats_ranks = []
         for seed, node, counters in results:
-            rank = node.state.rows
-            mats_ranks.append(rank)
-            self.total_eval += counters[0]
-            self.tcount.append(rank)
-            if rank < self._best_rank:
-                self.best_seen = 0
-                self.best_ranks.append(rank)
-                self.best_evals.append(self.total_eval)
-                self.best_eval = self.total_eval
-                self._best_rank = rank
-                self.best_paths = [self.current_path.branch_path(node, self.dao, self.x0)]
-            if rank == self._best_rank:
-                self.best_paths.append(self.current_path.branch_path(node, self.dao, self.x0))
-                self.best_seen += counters[1]
-                self.best_seed = seed
+            self._record_run_result(seed, node, counters, mats_ranks)
         return mats_ranks
 
-    def get_best(self):
-        self.close_workers()
+    def get_best(self, timeout_salvage: bool = False):
+        self.close_workers(wait=not timeout_salvage, cancel_futures=timeout_salvage)
+        if not self.best_paths:
+            raise RuntimeError("no completed best path available")
+        best_path = self._pick_path_for_save()
         reuse_note = ""
         load_note = ""
         if self.loaded_rank is not None:
@@ -646,31 +748,80 @@ class BaseEvaluator:
             if self.init_rank_thr is not None:
                 load_note += f"\ninit_rank_thr: {self.init_rank_thr}"
         if not self.is_init:
-            if self.best_rank < self.loaded_rank:
-                self.path_name = self.save_path("")
+            child_improved_loaded = self.best_rank < self.loaded_rank
+            parent_info = {
+                "parent_path_name": self.loaded_path_name,
+                "loaded_rank": int(self.loaded_rank),
+                "init_rank_thr": int(self.init_rank_thr) if self.init_rank_thr is not None else None,
+                "child_rank": int(self.best_rank),
+                "child_improved_loaded": bool(child_improved_loaded),
+            }
+            self.path_name = self.save_path(
+                "",
+                root_dir=self.loaded_path_root_dir,
+                parent_info=parent_info,
+                path=best_path,
+            )
+            if child_improved_loaded:
                 reuse_note = f"\nloaded_path_rank: {self.loaded_rank}\nloaded_path_improved: 1"
             else:
                 reuse_note = (
                     f"\nNOTE: no improvement over loaded path "
-                    f"(loaded_rank={self.loaded_rank}, best_rank={self.best_rank})"
+                    f"(loaded_rank={self.loaded_rank}, best_rank={self.best_rank}); "
+                    f"saved_child_path={self.path_name}"
+                )
+            if self.loaded_path_name is not None and self.loaded_rank is not None:
+                PathStore(root_dir=self.loaded_path_root_dir).record_result(
+                    self.loaded_path_name,
+                    loaded_rank=int(self.loaded_rank),
+                    child_rank=int(self.best_rank),
+                    init_rank_thr=self.init_rank_thr,
                 )
         else:
-            self.path_name = self.save_path("")
+            self.path_name = self.save_path("", path=best_path)
+        stats_start_rank = self._path_stats_start_rank()
         return (
-            self.best_paths[0].final_node.state.to_numpy(), 
-            self.best_paths[0].format_path_stats_tiny(),
+            best_path.final_node.state.to_numpy(), 
+            best_path.format_path_stats(start_rank=stats_start_rank),
             "\nbest_policy:\n" +
-            str(dao_rank_to_str(self.best_paths[0].daos, self.best_paths[0].ranks_thr + [0])) + "\nsearch_stat:\n" +
+            str(dao_rank_to_str(best_path.daos, best_path.ranks_thr + [0])) + "\nsearch_stat:\n" +
             f"rank 0.9q={np.quantile(self.tcount, 0.9) if self.tcount else 'n/a'} \n" +
             f"rank 0.1q={np.quantile(self.tcount, 0.1) if self.tcount else 'n/a'} \n" +
-            print_uniform_by_rank(self.best_ranks, self.best_evals, 8) +
+            print_uniform_by_rank(self.best_ranks, self.best_evals, 8, self.init_events) +
             f"total_evals: {self.total_eval}" +
             f"\nbest_seen_times: {self.best_seen}" + 
+            (f"\ntimeout_salvaged: 1" if timeout_salvage else "") +
             reuse_note +
             load_note +
             f"\nevo path statistics:\n{summarize_path_backups(top_k=11)}" +
             f"\nthis path name: {self.path_name}"
             )
+
+    def _path_stats_start_rank(self) -> Optional[int]:
+        if not getattr(self, "init_events", None):
+            return None
+        if self.best_eval:
+            ranks = [
+                int(init_rank)
+                for eval_step, init_rank in self.init_events
+                if int(eval_step) <= int(self.best_eval)
+            ]
+        else:
+            ranks = [int(init_rank) for _eval_step, init_rank in self.init_events]
+        if not ranks:
+            return None
+        return max(ranks)
+
+    def _path_name_mid_rank(self, path: Path) -> int:
+        rank = int(path.final_node.state.rows)
+        path_root = path.final_node.path_from_root()
+        init_rank = int(path_root[0].state.rows) if path_root else rank
+        stats_start_rank = self._path_stats_start_rank()
+        if stats_start_rank is not None:
+            return int(stats_start_rank)
+        if self.init_rank_thr is not None:
+            return int(self.init_rank_thr)
+        return init_rank
 
     def _path_depth(self, path: Path) -> int:
         depth = 0
@@ -693,11 +844,7 @@ class BaseEvaluator:
         path_root = path.final_node.path_from_root()
         init_rank = int(path_root[0].state.rows) if path_root else rank
         mat = path.final_node.state.to_numpy()
-        mid_rank = (
-            int(self.init_rank_thr)
-            if self.init_rank_thr is not None
-            else init_rank
-        )
+        mid_rank = self._path_name_mid_rank(path)
         if PROGRAM_ID:
             return f"{name}i{init_rank}_m{mid_rank}_f{rank}_{PROGRAM_ID[:8]}"
         h = hashlib.blake2b(digest_size=6)
@@ -707,11 +854,24 @@ class BaseEvaluator:
         h.update(mat.tobytes())
         return f"{name}i{init_rank}_m{mid_rank}_f{rank}_{h.hexdigest()}"
 
-    def save_path(self, name: str, root_dir: str = "data/path_backups", store_daos: bool = True, auto_hash: bool = True) -> str:
+    def save_path(
+        self,
+        name: str,
+        root_dir: str = "data/path_backups",
+        store_daos: bool = True,
+        auto_hash: bool = True,
+        parent_info: Optional[dict[str, Any]] = None,
+        path: Optional[Path] = None,
+    ) -> str:
         store = PathStore(root_dir=root_dir)
-        best_path = self._pick_path_for_save()
+        best_path = path if path is not None else self._pick_path_for_save()
         save_name = self._auto_hashed_name(name, best_path) if auto_hash else name
-        store.save(save_name, [best_path], store_daos=store_daos)
+        store.save(
+            save_name,
+            [best_path],
+            store_daos=store_daos,
+            parent_info=parent_info,
+        )
         return save_name
 
     def load_path(self, name: str, root_dir: str = "data/path_backups", dao_fallback: Optional[Dao] = None):
@@ -742,15 +902,20 @@ class BaseEvaluator:
             x = list(zip(x, vals))
         self.dao.mode.pool_scores = _to_erank_schedule(x)
 
-    def set_num_samples(self, x: Any, vals=None):
+    def set_tohpe_vector_samples(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
-        self.dao.mode.num_samples = _to_rank_schedule(x)
+        self.dao.mode.tohpe_vector_samples = _to_caps_rank_schedule(x)
 
-    def set_gen_part(self, x: Any, vals=None):
+    def set_todd_vector_samples(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
-        self.dao.mode.gen_part = _to_rank_schedule(x)
+        self.dao.mode.todd_vector_samples = _to_caps_rank_schedule(x)
+
+    def set_sparse_max_weight(self, x: Any, vals=None):
+        if vals is not None:
+            x = list(zip(x, vals))
+        self.dao.mode.sparse_max_weight = _to_rank_schedule(x)
 
     def set_beamsearch_width(self, x: Any, vals=None):
         if vals is not None:
@@ -782,45 +947,55 @@ class BaseEvaluator:
             x = list(zip(x, vals))
         self.dao.mode.temperature = _to_rank_schedule(x)
 
-    def set_non_improving_prob(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.non_improving_prob = _to_rank_schedule(x)
-
     def set_max_pool_size(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
         self.dao.mode.top_pool = _to_rank_schedule(x)
 
-    def set_max_tohpe(self, x: Any, vals=None):
+    def set_tohpe_pool_size(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
-        self.dao.mode.max_tohpe = _to_rank_schedule(x)
+        self.dao.mode.tohpe_pool_size = _to_rank_schedule(x)
 
-    def set_try_only_tohpe(self, x: Any, vals=None):
+    def set_todd_pool_size(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
-        self.dao.mode.try_only_tohpe = _to_rank_schedule(x)
+        self.dao.mode.todd_pool_size = _to_rank_schedule(x)
 
-    def set_enable_tohpe(self, x: Any, vals=None):
+    def set_min_tohpe_actions(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
-        self.dao.mode.enable_tohpe = _to_rank_schedule(x)
+        self.dao.mode.min_tohpe_actions = _to_rank_schedule(x)
 
-    def set_enable_todd(self, x: Any, vals=None):
+    def set_min_todd_actions(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
-        self.dao.mode.enable_todd = _to_rank_schedule(x)
+        self.dao.mode.min_todd_actions = _to_rank_schedule(x)
 
     def set_max_from_single_ns(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
         self.dao.mode.max_from_single_ns = _to_rank_schedule(x)
 
-    def set_tohpe_num_best(self, x: Any, vals=None):
+    def set_tohpe_sample(self, x: Any, vals=None):
         if vals is not None:
             x = list(zip(x, vals))
-        self.dao.mode.num_tohpe_sample = _to_rank_schedule(x)
+        self.dao.mode.tohpe_sample = _to_rank_schedule(x)
+
+    def set_bucket_temperature(self, x: Any, vals=None):
+        if vals is not None:
+            x = list(zip(x, vals))
+        self.dao.mode.bucket_temperature = _to_rank_schedule(x)
+
+    def set_bucket_random_fraction(self, x: Any, vals=None):
+        if vals is not None:
+            x = list(zip(x, vals))
+        self.dao.mode.bucket_random_fraction = _to_rank_schedule(x)
+
+    def set_max_per_signature(self, x: Any, vals=None):
+        if vals is not None:
+            x = list(zip(x, vals))
+        self.dao.mode.max_per_signature = _to_rank_schedule(x)
 
     def set_min_reduction(self, x: Any, vals=None):
         if vals is not None:

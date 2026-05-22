@@ -7,15 +7,98 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <ranges>
 #include <stdexcept>
+#include <vector>
 
 namespace todd {
 
 namespace {
 
 static void or_shifted(RowView dst, index_t offset, RowCView src) noexcept;
+
+static std::vector<Row> transformed_rows_canonical(const Matrix& P, RowCView z, RowCView y) {
+    struct RowEntry {
+        Row         row;
+        std::size_t order;
+    };
+
+    std::vector<RowEntry> rows;
+    rows.reserve((std::size_t)P.rows() + 1);
+
+    for (index_t i = 0; i < P.rows(); ++i) {
+        Row row = y.test(i) ? (P[i] ^ z) : Row(P[i]);
+        if (!row.none())
+            rows.push_back({std::move(row), static_cast<std::size_t>(i)});
+    }
+    if ((y.count() & 1u) != 0 && !z.none())
+        rows.push_back({Row(z), static_cast<std::size_t>(P.rows())});
+
+    std::ranges::sort(rows, [](const RowEntry& lhs, const RowEntry& rhs) { return (lhs.row <=> rhs.row) < 0; });
+
+    std::vector<RowEntry> kept;
+    kept.reserve(rows.size());
+    for (std::size_t i = 0; i < rows.size();) {
+        std::size_t j = i + 1;
+        while (j < rows.size() && rows[i].row == rows[j].row)
+            ++j;
+        if (((j - i) & 1u) != 0) {
+            auto first = rows.begin() + static_cast<std::ptrdiff_t>(i);
+            auto last  = rows.begin() + static_cast<std::ptrdiff_t>(j);
+            auto best  = std::min_element(first, last, [](const RowEntry& lhs, const RowEntry& rhs) {
+                return lhs.order < rhs.order;
+            });
+            kept.push_back({std::move(best->row), best->order});
+        }
+        i = j;
+    }
+
+    std::ranges::sort(kept, [](const RowEntry& lhs, const RowEntry& rhs) { return lhs.order < rhs.order; });
+
+    std::vector<Row> out;
+    out.reserve(kept.size());
+    for (auto& entry : kept)
+        out.push_back(std::move(entry.row));
+    return out;
+}
+
+static Matrix exact_apply(const Matrix& P, RowCView z, RowCView y) {
+    auto rows = transformed_rows_canonical(P, z, y);
+    Matrix out(0, P.cols());
+    out.reserve_rows((index_t)rows.size());
+    for (const Row& row : rows)
+        out.push_back(row);
+    return out;
+}
+
+static int exact_rank_divergence(const Matrix& P, RowCView z, RowCView y) {
+    const auto rows = transformed_rows_canonical(P, z, y);
+    return static_cast<int>(P.rows()) - static_cast<int>(rows.size());
+}
+
+#ifndef NDEBUG
+static bool rows_are_canonical(const Matrix& rows) {
+    std::vector<Row> seen;
+    seen.reserve(rows.rows());
+    for (index_t i = 0; i < rows.rows(); ++i) {
+        if (rows[i].none())
+            return false;
+        seen.emplace_back(rows[i]);
+    }
+    std::ranges::sort(seen);
+    for (std::size_t i = 1; i < seen.size(); ++i) {
+        if (seen[i - 1] == seen[i])
+            return false;
+    }
+    return true;
+}
+
+static bool rows_are_linearly_independent(const Matrix& rows) {
+    return basis_gauss_elimination(Matrix(rows)).rows() == rows.rows();
+}
+#endif
 
 // Build both TOHPE and full-TODD data from one elimination pass over L(P).
 static auto build_matrix_with_data_precompute(const Matrix& P)
@@ -33,6 +116,7 @@ static auto build_matrix_with_data_precompute(const Matrix& P)
     Matrix tohpe_basis = extract_basis(Y, pivots);
 #ifndef NDEBUG
     assert(tohpe_basis == get_tohpe_basis(P));
+    assert(rows_are_linearly_independent(tohpe_basis));
 #endif
 
     MatrixWithData::FullToddData out;
@@ -216,6 +300,9 @@ MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P_} {
     auto precomputed = build_matrix_with_data_precompute(P_);
     tohpe_basis_     = std::move(precomputed.first);
     full_todd_       = std::move(precomputed.second);
+#ifndef NDEBUG
+    assert(rows_are_linearly_independent(tohpe_basis_));
+#endif
 }
 
 const MatrixWithData::FullToddData& MatrixWithData::full_todd() const { return full_todd_; }
@@ -243,13 +330,21 @@ void Witness::init_from_entries_(const SumEntry* ptr, index_t len) {
     const Matrix& P = M_->P();
     const index_t m = P.rows();
     pairs_.reserve((std::size_t)(m / 2));
+    pair_endpoints_ = Row(m);
+    simple_entries_ = true;
 
     for (index_t t = 0; t < len; ++t) {
         if (ptr[t].is_pair())
             continue;
         const index_t a = ptr[t].a;
-        special_        = (int)a;
-        break;
+        if (special_ == -1) {
+            special_ = (int)a;
+        } else {
+            simple_entries_ = false;
+        }
+        if (pair_endpoints_.test(a))
+            simple_entries_ = false;
+        pair_endpoints_.set(a);
     }
 
     for (index_t t = 0; t < len; ++t) {
@@ -257,9 +352,12 @@ void Witness::init_from_entries_(const SumEntry* ptr, index_t len) {
             continue;
         const index_t a = ptr[t].a;
         const index_t b = ptr[t].b;
-        assert(P[b].count() != 0);
-        assert(special_ != a);
-        assert(special_ != b);
+        if (P[a].none() || P[b].none())
+            simple_entries_ = false;
+        if (pair_endpoints_.test(a) || pair_endpoints_.test(b))
+            simple_entries_ = false;
+        pair_endpoints_.set(a);
+        pair_endpoints_.set(b);
         pairs_.emplace_back((int)a, (int)b);
     }
 }
@@ -272,6 +370,9 @@ ToddWitness::ToddWitness(std::shared_ptr<MatrixWithData> M, Row z, Matrix&& Y)
     : Witness(M, std::move(z)), Y_{std::move(Y)} {}
 
 int Witness::rank_divergence(RowCView y) const {
+    if (!simple_entries_)
+        return exact_rank_divergence(M_->P(), z_, y);
+
     const int parity = (int)(y.count() & 1);
     int       ones_S = 0;
     int       S      = (special_ != -1) ? 1 : 0;
@@ -317,8 +418,11 @@ Matrix NullSpace::apply(RowCView y, std::vector<std::uint8_t>& scratch_killed) c
     const int   special = w_->get_special();
     const auto& pairs   = w_->get_pairs();
 
+    if (!w_->has_simple_entries())
+        return exact_apply(P0, z, y);
+
     scratch_killed.assign((std::size_t)n_rows, 0);
-    index_t removed = 0;
+    int removed = 0;
     for (const auto& pr : pairs) {
         const index_t a = (index_t)pr.first;
         const index_t b = (index_t)pr.second;
@@ -338,7 +442,8 @@ Matrix NullSpace::apply(RowCView y, std::vector<std::uint8_t>& scratch_killed) c
         --removed;
     }
 
-    Matrix new_P(n_rows - removed, P0.cols());
+    const auto new_rows = static_cast<index_t>(static_cast<std::int64_t>(n_rows) - removed);
+    Matrix new_P(new_rows, P0.cols());
 
     index_t j = 0;
     for (index_t i = 0; i < n_rows; ++i) {
@@ -516,6 +621,9 @@ NullSpace FullToddGenerator::make(RowCView z) const {
     index_t         len = 0;
     M_->index().sum_bucket(z, ptr, len);
     Matrix Y = full_todd_kernel(z, ptr, len);
+#ifndef NDEBUG
+    assert(rows_are_linearly_independent(Y));
+#endif
     return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, z, std::move(Y))));
 }
 
@@ -525,6 +633,9 @@ NullSpace FullToddGenerator::make(index_t row) const {
     index_t         len = 0;
     M_->index().sum_bucket(z, ptr, len);
     Matrix Y = full_todd_kernel(z, ptr, len);
+#ifndef NDEBUG
+    assert(rows_are_linearly_independent(Y));
+#endif
     return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, std::move(z), std::move(Y))));
 }
 
@@ -535,6 +646,9 @@ NullSpace FullToddGenerator::make(index_t row1, index_t row2) const {
     index_t         len = 0;
     M_->index().sum_bucket(z, ptr, len);
     Matrix Y = full_todd_kernel(z, ptr, len);
+#ifndef NDEBUG
+    assert(rows_are_linearly_independent(Y));
+#endif
     return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, std::move(z), std::move(Y))));
 }
 

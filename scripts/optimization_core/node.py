@@ -40,6 +40,12 @@ class ActionInfo:
     def reduction(self):
         return self.cand.reduction
 
+    @property
+    def total(self) -> int:
+        if self.global_info is None:
+            return 0
+        return int(getattr(self.global_info, "total", 0) or 0)
+
 @dataclass(slots=True)
 class Node:
     state: Matrix

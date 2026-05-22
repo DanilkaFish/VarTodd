@@ -5,11 +5,71 @@
 #include <boost/functional/hash.hpp>
 
 #include <cnpy++.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <vector>
 
 namespace todd {
 constexpr auto __bl_size = 4;
+
+static Matrix canonicalize_rows(std::vector<Row>&& rows, index_t cols) {
+    struct RowEntry {
+        Row         row;
+        std::size_t order;
+    };
+
+    std::vector<RowEntry> entries;
+    entries.reserve(rows.size());
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        if (!rows[i].none())
+            entries.push_back({std::move(rows[i]), i});
+    }
+    if (entries.empty())
+        return Matrix(0, 0);
+
+    std::ranges::sort(entries, [](const RowEntry& lhs, const RowEntry& rhs) { return (lhs.row <=> rhs.row) < 0; });
+
+    std::vector<RowEntry> kept;
+    kept.reserve(entries.size());
+    index_t active_cols = 0;
+    for (std::size_t i = 0; i < entries.size();) {
+        std::size_t j = i + 1;
+        while (j < entries.size() && entries[i].row == entries[j].row)
+            ++j;
+        if (((j - i) & 1u) != 0) {
+            auto first = entries.begin() + static_cast<std::ptrdiff_t>(i);
+            auto last  = entries.begin() + static_cast<std::ptrdiff_t>(j);
+            auto best  = std::min_element(first, last, [](const RowEntry& lhs, const RowEntry& rhs) {
+                return lhs.order < rhs.order;
+            });
+            RowCView row = best->row.cview();
+            for (auto p = row.find_first(); p != RowCView::npos; p = row.find_next(p))
+                active_cols = std::max(active_cols, static_cast<index_t>(p + 1));
+            kept.push_back({std::move(best->row), best->order});
+        }
+        i = j;
+    }
+
+    if (kept.empty())
+        return Matrix(0, 0);
+
+    std::ranges::sort(kept, [](const RowEntry& lhs, const RowEntry& rhs) { return lhs.order < rhs.order; });
+
+    active_cols = std::min(active_cols, cols);
+    Matrix out(0, active_cols);
+    out.reserve_rows((index_t)kept.size());
+    for (const RowEntry& entry : kept) {
+        Row cropped(active_cols);
+        RowCView row = entry.row.cview();
+        for (auto p = row.find_first(); p != RowCView::npos && static_cast<index_t>(p) < active_cols;
+             p = row.find_next(p)) {
+            cropped.set(static_cast<index_t>(p));
+        }
+        out.push_back(cropped);
+    }
+    return out;
+}
 
 static inline uint64_t mix64(uint64_t x) noexcept {
     x ^= x >> 33;
@@ -119,20 +179,23 @@ Matrix Matrix::from_npy(const std::string& npy_path) {
 
     const std::uint8_t* data = arr.data<std::uint8_t>();
 
-    Matrix mat(static_cast<index_t>(n_rows), static_cast<index_t>(n_cols));
+    std::vector<Row> rows;
+    rows.reserve(n_rows);
 
     const bool fortran_order = arr.memory_order == cnpypp::MemoryOrder::Fortran;
     for (std::size_t i = 0; i < n_rows; ++i) {
+        Row row(static_cast<index_t>(n_cols));
         for (std::size_t j = 0; j < n_cols; ++j) {
             const std::size_t offset = fortran_order ? (j * n_rows + i) : (i * n_cols + j);
             std::uint8_t v = data[offset];
             if (v != 0) {
-                mat[static_cast<index_t>(i)].set(static_cast<index_t>(j));
+                row.set(static_cast<index_t>(j));
             }
         }
+        rows.push_back(std::move(row));
     }
 
-    return mat;
+    return canonicalize_rows(std::move(rows), static_cast<index_t>(n_cols));
 }
 
 void Matrix::save_npy(const std::string& npy_path) const {

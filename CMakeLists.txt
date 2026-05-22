@@ -5,6 +5,12 @@ project(vartodd
     LANGUAGES CXX
     DESCRIPTION "Implementation of FastTodd algorithm for finding minimal rank of tensor decomposition"
 )
+
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 NEW)
+  set(CMAKE_POLICY_DEFAULT_CMP0167 NEW)
+endif()
+
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(BUILD_DEMONSTRATION "Build benchmarks" ON)
 option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
@@ -17,15 +23,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 include(CheckIPOSupported)
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-  find_program(GCC_AR gcc-ar REQUIRED)
-  find_program(GCC_RANLIB gcc-ranlib REQUIRED)
+# if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+#   find_program(GCC_AR gcc-ar REQUIRED)
+#   find_program(GCC_RANLIB gcc-ranlib REQUIRED)
 
-  set(CMAKE_C_COMPILER_AR "${GCC_AR}")
-  set(CMAKE_C_COMPILER_RANLIB "${GCC_RANLIB}")
-  set(CMAKE_CXX_COMPILER_AR "${GCC_AR}")
-  set(CMAKE_CXX_COMPILER_RANLIB "${GCC_RANLIB}")
-endif()
+#   set(CMAKE_C_COMPILER_AR "${GCC_AR}")
+#   set(CMAKE_C_COMPILER_RANLIB "${GCC_RANLIB}")
+#   set(CMAKE_CXX_COMPILER_AR "${GCC_AR}")
+#   set(CMAKE_CXX_COMPILER_RANLIB "${GCC_RANLIB}")
+# endif()
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
 
 if(ipo_supported)

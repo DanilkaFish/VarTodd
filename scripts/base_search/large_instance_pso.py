@@ -52,9 +52,9 @@ def _make_seeds(count: int, base_seed: int) -> list[int]:
 
 
 class Evaluator(BaseEvaluator):
-    def __init__(self, *args, seeds: Iterable[int], enable_todd: bool = True, **kwargs):
+    def __init__(self, *args, seeds: Iterable[int], use_todd_stage: bool = True, **kwargs):
         self.seeds = list(seeds)
-        self.enable_todd = bool(enable_todd)
+        self.use_todd_stage = bool(use_todd_stage)
         super().__init__(*args, **kwargs)
 
     def _pool_score(self) -> ExplorationScore:
@@ -92,26 +92,33 @@ class Evaluator(BaseEvaluator):
         pool_budget = self.map_par(_sigmoid, 0)
         single_budget = self.map_par(_sigmoid, 0)
         todd_budget = self.map_par(_sigmoid, 0)
+        sparse_budget = self.map_par(_sigmoid, 0)
+        dense_budget = self.map_par(_sigmoid, 0)
+        bucket_budget = self.map_par(_sigmoid, 0)
 
         self.set_pool_scores(pool_score)
         self.set_final_scores(final_score)
         self.set_min_pool_size(1)
         self.set_temperature(0.01 + 0.09 * temp_bias)
-        self.set_num_samples(10 + int(40 * sample_budget))
+        self.set_tohpe_vector_samples([80 + int(240 * sample_budget), 20 + int(80 * sparse_budget), 0])
+        self.set_todd_vector_samples([10 + int(40 * breadth_budget), 5 + int(35 * sparse_budget), 5 + int(45 * dense_budget)])
+        self.set_sparse_max_weight(4 + int(20 * sparse_budget))
         self.set_max_pool_size(10 + int(30 * pool_budget))
-        self.set_max_tohpe(5 + int(3*sample_budget))
-        self.set_try_only_tohpe(1)
-        self.set_enable_tohpe(1)
-        self.set_enable_todd(int(self.enable_todd))
+        self.set_tohpe_pool_size(5 + int(3 * sample_budget))
+        self.set_todd_pool_size((8 + int(24 * todd_budget)) if self.use_todd_stage else 0)
+        self.set_min_tohpe_actions(1)
+        self.set_min_todd_actions((1 + int(3 * todd_budget)) if self.use_todd_stage else 0)
         self.set_max_reduction(128)
         self.set_min_reduction(1)
         self.set_max_from_single_ns(4 + int(12 * single_budget))
-        self.set_tohpe_num_best(4 + int(10 * breadth_budget))
-        self.set_gen_part(0.5 + 0.5 * breadth_budget)
+        self.set_tohpe_sample(4 + int(10 * breadth_budget))
+        self.set_bucket_temperature(0.02 + 0.28 * bucket_budget)
+        self.set_bucket_random_fraction(0.05 + 0.20 * bucket_budget)
+        self.set_max_per_signature(2)
         self.set_todd_width(1)
         self.set_beamsearch_width(1)
 
-        if self.enable_todd:
+        if self.use_todd_stage:
             self.set_min_z_to_research(10000 + int(30000 * todd_budget))
             self.set_max_z_to_research(1000000 + int(6000000 * todd_budget))
         else:
@@ -206,7 +213,7 @@ def entrypoint(mat: Matrix):
         mat=mat,
         max_depth=MAX_DEPTH,
         seeds=_make_seeds(EVAL_SEEDS, BASE_SEED),
-        enable_todd=0,
+        use_todd_stage=0,
     )
 
     xopt = run_pso(
@@ -220,7 +227,7 @@ def entrypoint(mat: Matrix):
         best_rank = fun.best_paths[0].final_node.state.rows
         rank_thr = best_rank + 30
         x_active = fun.set_up_new_init(0, rank_thr=rank_thr, xopt=xopt)
-        fun.enable_todd=1
+        fun.use_todd_stage = 1
         if x_active is not None:
             xopt = run_pso(
                 fun,

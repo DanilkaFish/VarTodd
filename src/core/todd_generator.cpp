@@ -759,7 +759,8 @@ void SeenValues::finalize() {
     auto build_suffix = [](const auto& freq, auto& suf) {
         using T = typename std::remove_reference_t<decltype(suf)>::value_type;
         suf.assign(freq.size() + 1, T{});
-        std::inclusive_scan(freq.begin(), freq.end(), suf.begin());
+        for (std::size_t i = freq.size(); i-- > 0;)
+            suf[i] = suf[i + 1] + freq[i];
     };
 
     std::ranges::sort(pool_scores_sorted);

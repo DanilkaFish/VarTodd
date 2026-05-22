@@ -12,7 +12,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from helper import Matrix, Tensor3D, load_matrix_array, trim_trailing_zero_cols
+from helper import Matrix, Tensor3D, load_matrix_array, normalize_matrix_array
 
 DATA_ROOT = ROOT_DIR / "data/init_npy"
 DEFAULT_INIT_CIRCUIT = "gf_mult_Vandaele_wo_ancilla"
@@ -24,7 +24,7 @@ def get_matrix(name: str) -> Matrix:
 
 
 def _matrix_shape(path: Path) -> tuple[int, int]:
-    arr = trim_trailing_zero_cols(np.load(path, mmap_mode="r"))
+    arr = normalize_matrix_array(np.load(path, mmap_mode="r"))
     if arr.ndim != 2:
         raise ValueError(f"{path} is not a 2D matrix, shape={arr.shape}")
     return int(arr.shape[0]), int(arr.shape[1])

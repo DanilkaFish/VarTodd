@@ -14,6 +14,12 @@
 namespace todd {
 using Int = int;
 
+enum CandidateSource : Int {
+    CandidateSourceUnknown = 0,
+    CandidateSourceTohpe   = 1,
+    CandidateSourceTodd    = 2,
+};
+
 struct Candidate {
     static constexpr std::uint32_t no_bucket_id = std::numeric_limits<std::uint32_t>::max();
 
@@ -34,21 +40,23 @@ struct Candidate {
     Int           vec_weight             = 0;
     Int           z_weight               = 0;
     Int           z_size                 = 1;
+    Int           source                 = CandidateSourceUnknown;
     std::uint32_t bucket_id              = no_bucket_id;
 
     Candidate() = default;
 
-    Candidate(float s, Int r, Int kk, Int ll, Row v, Int basis_dim, Int bucket_size, Int z_weight, Int z_size)
+    Candidate(float s, Int r, Int kk, Int ll, Row v, Int basis_dim, Int bucket_size, Int z_weight, Int z_size,
+              Int source = CandidateSourceUnknown)
         : vec(std::move(v)), pool_score(s), reduction(r), k(kk), l(ll), basis_dim(basis_dim), bucket_size(bucket_size),
           possible_max_reduction(static_cast<Int>(bucket_size * 2)), vec_weight(static_cast<Int>(vec.count())),
-          z_weight(z_weight), z_size(std::max<Int>(1, z_size)) {}
+          z_weight(z_weight), z_size(std::max<Int>(1, z_size)), source(source) {}
 
     Candidate(float s, Int r, Int kk, Int ll, Row&& v, Row&& zz, Int basis_dim, Int bucket_size,
-              std::uint32_t bucket_id = no_bucket_id)
+              std::uint32_t bucket_id = no_bucket_id, Int source = CandidateSourceUnknown)
         : vec(std::move(v)), z(std::move(zz)), pool_score(s), reduction(r), k(kk), l(ll), basis_dim(basis_dim),
           bucket_size(bucket_size), possible_max_reduction(static_cast<Int>(bucket_size * 2)),
           vec_weight(static_cast<Int>(vec.count())), z_weight(static_cast<Int>(z.count())),
-          z_size(static_cast<Int>(std::max<index_t>(1, z.size()))), bucket_id(bucket_id) {}
+          z_size(static_cast<Int>(std::max<index_t>(1, z.size()))), source(source), bucket_id(bucket_id) {}
 
     bool at_least_single() const;
     bool is_tohpe() const;
@@ -76,11 +84,11 @@ struct SeenValues {
 
 struct Stats {
     index_t total                  = 0;
+    index_t z_researched           = 0;
     index_t nonzero                = 0;
     index_t evaluated              = 0;
     index_t accepted               = 0;
     index_t rejected               = 0;
-    index_t accepted_non_improving = 0;
     index_t accepted_tohpe         = 0;
     float   mean_mr                = 0.0f;
     float   mean_basis             = 0.0f;
@@ -271,23 +279,26 @@ struct PolicyConfig {
     FinalizationScore fscore{1.0, 0., 0., 0., 0.0, 0.};
     std::string       selection = "softmax";
 
-    float temperature        = 0.0f;
-    float non_improving_prob = 0.0f;
-    float gen_part           = 1.0;
-    Int   num_samples        = 64;
-    Int   num_candidates     = 1;
-    Int   top_pool           = 1;
-    Int   max_from_single_ns = 100;
-    Int   min_reduction      = 0;
-    Int   max_reduction      = k_single_sentinel<Int>();
-    Int   min_z_to_research  = 1 << 20;
-    Int   max_z_to_research  = 1 << 20;
-    Int   min_pool_size      = 1;
-    Int   max_tohpe          = 1;
-    Int   tohpe_sample       = 1;
-    bool  try_only_tohpe     = true;
-    bool  enable_tohpe       = true;
-    bool  enable_todd        = true;
+    float temperature            = 0.0f;
+    float bucket_temperature     = 0.0f;
+    float bucket_random_fraction = 0.0f;
+    std::array<Int, 3> tohpe_vector_samples = {16, 32, 16};
+    std::array<Int, 3> todd_vector_samples  = {16, 32, 16};
+    Int   sparse_max_weight      = 8;
+    Int   num_candidates         = 1;
+    Int   top_pool               = 1;
+    Int   max_from_single_ns     = 100;
+    Int   min_reduction          = 0;
+    Int   max_reduction          = k_single_sentinel<Int>();
+    Int   min_z_to_research      = 1 << 20;
+    Int   max_z_to_research      = 1 << 20;
+    Int   min_pool_size          = 1;
+    Int   tohpe_pool_size        = 1;
+    Int   todd_pool_size         = 1;
+    Int   min_tohpe_actions      = 0;
+    Int   min_todd_actions       = 0;
+    Int   tohpe_sample           = 1;
+    Int   max_per_signature      = 2;
 };
 
 auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyConfig config, index_t seed = 1,

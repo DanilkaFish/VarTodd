@@ -336,12 +336,14 @@ void gauss_elimination_inplace_rref(Matrix& A, Matrix& aug, PivotMap& pivots) {
 
 Matrix extract_basis(const Matrix& kernel, const PivotMap& pivots) {
     Matrix _kernel(0, 0);
-    // TODO memore allocation overhead
     std::vector<std::size_t> not_used_rows{};
     not_used_rows.resize(kernel.rows(), 1);
-    for (auto row: pivots.row) {
+    for (std::size_t col = 0; col < pivots.row.size(); ++col) {
+        const int32_t row = pivots.get(col);
         if (row != PivotMap::npos) {
-            not_used_rows[row] = 0;
+            assert(row >= 0);
+            assert(static_cast<index_t>(row) < kernel.rows());
+            not_used_rows[(std::size_t)row] = 0;
         }
     }
     for (index_t i = 0; i < kernel.rows(); i++) {

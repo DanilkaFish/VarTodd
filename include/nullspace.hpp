@@ -70,6 +70,7 @@ class Witness {
     auto rank_divergence(RowCView y) const -> int;
     auto get_special() const -> int { return special_; }
     auto get_pairs() const -> const std::vector<std::pair<int, int>>& { return pairs_; }
+    bool has_simple_entries() const noexcept { return simple_entries_; }
 
   protected:
     explicit Witness(std::shared_ptr<MatrixWithData> M, Row z);
@@ -79,7 +80,7 @@ class Witness {
     std::shared_ptr<MatrixWithData>  M_;
     std::vector<std::pair<int, int>> pairs_;
     Row                              pair_endpoints_;
-    bool                             pair_endpoints_disjoint_ = true;
+    bool                             simple_entries_ = true;
 
     Row z_;
     int special_ = -1;

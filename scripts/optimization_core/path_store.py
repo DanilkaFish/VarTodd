@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path as FsPath
-from typing import List, Optional, Sequence
+from typing import Any, Iterator, List, Optional, Sequence
 import json
+import os
 import pickle
 from copy import deepcopy
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Linux in production, fallback for portability
+    fcntl = None
 
 import numpy as np
 
@@ -13,6 +20,12 @@ from mcts_dao import Path as MctsPath, Dao
 from node import Node, Matrix, ActionInfo
 
 X0_LENGTH = 200
+USAGE_INDEX_NAME = "_usage_index.json"
+USAGE_LOCK_NAME = "_usage_index.lock"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 @dataclass
 class PathStore:
@@ -24,7 +37,119 @@ class PathStore:
         base = FsPath(self.root_dir) / name
         return base
 
-    def save(self, name: str, paths: Sequence[MctsPath], *, store_daos: bool = True) -> FsPath:
+    @property
+    def root_path(self) -> FsPath:
+        return FsPath(self.root_dir)
+
+    def _usage_index_path(self) -> FsPath:
+        return self.root_path / USAGE_INDEX_NAME
+
+    def _usage_lock_path(self) -> FsPath:
+        return self.root_path / USAGE_LOCK_NAME
+
+    @contextmanager
+    def _locked_usage_index(self) -> Iterator[dict[str, Any]]:
+        self.root_path.mkdir(parents=True, exist_ok=True)
+        lock_path = self._usage_lock_path()
+        index_path = self._usage_index_path()
+        with open(lock_path, "a+", encoding="utf-8") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                try:
+                    with open(index_path, "r", encoding="utf-8") as f:
+                        index = json.load(f)
+                except (FileNotFoundError, json.JSONDecodeError):
+                    index = {"version": 1, "paths": {}}
+
+                if not isinstance(index, dict):
+                    index = {"version": 1, "paths": {}}
+                if not isinstance(index.get("paths"), dict):
+                    index["paths"] = {}
+
+                yield index
+
+                tmp_path = index_path.with_suffix(".json.tmp")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(index, f, indent=2, sort_keys=True)
+                os.replace(tmp_path, index_path)
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _ensure_usage_record(self, index: dict[str, Any], name: str) -> dict[str, Any]:
+        paths = index.setdefault("paths", {})
+        record = paths.setdefault(
+            name,
+            {
+                "used_count": 0,
+                "improved_count": 0,
+                "best_child_rank": None,
+                "last_child_rank": None,
+                "last_used_at": None,
+                "last_improved_at": None,
+                "init_rank_thr_counts": {},
+            },
+        )
+        record.setdefault("used_count", 0)
+        record.setdefault("improved_count", 0)
+        record.setdefault("best_child_rank", None)
+        record.setdefault("last_child_rank", None)
+        record.setdefault("last_used_at", None)
+        record.setdefault("last_improved_at", None)
+        record.setdefault("init_rank_thr_counts", {})
+        return record
+
+    def record_load(self, name: str, *, init_rank_thr: Optional[int] = None) -> None:
+        with self._locked_usage_index() as index:
+            record = self._ensure_usage_record(index, name)
+            record["used_count"] = int(record.get("used_count") or 0) + 1
+            record["last_used_at"] = _utc_now()
+            if init_rank_thr is not None:
+                counts = record.setdefault("init_rank_thr_counts", {})
+                key = str(int(init_rank_thr))
+                counts[key] = int(counts.get(key) or 0) + 1
+
+    def record_result(
+        self,
+        name: str,
+        *,
+        loaded_rank: int,
+        child_rank: int,
+        init_rank_thr: Optional[int] = None,
+    ) -> None:
+        with self._locked_usage_index() as index:
+            record = self._ensure_usage_record(index, name)
+            child_rank = int(child_rank)
+            record["last_child_rank"] = child_rank
+            best_child = record.get("best_child_rank")
+            if best_child is None or child_rank < int(best_child):
+                record["best_child_rank"] = child_rank
+            if child_rank < int(loaded_rank):
+                record["improved_count"] = int(record.get("improved_count") or 0) + 1
+                record["last_improved_at"] = _utc_now()
+            if init_rank_thr is not None:
+                counts = record.setdefault("init_rank_thr_counts", {})
+                counts.setdefault(str(int(init_rank_thr)), 0)
+
+    def read_usage_index(self) -> dict[str, Any]:
+        try:
+            with open(self._usage_index_path(), "r", encoding="utf-8") as f:
+                index = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {"version": 1, "paths": {}}
+        if not isinstance(index, dict) or not isinstance(index.get("paths"), dict):
+            return {"version": 1, "paths": {}}
+        return index
+
+    def save(
+        self,
+        name: str,
+        paths: Sequence[MctsPath],
+        *,
+        store_daos: bool = True,
+        parent_info: Optional[dict[str, Any]] = None,
+    ) -> FsPath:
         base = self._resolve_dir(name)
         base.mkdir(parents=True, exist_ok=True)
 
@@ -32,12 +157,15 @@ class PathStore:
         meta_path = base / "meta.json"
         daos_path = base / "daos.pkl"
         incoming_path = base / "incoming.pkl"
+        widths_path = base / "widths.pkl"
 
         matrices: dict[str, np.ndarray] = {}
         meta = {
-            "version": 2,
+            "version": 3,
             "paths": [],
         }
+        if parent_info:
+            meta["parent"] = dict(parent_info)
         incoming_payload: List[List[Optional[tuple]]] = []
 
         for p_idx, path in enumerate(paths):
@@ -83,10 +211,298 @@ class PathStore:
             daos_payload = [path.daos for path in paths]
             with open(daos_path, "wb") as f:
                 pickle.dump(daos_payload, f)
+            widths_payload = [
+                {
+                    "bs_widths": path.bs_widths,
+                    "todd_widths": path.todd_widths,
+                }
+                for path in paths
+            ]
+            with open(widths_path, "wb") as f:
+                pickle.dump(widths_payload, f)
         with open(incoming_path, "wb") as f:
             pickle.dump(incoming_payload, f)
 
         return base
+
+    @staticmethod
+    def _path_kind(_name: str, init_rank: Optional[int], mid_rank: Optional[int]) -> str:
+        if init_rank is None or mid_rank is None:
+            return "unknown"
+        return "full" if init_rank == mid_rank else "partial"
+
+    @staticmethod
+    def _restart_band(record: dict[str, Any]) -> str:
+        init_rank = record.get("init_rank")
+        mid_rank = record.get("init_rank_thr")
+        final_rank = record.get("rank")
+        if init_rank is None or mid_rank is None or final_rank is None:
+            return "unknown"
+        init_rank = int(init_rank)
+        mid_rank = int(mid_rank)
+        final_rank = int(final_rank)
+        if mid_rank == init_rank:
+            return "from_init"
+        midpoint = (init_rank + final_rank) / 2.0
+        if mid_rank > midpoint:
+            return "first_half"
+        return "near_final"
+
+    @staticmethod
+    def _record_sort_key(record: dict[str, Any]) -> tuple[Any, ...]:
+        mid_rank = record.get("init_rank_thr")
+        mid_rank_key = int(mid_rank) if mid_rank is not None else -1
+        return (
+            int(record["rank"]),
+            -int(record.get("improved_count") or 0),
+            -mid_rank_key,
+            int(record.get("used_count") or 0),
+            record["name"],
+        )
+
+    def iter_path_records(self) -> list[dict[str, Any]]:
+        import re
+
+        root = self.root_path
+        if not root.exists() or not root.is_dir():
+            return []
+
+        usage = self.read_usage_index().get("paths", {})
+        name_re = re.compile(r"i(?P<init>\d+)_m(?P<thr>\d+)_f(?P<final>\d+)")
+        records: list[dict[str, Any]] = []
+
+        for backup_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            meta_path = backup_dir / "meta.json"
+            matrices_path = backup_dir / "matrices.npz"
+            if not meta_path.exists() or not matrices_path.exists():
+                continue
+
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                paths_meta = meta.get("paths", [])
+                if not paths_meta:
+                    continue
+
+                best_rank = None
+                best_depth = None
+                with np.load(matrices_path) as data:
+                    for p in paths_meta:
+                        keys = p.get("matrix_keys", [])
+                        if not keys:
+                            continue
+                        last_key = keys[-1]
+                        if last_key not in data:
+                            continue
+                        rank = int(data[last_key].shape[0])
+                        depth = max(0, len(keys) - 1)
+                        if best_rank is None or rank < best_rank:
+                            best_rank = rank
+                            best_depth = depth
+
+                if best_rank is None:
+                    continue
+
+                init_rank = None
+                init_thr_rank = None
+                match = name_re.search(backup_dir.name)
+                if match:
+                    init_rank = int(match.group("init"))
+                    init_thr_rank = int(match.group("thr"))
+
+                usage_record = usage.get(backup_dir.name, {})
+                parent_info = meta.get("parent", {})
+                if not isinstance(parent_info, dict):
+                    parent_info = {}
+                records.append(
+                    {
+                        "name": backup_dir.name,
+                        "rank": best_rank,
+                        "depth": best_depth,
+                        "init_rank": init_rank,
+                        "init_rank_thr": init_thr_rank,
+                        "kind": self._path_kind(backup_dir.name, init_rank, init_thr_rank),
+                        "restart_band": self._restart_band(
+                            {
+                                "init_rank": init_rank,
+                                "init_rank_thr": init_thr_rank,
+                                "rank": best_rank,
+                            }
+                        ),
+                        "used_count": int(usage_record.get("used_count") or 0),
+                        "improved_count": int(usage_record.get("improved_count") or 0),
+                        "best_child_rank": usage_record.get("best_child_rank"),
+                        "last_child_rank": usage_record.get("last_child_rank"),
+                        "last_used_at": usage_record.get("last_used_at"),
+                        "last_improved_at": usage_record.get("last_improved_at"),
+                        "parent_path_name": parent_info.get("parent_path_name"),
+                        "parent_loaded_rank": parent_info.get("loaded_rank"),
+                        "parent_init_rank_thr": parent_info.get("init_rank_thr"),
+                        "child_improved_loaded": parent_info.get("child_improved_loaded"),
+                    }
+                )
+            except Exception:
+                continue
+
+        records.sort(key=self._record_sort_key)
+        return records
+
+    @staticmethod
+    def _nonimproved_reuse_count(record: dict[str, Any]) -> int:
+        return max(
+            0,
+            int(record.get("used_count") or 0) - int(record.get("improved_count") or 0),
+        )
+
+    @classmethod
+    def _is_live_record(
+        cls,
+        record: dict[str, Any],
+        *,
+        max_nonimproved_reuse: int,
+    ) -> bool:
+        if record.get("child_improved_loaded") is False:
+            return False
+        return cls._nonimproved_reuse_count(record) <= int(max_nonimproved_reuse)
+
+    @staticmethod
+    def _format_summary_record(record: dict[str, Any]) -> str:
+        best_child = record["best_child_rank"]
+        best_child_text = "none" if best_child is None else str(best_child)
+        parent_text = ""
+        if record.get("parent_path_name"):
+            parent_text = (
+                f" parent={record['parent_path_name']}"
+                f" loaded_rank={record.get('parent_loaded_rank')}"
+                f" parent_thr={record.get('parent_init_rank_thr')}"
+                f" child_improved={int(bool(record.get('child_improved_loaded')))}"
+            )
+        return (
+            f"{record['name']} rank={record['rank']} depth={record['depth']} "
+            f"used={record['used_count']} improved={record['improved_count']} "
+            f"best_child={best_child_text} partial/full={record['kind']} "
+            f"band={record.get('restart_band', 'unknown')}"
+            f"{parent_text}"
+        )
+
+    def summarize(
+        self,
+        *,
+        top_k: int = 10,
+        per_rank_cap: int = 2,
+        max_nonimproved_reuse: int = 5,
+        dead_end_after: Optional[int] = None,
+        dead_end_top_k: int = 3,
+        nonimproved_child_top_k: int = 3,
+        improved_dead_end_top_k: int = 3,
+    ) -> str:
+        records = self.iter_path_records()
+        if not records:
+            return (
+                "best_paths=[]\n"
+                "count_total=0\n"
+                "count_full=0\n"
+                "count_partial=0\n"
+                "best_rank_count=0"
+            )
+
+        top_k = max(1, int(top_k))
+        per_rank_cap = max(1, int(per_rank_cap))
+        if dead_end_after is not None:
+            max_nonimproved_reuse = dead_end_after
+        max_nonimproved_reuse = max(0, int(max_nonimproved_reuse))
+        count_full = sum(1 for r in records if r["kind"] == "full")
+        count_partial = sum(1 for r in records if r["kind"] == "partial")
+        best_rank = min(r["rank"] for r in records)
+        best_rank_count = sum(1 for r in records if r["rank"] == best_rank)
+        nonimproved_child_count = sum(1 for r in records if r.get("child_improved_loaded") is False)
+        over_failed_reuse_count = sum(
+            1 for r in records if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
+        )
+        live_records = [
+            r
+            for r in records
+            if self._is_live_record(r, max_nonimproved_reuse=max_nonimproved_reuse)
+        ]
+        improved_dead_end_records = [
+            r
+            for r in records
+            if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
+            and int(r.get("improved_count") or 0) > 0
+            and r.get("child_improved_loaded") is not False
+        ]
+        revived_records = improved_dead_end_records[: max(0, int(improved_dead_end_top_k))]
+
+        live_band_counts = {"from_init": 0, "first_half": 0, "near_final": 0, "unknown": 0}
+        for record in live_records + revived_records:
+            band = str(record.get("restart_band") or "unknown")
+            live_band_counts[band] = live_band_counts.get(band, 0) + 1
+
+        selected = []
+        rank_counts: dict[int, int] = {}
+        for record in live_records:
+            if len(selected) >= top_k:
+                break
+            rank = int(record["rank"])
+            if rank_counts.get(rank, 0) >= per_rank_cap:
+                continue
+            rank_counts[rank] = rank_counts.get(rank, 0) + 1
+            selected.append(self._format_summary_record(record))
+
+        selected_names = {line.split(" ", 1)[0] for line in selected if line and line != "none"}
+        for record in revived_records:
+            if record["name"] in selected_names:
+                continue
+            selected.append(
+                f"{self._format_summary_record(record)} "
+                f"revived_dead_end=1 nonimproved_reuse={self._nonimproved_reuse_count(record)}"
+            )
+            selected_names.add(record["name"])
+
+        if not selected:
+            selected.append("none")
+
+        dead_end_records = [
+            r for r in records if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
+        ][: max(0, int(dead_end_top_k))]
+        nonimproved_child_records = [
+            r for r in records if r.get("child_improved_loaded") is False
+        ][: max(0, int(nonimproved_child_top_k))]
+        dead_end_lines = [
+            f"{self._format_summary_record(record)} "
+            f"nonimproved_reuse={self._nonimproved_reuse_count(record)}"
+            for record in dead_end_records
+        ] or ["none"]
+        nonimproved_child_lines = [
+            self._format_summary_record(record)
+            for record in nonimproved_child_records
+        ] or ["none"]
+
+        return (
+            "best_paths:\n"
+            + "\n".join(f"- {line}" for line in selected)
+            + "\ndead_end_paths:\n"
+            + "\n".join(f"- {line}" for line in dead_end_lines)
+            + "\nbest_nonimproved_child_paths:\n"
+            + "\n".join(f"- {line}" for line in nonimproved_child_lines)
+            + "\nlive_path_rule=ONLY_USE_PATH_NAMES_LISTED_UNDER_best_paths"
+            + f"\nmax_nonimproved_reuse={max_nonimproved_reuse}"
+            + f"\nomitted_nonimproved_child_count={nonimproved_child_count}"
+            + f"\nomitted_over_failed_reuse_count={over_failed_reuse_count}"
+            + f"\ncount_improved_dead_end_candidates={len(improved_dead_end_records)}"
+            + f"\ncount_total={len(records)}"
+            + f"\ncount_live_candidates={len(live_records)}"
+            + "\nlive_restart_balance="
+            + (
+                f"from_init:{live_band_counts.get('from_init', 0)},"
+                f"first_half:{live_band_counts.get('first_half', 0)},"
+                f"near_final:{live_band_counts.get('near_final', 0)},"
+                f"unknown:{live_band_counts.get('unknown', 0)}"
+            )
+            + f"\ncount_full={count_full}"
+            + f"\ncount_partial={count_partial}"
+            + f"\nbest_rank_count={best_rank_count}"
+        )
 
     def load(self, name: str, *, dao_fallback: Optional[Dao] = None) -> List[MctsPath]:
         base = self._resolve_dir(name)
@@ -94,6 +510,7 @@ class PathStore:
         meta_path = base / "meta.json"
         daos_path = base / "daos.pkl"
         incoming_path = base / "incoming.pkl"
+        widths_path = base / "widths.pkl"
 
         if not matrices_path.exists():
             raise FileNotFoundError(f"missing matrices file: {matrices_path}")
@@ -107,6 +524,14 @@ class PathStore:
         if daos_path.exists():
             with open(daos_path, "rb") as f:
                 daos_payload = pickle.load(f)
+
+        widths_payload: Optional[List[dict[str, Any]]] = None
+        if widths_path.exists():
+            try:
+                with open(widths_path, "rb") as f:
+                    widths_payload = pickle.load(f)
+            except Exception:
+                widths_payload = None
 
         incoming_payload: Optional[List[List[Optional[tuple]]]] = None
         if incoming_path.exists():
@@ -150,6 +575,8 @@ class PathStore:
                     final_node=nodes[-1],
                     ranks_thr=list(p.get("ranks_thr", [])),
                     daos=[],
+                    bs_widths=[],
+                    todd_widths=[],
                     x0s=[list(x0) + [0]*(X0_LENGTH - len(x0)) for x0 in p.get("x0s", [])],
                 )
 
@@ -159,6 +586,12 @@ class PathStore:
                     path.daos = daos_payload[idx]
                 elif dao_fallback is not None:
                     path.daos = [deepcopy(dao_fallback)]
+
+                if isinstance(widths_payload, list) and idx < len(widths_payload):
+                    width_info = widths_payload[idx]
+                    if isinstance(width_info, dict):
+                        path.bs_widths = list(width_info.get("bs_widths") or [])
+                        path.todd_widths = list(width_info.get("todd_widths") or [])
 
                 if not path.daos:
                     raise ValueError(
