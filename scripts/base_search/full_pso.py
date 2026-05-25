@@ -39,7 +39,9 @@ class Evaluator(BaseEvaluator):
     def policy_mapping(self):
         ranks = [0]
         self.set_pool_scores(ranks, [ExplorationScore([self.map_par(_w_tanh) for _ in range(5)], pow=1)])
-        self.set_final_scores(ranks, [FinalizationScore([self.map_par(_w_tanh) for _ in range(6)], pow=1)])
+        final_weights = [self.map_par(_w_tanh) for _ in range(6)]
+        final_centers = [self.map_par(sigmoid) for _ in range(6)]
+        self.set_final_scores(ranks, [FinalizationScore(final_weights, final_centers, pow=1)])
 
         z_budget = self.map_par(sigmoid)
         sample_budget = self.map_par(sigmoid)
