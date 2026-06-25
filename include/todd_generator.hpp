@@ -37,6 +37,9 @@ struct Candidate {
     Int           num_better_red         = 0;
     Int           num_better_dim         = 0;
     Int           num_better_pool_score  = 0;
+    Int           pool_size              = 0;
+    Int           pool_tohpe_size        = 0;
+    Int           pool_todd_size         = 0;
     Int           vec_weight             = 0;
     Int           z_weight               = 0;
     Int           z_size                 = 1;
@@ -117,6 +120,9 @@ struct CandidateExport {
     Int   num_better_dim{};
     Int   num_better_red{};
     Int   num_better_pool_score{};
+    Int   pool_size{};
+    Int   pool_tohpe_size{};
+    Int   pool_todd_size{};
 };
 
 struct Result {
@@ -141,6 +147,9 @@ static CandidateExport export_candidate(Candidate const& c) {
         .num_better_dim         = c.num_better_dim,
         .num_better_red         = c.num_better_red,
         .num_better_pool_score  = c.num_better_pool_score,
+        .pool_size              = c.pool_size,
+        .pool_tohpe_size        = c.pool_tohpe_size,
+        .pool_todd_size         = c.pool_todd_size,
     };
 }
 
@@ -274,31 +283,61 @@ struct FinalizationScore {
     }
 };
 
-struct PolicyConfig {
-    ExplorationScore  escore{1.0, 0., 0., 0., 0.};
-    FinalizationScore fscore{1.0, 0., 0., 0., 0.0, 0.};
-    std::string       selection = "softmax";
+constexpr Int k_all_one_hot_samples = -1;
 
-    float temperature            = 0.0f;
-    float bucket_temperature     = 0.0f;
-    float bucket_random_fraction = 0.0f;
-    std::array<Int, 3> tohpe_vector_samples = {16, 32, 16};
-    std::array<Int, 3> todd_vector_samples  = {16, 32, 16};
-    Int   sparse_max_weight      = 8;
-    Int   num_candidates         = 1;
-    Int   top_pool               = 1;
-    Int   max_from_single_ns     = 100;
-    Int   min_reduction          = 0;
-    Int   max_reduction          = k_single_sentinel<Int>();
-    Int   min_z_to_research      = 1 << 20;
-    Int   max_z_to_research      = 1 << 20;
-    Int   min_pool_size          = 1;
-    Int   tohpe_pool_size        = 1;
-    Int   todd_pool_size         = 1;
-    Int   min_tohpe_actions      = 0;
-    Int   min_todd_actions       = 0;
-    Int   tohpe_sample           = 1;
-    Int   max_per_signature      = 2;
+struct PolicyScores {
+    ExplorationScore  exploration{1.0, 0., 0., 0., 0.};
+    FinalizationScore final{1.0, 0., 0., 0., 0.0, 0.};
+};
+
+struct ActionSelection {
+    Int         count       = 1;
+    std::string mode        = "best";
+    float       temperature = 0.0f;
+};
+
+struct ActionPool {
+    Int final_size = 16;
+};
+
+struct SamplingBudget {
+    Int one_hot          = k_all_one_hot_samples;
+    Int sparse           = 0;
+    Int dense            = 32;
+    Int sparse_max_weight = 2;
+};
+
+struct SourcePool {
+    Int keep    = 1;
+    Int reserve = 0;
+};
+
+struct TohpeSearch {
+    SamplingBudget sampling{};
+    SourcePool     pool{2, 0};
+    Int            z_choices = 8;
+};
+
+struct ZBucketSearch {
+    Int   min_buckets     = 32;
+    Int   max_buckets     = 0;
+    float temperature     = 0.0f;
+    float random_fraction = 0.0f;
+};
+
+struct ToddSearch {
+    SamplingBudget sampling{};
+    SourcePool     pool{16, 0};
+    Int            actions_per_bucket = 4;
+    ZBucketSearch  buckets{};
+};
+
+struct PolicyConfig {
+    PolicyScores    scores{};
+    ActionSelection selection{};
+    ActionPool      pool{};
+    TohpeSearch     tohpe{};
+    ToddSearch      todd{};
 };
 
 auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyConfig config, index_t seed = 1,

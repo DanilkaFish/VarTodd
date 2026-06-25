@@ -314,6 +314,20 @@ class PathStore:
                 parent_info = meta.get("parent", {})
                 if not isinstance(parent_info, dict):
                     parent_info = {}
+                parent_path_name = parent_info.get("parent_path_name")
+                parent_usage = (
+                    usage.get(parent_path_name, {})
+                    if isinstance(parent_path_name, str)
+                    else {}
+                )
+                parent_best_child_rank = parent_usage.get("best_child_rank")
+                is_stale_improved_child = False
+                if (
+                    parent_info.get("child_improved_loaded") is True
+                    and parent_best_child_rank is not None
+                    and best_rank > int(parent_best_child_rank)
+                ):
+                    is_stale_improved_child = True
                 records.append(
                     {
                         "name": backup_dir.name,
@@ -335,10 +349,12 @@ class PathStore:
                         "last_child_rank": usage_record.get("last_child_rank"),
                         "last_used_at": usage_record.get("last_used_at"),
                         "last_improved_at": usage_record.get("last_improved_at"),
-                        "parent_path_name": parent_info.get("parent_path_name"),
+                        "parent_path_name": parent_path_name,
                         "parent_loaded_rank": parent_info.get("loaded_rank"),
                         "parent_init_rank_thr": parent_info.get("init_rank_thr"),
+                        "parent_best_child_rank": parent_best_child_rank,
                         "child_improved_loaded": parent_info.get("child_improved_loaded"),
+                        "is_stale_improved_child": is_stale_improved_child,
                     }
                 )
             except Exception:
@@ -363,6 +379,8 @@ class PathStore:
     ) -> bool:
         if record.get("child_improved_loaded") is False:
             return False
+        if record.get("is_stale_improved_child"):
+            return False
         return cls._nonimproved_reuse_count(record) <= int(max_nonimproved_reuse)
 
     @staticmethod
@@ -373,14 +391,13 @@ class PathStore:
         if record.get("parent_path_name"):
             parent_text = (
                 f" parent={record['parent_path_name']}"
-                f" loaded_rank={record.get('parent_loaded_rank')}"
-                f" parent_thr={record.get('parent_init_rank_thr')}"
-                f" child_improved={int(bool(record.get('child_improved_loaded')))}"
+                f" loaded={record.get('parent_loaded_rank')}"
+                f" thr={record.get('parent_init_rank_thr')}"
             )
         return (
             f"{record['name']} rank={record['rank']} depth={record['depth']} "
-            f"used={record['used_count']} improved={record['improved_count']} "
-            f"best_child={best_child_text} partial/full={record['kind']} "
+            f"u/i={record['used_count']}/{record['improved_count']} "
+            f"child={best_child_text} kind={record['kind']} "
             f"band={record.get('restart_band', 'unknown')}"
             f"{parent_text}"
         )
@@ -388,25 +405,25 @@ class PathStore:
     def summarize(
         self,
         *,
-        top_k: int = 10,
-        per_rank_cap: int = 2,
-        max_nonimproved_reuse: int = 5,
+        top_k: int = 6,
+        per_rank_cap: int = 1,
+        max_nonimproved_reuse: int = 4,
         dead_end_after: Optional[int] = None,
-        dead_end_top_k: int = 3,
-        nonimproved_child_top_k: int = 3,
-        improved_dead_end_top_k: int = 3,
+        dead_end_top_k: int = 2,
+        nonimproved_child_top_k: int = 2,
+        improved_dead_end_top_k: int = 1,
     ) -> str:
         records = self.iter_path_records()
         if not records:
             return (
-                "best_paths=[]\n"
-                "count_total=0\n"
-                "count_full=0\n"
-                "count_partial=0\n"
-                "best_rank_count=0"
+                "best_paths:\n"
+                "- none\n"
+                "rule=use_only_names_under_best_paths\n"
+                "balance=from_init:0,first_half:0,near_final:0,unknown:0; "
+                "full:0,partial:0; live:0,total:0,best_rank_count:0"
             )
 
-        top_k = max(1, int(top_k))
+        top_k = min(6, max(1, int(top_k)))
         per_rank_cap = max(1, int(per_rank_cap))
         if dead_end_after is not None:
             max_nonimproved_reuse = dead_end_after
@@ -416,6 +433,7 @@ class PathStore:
         best_rank = min(r["rank"] for r in records)
         best_rank_count = sum(1 for r in records if r["rank"] == best_rank)
         nonimproved_child_count = sum(1 for r in records if r.get("child_improved_loaded") is False)
+        stale_improved_child_count = sum(1 for r in records if r.get("is_stale_improved_child"))
         over_failed_reuse_count = sum(
             1 for r in records if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
         )
@@ -430,6 +448,7 @@ class PathStore:
             if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
             and int(r.get("improved_count") or 0) > 0
             and r.get("child_improved_loaded") is not False
+            and not r.get("is_stale_improved_child")
         ]
         revived_records = improved_dead_end_records[: max(0, int(improved_dead_end_top_k))]
 
@@ -455,7 +474,7 @@ class PathStore:
                 continue
             selected.append(
                 f"{self._format_summary_record(record)} "
-                f"revived_dead_end=1 nonimproved_reuse={self._nonimproved_reuse_count(record)}"
+                f"revived=1 failed_reuse={self._nonimproved_reuse_count(record)}"
             )
             selected_names.add(record["name"])
 
@@ -463,46 +482,58 @@ class PathStore:
             selected.append("none")
 
         dead_end_records = [
-            r for r in records if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
+            r
+            for r in records
+            if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
+            and not r.get("is_stale_improved_child")
         ][: max(0, int(dead_end_top_k))]
         nonimproved_child_records = [
             r for r in records if r.get("child_improved_loaded") is False
         ][: max(0, int(nonimproved_child_top_k))]
         dead_end_lines = [
             f"{self._format_summary_record(record)} "
-            f"nonimproved_reuse={self._nonimproved_reuse_count(record)}"
+            f"failed_reuse={self._nonimproved_reuse_count(record)}"
             for record in dead_end_records
-        ] or ["none"]
+        ]
         nonimproved_child_lines = [
             self._format_summary_record(record)
             for record in nonimproved_child_records
-        ] or ["none"]
+        ]
 
-        return (
-            "best_paths:\n"
-            + "\n".join(f"- {line}" for line in selected)
-            + "\ndead_end_paths:\n"
-            + "\n".join(f"- {line}" for line in dead_end_lines)
-            + "\nbest_nonimproved_child_paths:\n"
-            + "\n".join(f"- {line}" for line in nonimproved_child_lines)
-            + "\nlive_path_rule=ONLY_USE_PATH_NAMES_LISTED_UNDER_best_paths"
-            + f"\nmax_nonimproved_reuse={max_nonimproved_reuse}"
-            + f"\nomitted_nonimproved_child_count={nonimproved_child_count}"
-            + f"\nomitted_over_failed_reuse_count={over_failed_reuse_count}"
-            + f"\ncount_improved_dead_end_candidates={len(improved_dead_end_records)}"
-            + f"\ncount_total={len(records)}"
-            + f"\ncount_live_candidates={len(live_records)}"
-            + "\nlive_restart_balance="
-            + (
+        lines = ["best_paths:", *[f"- {line}" for line in selected]]
+        if dead_end_lines:
+            lines += ["dead_end_paths:", *[f"- {line}" for line in dead_end_lines]]
+        if nonimproved_child_lines:
+            lines += [
+                "best_nonimproved_child_paths:",
+                *[f"- {line}" for line in nonimproved_child_lines],
+            ]
+        lines += [
+            "rule=use_only_names_under_best_paths",
+            (
+                "balance="
                 f"from_init:{live_band_counts.get('from_init', 0)},"
                 f"first_half:{live_band_counts.get('first_half', 0)},"
                 f"near_final:{live_band_counts.get('near_final', 0)},"
-                f"unknown:{live_band_counts.get('unknown', 0)}"
+                f"unknown:{live_band_counts.get('unknown', 0)}; "
+                f"full:{count_full},partial:{count_partial}; "
+                f"live:{len(live_records)},total:{len(records)},best_rank_count:{best_rank_count}"
+            ),
+        ]
+        if (
+            nonimproved_child_count
+            or stale_improved_child_count
+            or over_failed_reuse_count
+            or improved_dead_end_records
+        ):
+            lines.append(
+                "omitted="
+                f"nonimproved_child:{nonimproved_child_count},"
+                f"stale_improved_child:{stale_improved_child_count},"
+                f"over_failed_reuse:{over_failed_reuse_count},"
+                f"improved_dead_end:{len(improved_dead_end_records)}"
             )
-            + f"\ncount_full={count_full}"
-            + f"\ncount_partial={count_partial}"
-            + f"\nbest_rank_count={best_rank_count}"
-        )
+        return "\n".join(lines)
 
     def load(self, name: str, *, dao_fallback: Optional[Dao] = None) -> List[MctsPath]:
         base = self._resolve_dir(name)
@@ -522,8 +553,11 @@ class PathStore:
 
         daos_payload: Optional[List[List[Dao]]] = None
         if daos_path.exists():
-            with open(daos_path, "rb") as f:
-                daos_payload = pickle.load(f)
+            try:
+                with open(daos_path, "rb") as f:
+                    daos_payload = pickle.load(f)
+            except Exception:
+                daos_payload = None
 
         widths_payload: Optional[List[dict[str, Any]]] = None
         if widths_path.exists():

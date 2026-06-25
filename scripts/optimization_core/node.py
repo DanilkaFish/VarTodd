@@ -4,15 +4,23 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from pyvartodd.Release.pyvartodd import (  # type: ignore
+    ActionPool,
+    ActionSelection,
     CandidateExport,
     ExplorationScore,
     FinalizationScore,
     Matrix,
     PolicyConfig,
+    PolicyScores,
     Result,
+    SamplingBudget,
     ScoringFunction,
+    SourcePool,
     Stats,
+    ToddSearch,
     Tensor3D,
+    TohpeSearch,
+    ZBucketSearch,
     policy_iteration,
 )
 

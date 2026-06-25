@@ -6,14 +6,24 @@ from copy import deepcopy
 from typing import Iterable
 from tqdm.auto import tqdm
 from scripts.optimization_core.helper import (
+    ActionPool,
+    ActionSelection,
     BaseEvaluator,
     ExplorationScore,
     FinalizationScore,
     Matrix,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
 )
 
 np.random.seed(42)
 random.seed(40)
+
+LEGACY_ONE_HOT_CAP = 1 << 20
 
 def _w_tanh(z: float, scale: float = 4.0, sharp: float = 1.5) -> float:
     return float(scale * np.tanh(z / sharp))
@@ -32,16 +42,19 @@ class Evaluator(BaseEvaluator):
 
     @staticmethod
     def _sample_caps(sample_count: int, one_hot_fraction: float):
-        one_hot = max(0, int(round(sample_count * one_hot_fraction)))
-        dense = max(0, int(sample_count) - one_hot)
-        return [one_hot, 0, dense]
+        # path_store forced gen_part=1.0 in C++, so every one-hot basis vector was tried
+        # in addition to num_samples random dense vectors. Keep one_hot_fraction consumed
+        # for x0 compatibility, but do not let it shrink the one-hot action set.
+        _ = one_hot_fraction
+        return [LEGACY_ONE_HOT_CAP, 0, max(0, int(sample_count))]
 
     def policy_mapping(self):
         ranks = [0]
-        self.set_pool_scores(ranks, [ExplorationScore([self.map_par(_w_tanh) for _ in range(5)], pow=1)])
+        pool_score = ExplorationScore([self.map_par(_w_tanh) for _ in range(5)], pow=1)
         final_weights = [self.map_par(_w_tanh) for _ in range(6)]
         final_centers = [self.map_par(sigmoid) for _ in range(6)]
-        self.set_final_scores(ranks, [FinalizationScore(final_weights, final_centers, pow=1)])
+        final_score = FinalizationScore(final_weights, final_centers, pow=1)
+        self.set_scores(ranks, [PolicyScores(exploration=pool_score, final=final_score)])
 
         z_budget = self.map_par(sigmoid)
         sample_budget = self.map_par(sigmoid)
@@ -49,26 +62,19 @@ class Evaluator(BaseEvaluator):
         sample_count = 8 + int(48 * sample_budget)
         sample_caps = self._sample_caps(sample_count, one_hot_fraction)
 
-        self.set_min_pool_size(1)
-        self.set_min_z_to_research(10 + int(250 * z_budget))
-        self.set_temperature(0.2)
-        self.set_tohpe_vector_samples(sample_caps)
-        self.set_todd_vector_samples(sample_caps)
-        self.set_sparse_max_weight(2)
-        self.set_max_pool_size(12)
-        self.set_tohpe_pool_size(2)
-        self.set_todd_pool_size(12)
-        self.set_min_tohpe_actions(0)
-        self.set_min_todd_actions(0)
-        self.set_max_reduction(12)
-        self.set_min_reduction(1)
-        self.set_max_from_single_ns(1)
-        self.set_tohpe_sample(2)
-        self.set_bucket_temperature(0.0)
-        self.set_bucket_random_fraction(0.0)
-        self.set_max_per_signature(0)
-        self.set_todd_width(1)
-        self.set_beamsearch_width(1)
+        sampling = SamplingBudget(one_hot="all", sparse=sample_caps[1], dense=sample_caps[2], sparse_max_weight=2)
+        self.set_action_selection(ActionSelection(count=2, mode="softmax", temperature=0.2))
+        self.set_action_pool(ActionPool(final_size=12))
+        self.set_tohpe_search(TohpeSearch(sampling=sampling, pool=SourcePool(keep=2, reserve=0), z_choices=2))
+        self.set_todd_search(
+            ToddSearch(
+                sampling=sampling,
+                pool=SourcePool(keep=12, reserve=0),
+                actions_per_bucket=1,
+                buckets=ZBucketSearch(min_buckets=10 + int(250 * z_budget), max_buckets=100000),
+            )
+        )
+        self.set_widths(actions=2, beam=2)
 
     def evaluate(self, params: Iterable[float], max_workers: int = 1, seeds: Iterable[int] | None = None) -> float:
         seeds = list(self.seeds if seeds is None else seeds)
@@ -154,7 +160,7 @@ def run_opt(fun: Evaluator, num_eval: int=10, label: str = "pso") -> np.ndarray:
             return costs
 
         optimizer = ps.single.GlobalBestPSO(
-            n_particles=8,
+            n_particles=16,
             dimensions=n_params,
             options=options,
             bounds=bounds,

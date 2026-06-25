@@ -9,10 +9,18 @@ import numpy as np
 import pyswarms as ps
 
 from scripts.optimization_core.helper import (
+    ActionPool,
+    ActionSelection,
     BaseEvaluator,
     ExplorationScore,
     FinalizationScore,
     Matrix,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
 )
 
 MAX_DEPTH = 1800
@@ -96,34 +104,44 @@ class Evaluator(BaseEvaluator):
         dense_budget = self.map_par(_sigmoid, 0)
         bucket_budget = self.map_par(_sigmoid, 0)
 
-        self.set_pool_scores(pool_score)
-        self.set_final_scores(final_score)
-        self.set_min_pool_size(1)
-        self.set_temperature(0.01 + 0.09 * temp_bias)
-        self.set_tohpe_vector_samples([80 + int(240 * sample_budget), 20 + int(80 * sparse_budget), 0])
-        self.set_todd_vector_samples([10 + int(40 * breadth_budget), 5 + int(35 * sparse_budget), 5 + int(45 * dense_budget)])
-        self.set_sparse_max_weight(4 + int(20 * sparse_budget))
-        self.set_max_pool_size(10 + int(30 * pool_budget))
-        self.set_tohpe_pool_size(5 + int(3 * sample_budget))
-        self.set_todd_pool_size((8 + int(24 * todd_budget)) if self.use_todd_stage else 0)
-        self.set_min_tohpe_actions(1)
-        self.set_min_todd_actions((1 + int(3 * todd_budget)) if self.use_todd_stage else 0)
-        self.set_max_reduction(128)
-        self.set_min_reduction(1)
-        self.set_max_from_single_ns(4 + int(12 * single_budget))
-        self.set_tohpe_sample(4 + int(10 * breadth_budget))
-        self.set_bucket_temperature(0.02 + 0.28 * bucket_budget)
-        self.set_bucket_random_fraction(0.05 + 0.20 * bucket_budget)
-        self.set_max_per_signature(2)
-        self.set_todd_width(1)
-        self.set_beamsearch_width(1)
-
-        if self.use_todd_stage:
-            self.set_min_z_to_research(10000 + int(30000 * todd_budget))
-            self.set_max_z_to_research(1000000 + int(6000000 * todd_budget))
-        else:
-            self.set_min_z_to_research(0)
-            self.set_max_z_to_research(0)
+        sparse_weight = 4 + int(20 * sparse_budget)
+        self.set_scores(PolicyScores(exploration=pool_score, final=final_score))
+        self.set_action_selection(ActionSelection(count=1, mode="softmax", temperature=0.01 + 0.09 * temp_bias))
+        self.set_action_pool(ActionPool(final_size=10 + int(30 * pool_budget)))
+        self.set_tohpe_search(
+            TohpeSearch(
+                sampling=SamplingBudget(
+                    one_hot=80 + int(240 * sample_budget),
+                    sparse=20 + int(80 * sparse_budget),
+                    dense=0,
+                    sparse_max_weight=sparse_weight,
+                ),
+                pool=SourcePool(keep=5 + int(3 * sample_budget), reserve=1),
+                z_choices=4 + int(10 * breadth_budget),
+            )
+        )
+        self.set_todd_search(
+            ToddSearch(
+                sampling=SamplingBudget(
+                    one_hot=10 + int(40 * breadth_budget),
+                    sparse=5 + int(35 * sparse_budget),
+                    dense=5 + int(45 * dense_budget),
+                    sparse_max_weight=sparse_weight,
+                ),
+                pool=SourcePool(
+                    keep=(8 + int(24 * todd_budget)) if self.use_todd_stage else 0,
+                    reserve=(1 + int(3 * todd_budget)) if self.use_todd_stage else 0,
+                ),
+                actions_per_bucket=4 + int(12 * single_budget),
+                buckets=ZBucketSearch(
+                    min_buckets=(10000 + int(30000 * todd_budget)) if self.use_todd_stage else 0,
+                    max_buckets=(1000000 + int(6000000 * todd_budget)) if self.use_todd_stage else 0,
+                    temperature=0.02 + 0.28 * bucket_budget,
+                    random_fraction=0.05 + 0.20 * bucket_budget,
+                ),
+            )
+        )
+        self.set_widths(actions=1, beam=1)
 
     def evaluate(self, params: Iterable[float], max_workers: int = 1) -> float:
         ranks = self.run(params, self.seeds, max_workers=max_workers)

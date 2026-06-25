@@ -4,7 +4,19 @@ import random
 import numpy as np
 import pyswarms as ps
 
-from helper import BaseEvaluator, ExplorationScore, FinalizationScore
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
 
 np.random.seed(131)
 random.seed(131)
@@ -45,18 +57,18 @@ class Evaluator(BaseEvaluator):
         hot_fraction = self.map_par(unit, 0)
         width_budget = self.map_par(unit, 0)
 
-        self.set_pool_scores(
-            ExplorationScore(
-                weights=[-1.0, -1.0, -1.0, -1.0, -1.0],
-                centers=pool_centers,
-                pow=2,
-            )
-        )
-        self.set_final_scores(
-            FinalizationScore(
-                weights=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0],
-                centers=final_centers,
-                pow=2,
+        self.set_scores(
+            PolicyScores(
+                exploration=ExplorationScore(
+                    weights=[-1.0, -1.0, -1.0, -1.0, -1.0],
+                    centers=pool_centers,
+                    pow=2,
+                ),
+                final=FinalizationScore(
+                    weights=[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0],
+                    centers=final_centers,
+                    pow=2,
+                ),
             )
         )
 
@@ -68,39 +80,40 @@ class Evaluator(BaseEvaluator):
             self._sample_caps(sample_count, one_hot + 0.10, 0.04),
             self._sample_caps(max(8, sample_count - 4), one_hot + 0.18, 0.00),
         ]
-        self.set_tohpe_vector_samples(ranks, sample_caps)
-        self.set_todd_vector_samples(ranks, sample_caps)
-
         beam = 1 + int(width_budget > 0.72)
-        self.set_beamsearch_width(ranks, [beam, 1, 1])
-        self.set_todd_width(ranks, [1, 1, 1])
-        self.set_min_pool_size(1)
-        self.set_max_pool_size(ranks, [12, 12, 10])
-        self.set_tohpe_pool_size(ranks, [3, 2, 2])
-        self.set_todd_pool_size(ranks, [8 if deep else 4, 12 if deep else 6, 12])
-        self.set_min_tohpe_actions(1)
-        self.set_min_todd_actions(0)
-        self.set_tohpe_sample(ranks, [3, 2, 2])
-        self.set_temperature(ranks, [0.18, 0.11, 0.07])
-        self.set_min_z_to_research(
+        samplings = [
+            SamplingBudget(one_hot=caps[0], sparse=caps[1], dense=caps[2], sparse_max_weight=2)
+            for caps in sample_caps
+        ]
+        min_z = [
+            20 + int(280 * z_budget),
+            160 + int(1200 * z_budget),
+            280 + int(3000 * z_budget),
+        ]
+        max_z = [28_000, 300_000, 300_000]
+        temps = [0.18, 0.11, 0.07]
+        self.set_widths(beam=list(zip(ranks, [beam, 1, 1])), actions=list(zip(ranks, [1, 1, 1])))
+        self.set_action_selection(ranks, [ActionSelection(count=1, mode="softmax", temperature=temp) for temp in temps])
+        self.set_action_pool(ranks, [ActionPool(final_size=size) for size in [12, 12, 10]])
+        self.set_tohpe_search(
             ranks,
             [
-                20 + int(280 * z_budget),
-                160 + int(1200 * z_budget),
-                280 + int(3000 * z_budget),
+                TohpeSearch(sampling=samplings[i], pool=SourcePool(keep=keep, reserve=1), z_choices=z_choices)
+                for i, (keep, z_choices) in enumerate(zip([3, 2, 2], [3, 2, 2]))
             ],
         )
-        self.set_max_z_to_research(
+        self.set_todd_search(
             ranks,
-            [28_000, 300_000],
+            [
+                ToddSearch(
+                    sampling=samplings[i],
+                    pool=SourcePool(keep=keep, reserve=0),
+                    actions_per_bucket=1,
+                    buckets=ZBucketSearch(min_buckets=min_z[i], max_buckets=max_z[i]),
+                )
+                for i, keep in enumerate([8 if deep else 4, 12 if deep else 6, 12])
+            ],
         )
-        self.set_sparse_max_weight(2)
-        self.set_min_reduction(1)
-        self.set_max_reduction(12)
-        self.set_max_from_single_ns(1)
-        self.set_bucket_temperature(0.0)
-        self.set_bucket_random_fraction(0.0)
-
     def evaluate(self, params: Iterable[float], seeds: Iterable[int] | None = None) -> float:
         seed_list = list(self.seeds if seeds is None else seeds)
         ranks = self.run(params, seed_list, max_workers=5)

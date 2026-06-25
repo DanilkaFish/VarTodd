@@ -5,7 +5,19 @@ import cma
 import numpy as np
 import pyswarms as ps
 
-from helper import BaseEvaluator, ExplorationScore, FinalizationScore
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
 
 np.random.seed(45)
 random.seed(43)
@@ -60,9 +72,11 @@ class Evaluator(BaseEvaluator):
 
         pool = [0.55 + 0.45 * red_bias, 0.0, 0.75 + 0.75 * bucket_bias, z_ham_bias, 0.0]
         final = [0.60 + 0.40 * red_bias, 0.0, 0.85 + 0.55 * bucket_bias, z_ham_bias, 0.0, tohpe_dim_bias]
-        self.set_pool_scores(ExplorationScore(weights=pool, pow=1))
-        self.set_final_scores(
-            FinalizationScore(weights=final, pow=2)
+        self.set_scores(
+            PolicyScores(
+                exploration=ExplorationScore(weights=pool, pow=1),
+                final=FinalizationScore(weights=final, pow=2),
+            )
         )
 
         deep = self.phase == "deep"
@@ -74,30 +88,43 @@ class Evaluator(BaseEvaluator):
             self._sample_caps(sample_counts[1], one_hot_fractions[1], sparse_fraction),
             self._sample_caps(sample_counts[2], one_hot_fractions[2], sparse_fraction * 0.7),
         ]
-        top_pool = [14 + int(18 * pool_bias), 11 + int(14 * pool_bias), 8 + int(8 * pool_bias)]
+        final_pool_sizes = [14 + int(18 * pool_bias), 11 + int(14 * pool_bias), 8 + int(8 * pool_bias)]
         tohpe_pool = [5 + int(5 * tohpe_bias), 4 + int(4 * tohpe_bias), 3 + int(3 * tohpe_bias)]
-        todd_pool = [max(1, top_pool[i] - tohpe_pool[i]) for i in range(3)]
-        self.set_min_pool_size(ranks, [3 + int(6 * pool_bias), 2 + int(4 * pool_bias), 1 + int(2 * pool_bias)])
-        self.set_tohpe_vector_samples(ranks, sample_caps)
-        self.set_todd_vector_samples(ranks, sample_caps)
-        self.set_sparse_max_weight(5 + int(9 * sample_bias))
-        self.set_max_pool_size(ranks, top_pool)
-        self.set_tohpe_pool_size(ranks, tohpe_pool)
-        self.set_todd_pool_size(ranks, todd_pool)
-        self.set_min_tohpe_actions(ranks, [2, 1, 1])
-        self.set_min_todd_actions(ranks, [1, 1, 1])
-        self.set_tohpe_sample(ranks, [5 + int(6 * tohpe_bias), 4 + int(5 * tohpe_bias), 3 + int(3 * tohpe_bias)])
-        self.set_temperature(ranks, [0.22 + 0.10 * gen_bias, 0.14 + 0.07 * gen_bias, 0.08 + 0.05 * gen_bias])
-        self.set_bucket_temperature(0.08 + 0.22 * gen_bias)
-        self.set_bucket_random_fraction(0.01 + 0.04 * gen_bias)
-        self.set_max_per_signature(2)
-        self.set_min_z_to_research(ranks, [800 + 3600 * min_z_bias, 650 + 2500 * min_z_bias, 450 + 1600 * min_z_bias])
-        self.set_max_z_to_research(ranks, [240_000, 620_000, 1_200_000 if deep else 340_000])
-        self.set_min_reduction(1)
-        self.set_max_reduction(12)
-        self.set_max_from_single_ns(2)
-        self.set_beamsearch_width(1)
-        self.set_todd_width(1)
+        todd_pool = [max(1, final_pool_sizes[i] - tohpe_pool[i]) for i in range(3)]
+        sparse_weight = 5 + int(9 * sample_bias)
+        samplings = [SamplingBudget(one_hot=c[0], sparse=c[1], dense=c[2], sparse_max_weight=sparse_weight) for c in sample_caps]
+        temps = [0.22 + 0.10 * gen_bias, 0.14 + 0.07 * gen_bias, 0.08 + 0.05 * gen_bias]
+        min_z = [800 + 3600 * min_z_bias, 650 + 2500 * min_z_bias, 450 + 1600 * min_z_bias]
+        max_z = [240_000, 620_000, 1_200_000 if deep else 340_000]
+        bucket_temp = 0.08 + 0.22 * gen_bias
+        bucket_rand = 0.01 + 0.04 * gen_bias
+        self.set_action_selection(ranks, [ActionSelection(count=1, mode="softmax", temperature=t) for t in temps])
+        self.set_action_pool(ranks, [ActionPool(final_size=size) for size in final_pool_sizes])
+        self.set_tohpe_search(
+            ranks,
+            [
+                TohpeSearch(sampling=samplings[i], pool=SourcePool(keep=tohpe_pool[i], reserve=reserve), z_choices=z)
+                for i, (reserve, z) in enumerate(zip([2, 1, 1], [5 + int(6 * tohpe_bias), 4 + int(5 * tohpe_bias), 3 + int(3 * tohpe_bias)]))
+            ],
+        )
+        self.set_todd_search(
+            ranks,
+            [
+                ToddSearch(
+                    sampling=samplings[i],
+                    pool=SourcePool(keep=todd_pool[i], reserve=1),
+                    actions_per_bucket=2,
+                    buckets=ZBucketSearch(
+                        min_buckets=min_z[i],
+                        max_buckets=max_z[i],
+                        temperature=bucket_temp,
+                        random_fraction=bucket_rand,
+                    ),
+                )
+                for i in range(3)
+            ],
+        )
+        self.set_widths(actions=1, beam=1)
 
     def __call__(self, params: Iterable):
         ranks = self.run(params, self.seeds)

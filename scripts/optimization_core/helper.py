@@ -1,26 +1,75 @@
 import hashlib
 import os
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import time
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from copy import deepcopy
-from typing import Any, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
 from mcts_dao import Dao, Path, RankSchedule
-from node import ExplorationScore, FinalizationScore, Matrix, Node, Tensor3D
+from node import (
+    ActionPool,
+    ActionSelection,
+    ExplorationScore,
+    FinalizationScore,
+    Matrix,
+    Node,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    Tensor3D,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
 from path_store import PathStore, X0_LENGTH
 from todd import Todd
 
+PARAM_ALWAYS_ACTIVE = 10**9
 MIN_SAVED_PATH_MARGIN = 10
 DEFAULT_MATRIX_PATH = "npy/gf2^9.npy"
 
 DEFAULT_MATRIX_PATH = "data/init_npy/other/ham15_high.npy"
+DEFAULT_MATRIX_PATH = "npy/gf2^16_1612310.npy"
 # DEFAULT_MATRIX_PATH = "data/init_npy/gf_mult_Vandaele_wo_ancilla/gf2^64_644310.npy"
 # DEFAULT_MATRIX_PATH = "data/init_npy/gf_mult_Vandaele_wo_ancilla/gf2^32_3228310.npy"
-
-DEFAULT_SEED_WORKERS = min(4, os.cpu_count() or 1)
-EXECUTOR_KIND = "process"
+EXECUTOR_KIND = os.getenv("EVO_SEED_EXECUTOR_KIND", "thread")
 PROGRAM_ID: Optional[str] = os.getenv("GIGAEVO_PROGRAM_ID")
+ACTIVE_EVALUATOR: Optional["BaseEvaluator"] = None
+_ACTIVE_EVALUATOR: Optional["BaseEvaluator"] = None
+DEFAULT_SEED_WORKERS = min(3, os.cpu_count() or 1)
+
+class GracefulEvaluationTimeout(RuntimeError):
+    """Raised inside evaluated programs when the executor soft deadline is reached."""
+
+
+def _register_active_evaluator(evaluator: "BaseEvaluator") -> None:
+    global ACTIVE_EVALUATOR, _ACTIVE_EVALUATOR
+    ACTIVE_EVALUATOR = evaluator
+    _ACTIVE_EVALUATOR = evaluator
+
+
+def _soft_deadline_epoch() -> Optional[float]:
+    raw = os.getenv("GIGAEVO_EXEC_SOFT_DEADLINE_EPOCH")
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _soft_deadline_reached() -> bool:
+    deadline = _soft_deadline_epoch()
+    return deadline is not None and time.time() >= deadline
+
+
+def get_active_evaluator_best():
+    evaluator = _ACTIVE_EVALUATOR
+    if evaluator is None or not evaluator.best_paths:
+        return None
+    return evaluator.get_best(timeout_salvage=True)
 
 
 def trim_trailing_zero_cols(arr: np.ndarray) -> np.ndarray:
@@ -39,27 +88,8 @@ def trim_trailing_zero_cols(arr: np.ndarray) -> np.ndarray:
     return arr[:, :width]
 
 
-def normalize_matrix_array(arr: np.ndarray) -> np.ndarray:
-    arr = trim_trailing_zero_cols(arr)
-    arr = np.asarray(arr != 0, dtype=np.bool_)
-
-    if arr.shape[0] == 0 or arr.shape[1] == 0:
-        return arr[:0, :0]
-
-    arr = arr[np.any(arr, axis=1)]
-    if arr.shape[0] == 0:
-        return arr[:, :0]
-
-    rows, first_indices, counts = np.unique(arr, axis=0, return_index=True, return_counts=True)
-    keep = (counts & 1) == 1
-    order = np.argsort(first_indices[keep])
-    rows = rows[keep][order]
-    return trim_trailing_zero_cols(np.ascontiguousarray(rows))
-
-
 def load_matrix_array(path: str | os.PathLike[str]) -> np.ndarray:
-    return normalize_matrix_array(np.load(path))
-
+    return trim_trailing_zero_cols(np.load(path))
 
 def _worker_run_one_from_template(
     seed: int,
@@ -119,6 +149,32 @@ def _to_rank_schedule(x: Any) -> "RankSchedule":
         return RankSchedule.from_any(list(x))
     return RankSchedule.constant(x)
 
+def _rank_args(x: Any = None, vals=None, *, ranks=None, values=None):
+    """Accept old `(x, vals)` and newer `ranks=..., values=...` setter forms."""
+    def paired(rank_values, scheduled_values):
+        rank_values = list(rank_values)
+        scheduled_values = list(scheduled_values)
+        if len(rank_values) != len(scheduled_values):
+            raise ValueError(
+                "rank schedule requires the same number of ranks and values "
+                f"(got {len(rank_values)} ranks and {len(scheduled_values)} values)"
+            )
+        if not rank_values:
+            raise ValueError("rank schedule requires at least one rank/value pair")
+        return list(zip(rank_values, scheduled_values))
+
+    if ranks is not None or values is not None:
+        if x is not None or vals is not None:
+            raise ValueError("use either positional `(x, vals)` or keyword `ranks=..., values=...`, not both")
+        if ranks is None or values is None:
+            raise ValueError("both `ranks` and `values` are required")
+        return paired(ranks, values)
+    if vals is not None:
+        return paired(x, vals)
+    if x is None:
+        raise TypeError("missing schedule value")
+    return x
+
 def _to_sample_caps(x: Any) -> List[int]:
     if isinstance(x, bool) or isinstance(x, (int, float)):
         return [max(0, int(x)), 0, 0]
@@ -136,6 +192,15 @@ def _to_caps_rank_schedule(x: Any) -> "RankSchedule":
     if _is_rank_list(x):
         return RankSchedule.from_any([(rank, _to_sample_caps(value)) for (rank, value) in x])
     return RankSchedule.constant(_to_sample_caps(x))
+
+def _converted_rank_schedule(x: Any, convert):
+    if isinstance(x, RankSchedule):
+        return RankSchedule.from_any([(rank, convert(value)) for rank, value in x.points])
+    if isinstance(x, zip):
+        x = [obj for obj in x]
+    if _is_rank_list(x):
+        return RankSchedule.from_any([(rank, convert(value)) for rank, value in x])
+    return RankSchedule.constant(convert(x))
 
 def _to_erank_schedule(x: Any) -> "RankSchedule":
     """Accept RankSchedule | [(rank, value), ...] | scalar and return RankSchedule."""
@@ -165,7 +230,8 @@ def _to_exploration_score(x: Any) -> "ExplorationScore":
     x = list(x)
     xs = np.asarray(x)
     x = np.asarray(xs)/np.sqrt(np.sum(xs*xs)) if np.any(xs) else xs
-    return ExplorationScore(*x)
+    weights = [float(v) for v in x]
+    return ExplorationScore(weights, [0.0] * len(weights))
 
 def _to_finalization_score(x: Any) -> "FinalizationScore":
     """Accept FinalizationScore | (wred, wdim, wpossible_red, wtohpe_dim) and return FinalizationScore."""
@@ -174,7 +240,123 @@ def _to_finalization_score(x: Any) -> "FinalizationScore":
     x = list(x)
     xs = np.asarray(x)
     x = np.asarray(xs)/np.sqrt(np.sum(xs*xs)) if np.any(xs) else xs
-    return FinalizationScore(*x)
+    weights = [float(v) for v in x]
+    return FinalizationScore(weights, [0.0] * len(weights))
+
+def _to_policy_scores(x: Any) -> "PolicyScores":
+    if isinstance(x, PolicyScores):
+        return x
+    if isinstance(x, Mapping):
+        return PolicyScores(
+            exploration=_to_exploration_score(x.get("exploration", [1.0, 0.0, 0.0, 0.0, 0.0])),
+            final=_to_finalization_score(x.get("final", [1.0, 0.0, 0.0, 0.0, 0.0, 0.0])),
+        )
+    values = list(x)
+    if len(values) != 2:
+        raise ValueError("PolicyScores expects PolicyScores, mapping, or (exploration, final)")
+    return PolicyScores(exploration=_to_exploration_score(values[0]), final=_to_finalization_score(values[1]))
+
+def _to_policy_scores_schedule(x: Any) -> "RankSchedule":
+    return _converted_rank_schedule(x, _to_policy_scores)
+
+def _to_action_selection(x: Any) -> "ActionSelection":
+    if isinstance(x, ActionSelection):
+        return x
+    if isinstance(x, Mapping):
+        return ActionSelection(
+            count=int(x.get("count", 1)),
+            mode=str(x.get("mode", "best")),
+            temperature=float(x.get("temperature", 0.0)),
+        )
+    raise TypeError("ActionSelection expects ActionSelection or mapping")
+
+def _to_action_selection_schedule(x: Any) -> "RankSchedule":
+    return _converted_rank_schedule(x, _to_action_selection)
+
+def _to_action_pool(x: Any) -> "ActionPool":
+    if isinstance(x, ActionPool):
+        return x
+    if isinstance(x, Mapping):
+        return ActionPool(final_size=int(x.get("final_size", 16)))
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        return ActionPool(final_size=int(x))
+    raise TypeError("ActionPool expects ActionPool, mapping, or integer final_size")
+
+def _to_action_pool_schedule(x: Any) -> "RankSchedule":
+    return _converted_rank_schedule(x, _to_action_pool)
+
+def _to_sampling_budget(x: Any) -> "SamplingBudget":
+    if isinstance(x, SamplingBudget):
+        return x
+    if isinstance(x, Mapping):
+        return SamplingBudget(
+            one_hot=x.get("one_hot", "all"),
+            sparse=int(x.get("sparse", 0)),
+            dense=int(x.get("dense", 32)),
+            sparse_max_weight=int(x.get("sparse_max_weight", 2)),
+        )
+    values = list(x)
+    if len(values) == 3:
+        return SamplingBudget(one_hot=values[0], sparse=int(values[1]), dense=int(values[2]), sparse_max_weight=2)
+    if len(values) == 4:
+        return SamplingBudget(
+            one_hot=values[0],
+            sparse=int(values[1]),
+            dense=int(values[2]),
+            sparse_max_weight=int(values[3]),
+        )
+    raise ValueError("SamplingBudget expects object, mapping, or [one_hot, sparse, dense, sparse_max_weight?]")
+
+def _to_source_pool(x: Any, *, default_keep: int) -> "SourcePool":
+    if isinstance(x, SourcePool):
+        return x
+    if isinstance(x, Mapping):
+        return SourcePool(keep=int(x.get("keep", default_keep)), reserve=int(x.get("reserve", 0)))
+    raise TypeError("SourcePool expects SourcePool or mapping")
+
+def _to_z_bucket_search(x: Any) -> "ZBucketSearch":
+    if isinstance(x, ZBucketSearch):
+        return x
+    if isinstance(x, Mapping):
+        return ZBucketSearch(
+            min_buckets=int(x.get("min_buckets", 32)),
+            max_buckets=int(x.get("max_buckets", 0)),
+            temperature=float(x.get("temperature", 0.0)),
+            random_fraction=float(x.get("random_fraction", 0.0)),
+        )
+    raise TypeError("ZBucketSearch expects ZBucketSearch or mapping")
+
+def _to_tohpe_search(x: Any) -> "TohpeSearch":
+    if isinstance(x, TohpeSearch):
+        return x
+    if isinstance(x, Mapping):
+        return TohpeSearch(
+            sampling=_to_sampling_budget(x.get("sampling", SamplingBudget())),
+            pool=_to_source_pool(x.get("pool", SourcePool(keep=2, reserve=0)), default_keep=2),
+            z_choices=int(x.get("z_choices", 8)),
+        )
+    raise TypeError("TohpeSearch expects TohpeSearch or mapping")
+
+def _to_tohpe_search_schedule(x: Any) -> "RankSchedule":
+    return _converted_rank_schedule(x, _to_tohpe_search)
+
+def _to_todd_search(x: Any) -> "ToddSearch":
+    if isinstance(x, ToddSearch):
+        return x
+    if isinstance(x, Mapping):
+        return ToddSearch(
+            sampling=_to_sampling_budget(x.get("sampling", SamplingBudget())),
+            pool=_to_source_pool(x.get("pool", SourcePool(keep=16, reserve=0)), default_keep=16),
+            actions_per_bucket=int(x.get("actions_per_bucket", 4)),
+            buckets=_to_z_bucket_search(x.get("buckets", ZBucketSearch())),
+        )
+    raise TypeError("ToddSearch expects ToddSearch or mapping")
+
+def _to_todd_search_schedule(x: Any) -> "RankSchedule":
+    return _converted_rank_schedule(x, _to_todd_search)
+
+def _action_counts_schedule(selection: "RankSchedule") -> "RankSchedule":
+    return RankSchedule.from_any([(rank, int(value.count)) for rank, value in selection.points])
 
 def float_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
     output_r = []
@@ -258,18 +440,54 @@ def score_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
                 output_v.append(output)
                 break
     return [tuple(output_r), tuple(output_v)]
+
+def object_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int], convert):
+    output_r = []
+    output_v = []
+    for i, ds in enumerate(dss):
+        down = ranks[i]
+        up = ranks[i-1] if i > 0 else 1000000
+        for r, v in ds.points:
+            if r < up and r >= down:
+                output_r.append(r)
+                output_v.append(convert(v))
+            elif r < down:
+                output_r.append(down)
+                output_v.append(convert(v))
+                break
+    return [tuple(output_r), tuple(output_v)]
     
 def dao_rank_to_str(daos: List[Dao], ranks: List[int]):
     out = {}
-    out["tohpe_vector_samples"] = caps_rank_shedule_to_str([dao.mode.tohpe_vector_samples for dao in daos], ranks)
-    out["todd_vector_samples"] = caps_rank_shedule_to_str([dao.mode.todd_vector_samples for dao in daos], ranks)
-    out["top_pool"] = int_rank_shedule_to_str([dao.mode.top_pool for dao in daos], ranks)
-    out["tohpe_pool_size"] = int_rank_shedule_to_str([dao.mode.tohpe_pool_size for dao in daos], ranks)
-    out["todd_pool_size"] = int_rank_shedule_to_str([dao.mode.todd_pool_size for dao in daos], ranks)
-    out["pool_scores"] = score_rank_shedule_to_str([dao.mode.pool_scores for dao in daos], ranks)
-    out["final_scores"] = score_rank_shedule_to_str([dao.mode.final_scores for dao in daos], ranks)
-    out["min_z_to_research"] = int_rank_shedule_to_str([dao.mode.min_z_to_research for dao in daos], ranks)
-    # dict["temperature"] = float_rank_shedule_to_str([dao.mode.temperature for dao in daos], ranks)
+    out["action_selection"] = object_rank_shedule_to_str(
+        [dao.mode.selection for dao in daos],
+        ranks,
+        lambda s: f"count:{int(s.count)}/mode:{s.mode}/temp:{float(s.temperature):.3f}",
+    )
+    out["action_pool"] = object_rank_shedule_to_str(
+        [dao.mode.pool for dao in daos],
+        ranks,
+        lambda p: f"final:{int(p.final_size)}",
+    )
+    out["tohpe"] = object_rank_shedule_to_str(
+        [dao.mode.tohpe for dao in daos],
+        ranks,
+        lambda t: f"pool:{int(t.pool.keep)}/{int(t.pool.reserve)} z:{int(t.z_choices)} sampling:{t.sampling}",
+    )
+    out["todd"] = object_rank_shedule_to_str(
+        [dao.mode.todd for dao in daos],
+        ranks,
+        lambda t: (
+            f"pool:{int(t.pool.keep)}/{int(t.pool.reserve)} "
+            f"per_bucket:{int(t.actions_per_bucket)} "
+            f"z:{int(t.buckets.min_buckets)}..{int(t.buckets.max_buckets)} sampling:{t.sampling}"
+        ),
+    )
+    out["scores"] = object_rank_shedule_to_str(
+        [dao.mode.scores for dao in daos],
+        ranks,
+        lambda s: f"pool:{s.exploration} final:{s.final}",
+    )
     return out
 
 def _selected_rank_steps(best_ranks, max_lines=10):
@@ -377,22 +595,6 @@ class BaseEvaluator:
     def best_pathes(self, value: List[Path]) -> None:
         self.best_paths = value
 
-    @classmethod
-    def from_saved_path(
-        cls,
-        path_name: str,
-        rank_thr: Optional[int] = None,
-        margin: int = MIN_SAVED_PATH_MARGIN,
-        root_dir: str = "data/path_backups",
-        **kwargs: Any,
-    ) -> "BaseEvaluator":
-        if rank_thr is None:
-            rank_thr = cls._default_saved_path_rank_thr(path_name, margin=margin, root_dir=root_dir)
-        kwargs["path_name"] = path_name
-        kwargs["init_rank_thr"] = rank_thr
-        kwargs["path_root_dir"] = root_dir
-        return cls(**kwargs)
-
     @staticmethod
     def _path_rank_range(path: Path) -> Tuple[Optional[int], Optional[int]]:
         if path.final_node is None:
@@ -440,8 +642,8 @@ class BaseEvaluator:
         raise ValueError(
             f"cannot extract init matrix at rank_thr={rank_thr} from {path_name} "
             f"(path rank range {min_rank}-{max_rank}). "
-            f"Use Evaluator.from_saved_path({path_name!r}, margin=<chosen_margin>, max_depth=...) "
-            f"or choose rank_thr below {max_rank}."
+            f"Use Evaluator(path_name={path_name!r}, margin=<chosen_margin>, fin_rank=...) "
+            f"or choose init_rank_thr below {max_rank}."
         )
 
     def __init__(
@@ -449,11 +651,12 @@ class BaseEvaluator:
         path_name: str = "init",
         init_rank_thr: Optional[int] = None,
         mat: Optional[Matrix] = None,
-        max_depth: int = 300,
-        fin_rank: int = 161,
+        max_depth: int = 1000,
+        fin_rank: int = 1200,
         shedule: str = "rank",
         fill_tcounts: bool = False,
         path_root_dir: str = "data/path_backups",
+        margin: int = MIN_SAVED_PATH_MARGIN,
     ):
         self.with_report = False
         self.current_path = Path()
@@ -462,6 +665,7 @@ class BaseEvaluator:
         self.loaded_path_name = None
         self.loaded_path_root_dir = path_root_dir
         self.init_rank_thr = init_rank_thr
+        self.margin = int(margin)
         self.best_paths = []
         self.best_ranks = []
         self.best_evals = []
@@ -477,7 +681,9 @@ class BaseEvaluator:
             self.init_rank_thr = mat.rows
         elif path_name != "init":
             if init_rank_thr is None:
-                init_rank_thr = self._default_saved_path_rank_thr(path_name, root_dir=path_root_dir)
+                init_rank_thr = self._default_saved_path_rank_thr(
+                    path_name, margin=self.margin, root_dir=path_root_dir
+                )
                 self.init_rank_thr = init_rank_thr
             else:
                 loaded_paths = PathStore(root_dir=path_root_dir).load(path_name, dao_fallback=self.dao)
@@ -497,6 +703,7 @@ class BaseEvaluator:
         self.best_params = []
         self._executor = None
         self._executor_key = None
+        _register_active_evaluator(self)
         # self
         self.x0 = [0 for i in range(X0_LENGTH)]
         if not self.is_init and self.current_path.x0s:
@@ -580,8 +787,8 @@ class BaseEvaluator:
     def best_rank(self):
         return self._best_rank
 
-    def map_par(self, mapping: callable, thr: int = 0, **kwargs):
-        if self.init.rows > thr:
+    def map_par(self, mapping: callable, thr: int = PARAM_ALWAYS_ACTIVE, **kwargs):
+        if self.init.rows < thr:
             self.active_params.append(self.idx)
         self.idx += 1
         return mapping(self.x0[self.idx - 1], **kwargs)
@@ -598,16 +805,17 @@ class BaseEvaluator:
         return self.extract_active()
         
     def extract_active(self):
-        x = []
-        for i, a in enumerate(self.active_params):
-            x.append(self.x0[a])
-        return x
+        return np.asarray([self.x0[a] for a in self.active_params], dtype=float)
         
     def __call__(self, params: Iterable):
         pass
 
     def policy_mapping(self):
         pass
+
+    def _raise_if_soft_deadline(self) -> None:
+        if _soft_deadline_reached():
+            raise GracefulEvaluationTimeout("executor soft deadline reached")
 
     def _get_executor(self, executor_cls, executor_kind: str, max_workers: int):
         key = (executor_kind, max_workers)
@@ -695,20 +903,32 @@ class BaseEvaluator:
             self.best_seen += counters[1]
             self.best_seed = seed
 
-    def run(self, params, seeds, max_workers=1):
+    def run(self, params, seeds, max_workers=None):
         if len(params) != len(self.active_params):
             raise RuntimeError(f"Num of params {len(params)} is not equal to the num of active params {len(self.active_params)}")
+        self._raise_if_soft_deadline()
         self.insert(params)
         self.reinit()
         # self.policy_setup(params)
         if max_workers is None:
             max_workers = DEFAULT_SEED_WORKERS
         max_workers = max(1, min(int(max_workers), len(seeds)))
+        results = []
+        timed_out = False
         if max_workers == 1:
-            results = [
-                _worker_run_one_from_template(seed, self.current_path, self.todd, self.bs_width, self.todd_width)
-                for seed in seeds
-            ]
+            for seed in seeds:
+                if _soft_deadline_reached():
+                    timed_out = True
+                    break
+                results.append(
+                    _worker_run_one_from_template(
+                        seed,
+                        self.current_path,
+                        self.todd,
+                        self.bs_width,
+                        self.todd_width,
+                    )
+                )
         else:
             executor_kind = EXECUTOR_KIND.strip().lower()
             if executor_kind in {"process", "processes", "proc"}:
@@ -723,7 +943,16 @@ class BaseEvaluator:
                 ex.submit(_worker_run_one_from_template, seed, self.current_path, self.todd, self.bs_width, self.todd_width)
                 for seed in seeds
             ]
-            results = [f.result() for f in futures]
+            pending = set(futures)
+            while pending:
+                if _soft_deadline_reached():
+                    timed_out = True
+                    for future in pending:
+                        future.cancel()
+                    break
+                done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                for future in done:
+                    results.append(future.result())
 
         # process deterministically in seed order
         seed_to_idx = {s:i for i,s in enumerate(seeds)}
@@ -732,6 +961,8 @@ class BaseEvaluator:
         mats_ranks = []
         for seed, node, counters in results:
             self._record_run_result(seed, node, counters, mats_ranks)
+        if timed_out:
+            raise GracefulEvaluationTimeout("executor soft deadline reached")
         return mats_ranks
 
     def get_best(self, timeout_salvage: bool = False):
@@ -783,8 +1014,7 @@ class BaseEvaluator:
         return (
             best_path.final_node.state.to_numpy(), 
             best_path.format_path_stats(start_rank=stats_start_rank),
-            "\nbest_policy:\n" +
-            str(dao_rank_to_str(best_path.daos, best_path.ranks_thr + [0])) + "\nsearch_stat:\n" +
+            "\nsearch_stat:\n" +
             f"rank 0.9q={np.quantile(self.tcount, 0.9) if self.tcount else 'n/a'} \n" +
             f"rank 0.1q={np.quantile(self.tcount, 0.1) if self.tcount else 'n/a'} \n" +
             print_uniform_by_rank(self.best_ranks, self.best_evals, 8, self.init_events) +
@@ -793,7 +1023,6 @@ class BaseEvaluator:
             (f"\ntimeout_salvaged: 1" if timeout_salvage else "") +
             reuse_note +
             load_note +
-            f"\nevo path statistics:\n{summarize_path_backups(top_k=11)}" +
             f"\nthis path name: {self.path_name}"
             )
 
@@ -845,8 +1074,9 @@ class BaseEvaluator:
         init_rank = int(path_root[0].state.rows) if path_root else rank
         mat = path.final_node.state.to_numpy()
         mid_rank = self._path_name_mid_rank(path)
-        if PROGRAM_ID:
-            return f"{name}i{init_rank}_m{mid_rank}_f{rank}_{PROGRAM_ID[:8]}"
+        program_id = os.getenv("GIGAEVO_PROGRAM_ID") or PROGRAM_ID
+        if program_id:
+            return f"{name}i{init_rank}_m{mid_rank}_f{rank}_{program_id[:8]}"
         h = hashlib.blake2b(digest_size=6)
         h.update(str(init_rank).encode("utf-8"))
         h.update(str(mid_rank).encode("utf-8"))
@@ -892,117 +1122,57 @@ class BaseEvaluator:
         # self.dao = 
         return self.best_paths
     
-    def set_final_scores(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.final_scores = _to_frank_schedule(x)
-        
-    def set_pool_scores(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.pool_scores = _to_erank_schedule(x)
+    def set_scores(
+        self,
+        x: Any = None,
+        vals=None,
+        *,
+        ranks=None,
+        values=None,
+        exploration=None,
+        final=None,
+    ):
+        if exploration is not None or final is not None:
+            if x is not None or vals is not None or ranks is not None or values is not None:
+                raise ValueError("use either a PolicyScores value/schedule or exploration=.../final=..., not both")
+            x = PolicyScores(
+                exploration=_to_exploration_score(
+                    exploration if exploration is not None else [1.0, 0.0, 0.0, 0.0, 0.0]
+                ),
+                final=_to_finalization_score(final if final is not None else [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            )
+        else:
+            x = _rank_args(x, vals, ranks=ranks, values=values)
+        self.dao.mode.scores = _to_policy_scores_schedule(x)
 
-    def set_tohpe_vector_samples(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.tohpe_vector_samples = _to_caps_rank_schedule(x)
+    def set_action_selection(self, x: Any = None, vals=None, *, ranks=None, values=None):
+        x = _rank_args(x, vals, ranks=ranks, values=values)
+        schedule = _to_action_selection_schedule(x)
+        self.dao.mode.selection = schedule
+        self.todd_width = _action_counts_schedule(schedule)
 
-    def set_todd_vector_samples(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.todd_vector_samples = _to_caps_rank_schedule(x)
+    def set_action_pool(self, x: Any = None, vals=None, *, ranks=None, values=None):
+        x = _rank_args(x, vals, ranks=ranks, values=values)
+        self.dao.mode.pool = _to_action_pool_schedule(x)
 
-    def set_sparse_max_weight(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.sparse_max_weight = _to_rank_schedule(x)
+    def set_tohpe_search(self, x: Any = None, vals=None, *, ranks=None, values=None):
+        x = _rank_args(x, vals, ranks=ranks, values=values)
+        self.dao.mode.tohpe = _to_tohpe_search_schedule(x)
 
-    def set_beamsearch_width(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
+    def set_todd_search(self, x: Any = None, vals=None, *, ranks=None, values=None):
+        x = _rank_args(x, vals, ranks=ranks, values=values)
+        self.dao.mode.todd = _to_todd_search_schedule(x)
+
+    def set_widths(self, *, beam: Any = None, actions: Any = None):
+        if beam is not None:
+            self.bs_width = _to_rank_schedule(beam)
+        if actions is not None:
+            self.todd_width = _to_rank_schedule(actions)
+
+    def set_beamsearch_width(self, x: Any = None, vals=None, *, ranks=None, values=None):
+        x = _rank_args(x, vals, ranks=ranks, values=values)
         self.bs_width = _to_rank_schedule(x)
         
-    def set_todd_width(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
+    def set_todd_width(self, x: Any = None, vals=None, *, ranks=None, values=None):
+        x = _rank_args(x, vals, ranks=ranks, values=values)
         self.todd_width = _to_rank_schedule(x)
-
-    def set_min_z_to_research(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.min_z_to_research = _to_rank_schedule(x)
-
-    def set_max_z_to_research(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.max_z_to_research = _to_rank_schedule(x)
-
-    def set_min_pool_size(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.min_pool_size = _to_rank_schedule(x)
-
-    def set_temperature(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.temperature = _to_rank_schedule(x)
-
-    def set_max_pool_size(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.top_pool = _to_rank_schedule(x)
-
-    def set_tohpe_pool_size(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.tohpe_pool_size = _to_rank_schedule(x)
-
-    def set_todd_pool_size(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.todd_pool_size = _to_rank_schedule(x)
-
-    def set_min_tohpe_actions(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.min_tohpe_actions = _to_rank_schedule(x)
-
-    def set_min_todd_actions(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.min_todd_actions = _to_rank_schedule(x)
-
-    def set_max_from_single_ns(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.max_from_single_ns = _to_rank_schedule(x)
-
-    def set_tohpe_sample(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.tohpe_sample = _to_rank_schedule(x)
-
-    def set_bucket_temperature(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.bucket_temperature = _to_rank_schedule(x)
-
-    def set_bucket_random_fraction(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.bucket_random_fraction = _to_rank_schedule(x)
-
-    def set_max_per_signature(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.max_per_signature = _to_rank_schedule(x)
-
-    def set_min_reduction(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.min_reduction = _to_rank_schedule(x)
-
-    def set_max_reduction(self, x: Any, vals=None):
-        if vals is not None:
-            x = list(zip(x, vals))
-        self.dao.mode.max_reduction  = _to_rank_schedule(x)

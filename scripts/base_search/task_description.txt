@@ -17,48 +17,43 @@ n=48.
 - FastTODD searches actions `a = (z, y)`, where `z` is a boolean vector and `y` comes from a nullspace `N_z`.
 - TOHPE-stage action generation uses a reduced search space. Its setup cost is about `O(n^2 * m^2)`.
 - TODD-stage researches candidate `z` buckets, builds `N_z`, then emits coefficient vectors by explicit sample caps.
-- Coefficient sample caps have shape `[one_hot, sparse, dense]`.
-  - `one_hot`: basis vectors of weight 1, capped by basis dimension.
+- Coefficient sampling is controlled by `SamplingBudget(one_hot, sparse, dense, sparse_max_weight)`.
+  - `one_hot`: basis vectors of weight 1. Use `one_hot="all"` to try every one-hot basis vector.
   - `sparse`: random coefficient vectors with weight in `[2, sparse_max_weight]`.
   - `dense`: random bitvectors in the current basis dimension.
-- TOHPE and full TODD have independent caps: `tohpe_vector_samples` and `todd_vector_samples`.
-- TODD search complexity scales roughly with `n^4 * max_z_to_research`.
+- TOHPE and full TODD have independent `SamplingBudget` values inside `TohpeSearch` and `ToddSearch`.
+- TODD search complexity scales with researched z buckets; high `max_buckets` raises the reserve-target search cap.
 - `beamsearch_width` and `todd_width` scale roughly linearly.
-- `min_z_to_research` is the lower target for researched z candidates before final action choice; `max_z_to_research` is the hard cap.
+- `ZBucketSearch.min_buckets` is guaranteed z-bucket research; `ZBucketSearch.max_buckets` caps reserve-target search, not total search when no action has been found.
 - Large `researched_z_mean/max` means accepted reducing actions were found only after substantial search. This is evidence about difficulty, not automatically waste.
 - `bucket_size * 2` is a possible maximum reduction for a chosen z; it is not guaranteed to exist.
 - Increasing vector sample caps is usually cheaper than increasing z-search breadth. It mostly changes action diversity and quality inside the current z budget.
 - One objective call may run many FastTODD steps.
-- Each program can parallelize seed evaluations up to 4 workers inside `fun.run(params, seeds)`. More than 4 seeds usually run in batches and remain a runtime multiplier.
+- !!! Each program can parallelize seed evaluations up to 3 workers inside `fun.run(params, seeds)`. More than 4 seeds run in batches and remain a runtime multiplier.
 - Runtime is multiplied by optimizer evaluations, seed count, `beamsearch_width`, `todd_width`, source pool sizes, z-search limits, vector sample caps, and path depth.
 - To avoid timeouts, estimate cost from previous `runtime`, `total_eval`, path depth, and `path_policy_groups` before increasing expensive knobs.
 
 ---
 ## Policy Knobs
 Budget and action generation:
-- `tohpe_vector_samples=[one_hot, sparse, dense]`: coefficient-vector caps for TOHPE-stage candidates.
-- `todd_vector_samples=[one_hot, sparse, dense]`: coefficient-vector caps for full TODD-stage candidates.
-- `sparse_max_weight`: maximum sparse coefficient-vector weight. Sparse samples use weights in `[2, sparse_max_weight]`.
-- `tohpe_pool_size`: max TOHPE candidates kept. Set to `0` to disable TOHPE.
-- `todd_pool_size`: max full TODD candidates kept. Set to `0` to disable full TODD.
-- `min_tohpe_actions`: minimum TOHPE actions reserved before the final merge.
-- `min_todd_actions`: minimum full TODD actions reserved before the final merge.
-- `tohpe_sample`: number of best `z` buckets considered for each TOHPE vector.
-- `min_z_to_research`, `max_z_to_research`: z-search lower target and hard cap.
+- `SamplingBudget(one_hot, sparse, dense, sparse_max_weight)`: coefficient-vector budget for one source.
+- `SourcePool(keep, reserve)`: max candidates kept from one source and minimum reserved before final merge. Set `keep=0` to disable that source.
+- `TohpeSearch(sampling, pool, z_choices)`: TOHPE-stage candidate generation.
+- `ToddSearch(sampling, pool, actions_per_bucket, buckets)`: full TODD-stage candidate generation.
+- `ZBucketSearch(min_buckets, max_buckets, temperature, random_fraction)`: guaranteed z-bucket research, reserve-target search cap, and bucket-order randomness.
+- `ActionPool(final_size)`: retained action pool after source merge and final scoring.
+- `ActionSelection(count, mode, temperature)`: number of actions followed per step, final-choice mode, and softmax temperature.
 - `beamsearch_width`: number of states kept after each step.
 - `todd_width`: number of actions followed per step.
-- `min_pool_size`, `max_pool_size`: requested and retained action pool sizes. In code, `set_max_pool_size` writes `top_pool`.
-- `max_from_single_ns`: action cap from one z.
-- `min_reduction`, `max_reduction`: accepted rank-reduction range.
-- `temperature`: softmax temperature for final choice.
-- `bucket_temperature`: Gumbel-style randomness over bucket-size ordering before TODD z research.
-- `bucket_random_fraction`: fraction of researched buckets reserved for random non-top buckets.
-- `max_per_signature`: cap near-duplicate candidates by structural signature. `0` disables this cap.
+- `ToddSearch.actions_per_bucket`: action cap from one researched z bucket.
 
 Removed legacy knobs:
+- Do not use flat policy setters or keys such as vector sample caps, pool sizes, min actions, z limits, temperature, or per-z action limits.
 - Do not use `num_samples`, `gen_part`, `try_only_tohpe`, `enable_tohpe`, `enable_todd`, `max_tohpe`, `tohpe_num_best`, `mix_*`, `vector_samples`, or `non_improving_prob`.
-- Disable a source by setting its pool size to `0`.
-- Replace old `num_samples=N, gen_part=g` approximately with caps like `[round(N*g), 0, N-round(N*g)]`, or add sparse budget explicitly as `[one_hot, sparse, dense]`.
+- Disable a source by setting `SourcePool(keep=0, reserve=0)` inside that source search object.
+- For `path_store` reproduction, old C++ forced `gen_part=1.0`, so `num_samples=N` is closest to `SamplingBudget(one_hot="all", sparse=0, dense=N, sparse_max_weight=2)`. For older code that actually honored `gen_part=g`, use `SamplingBudget(one_hot=round(N*g), sparse=0, dense=N-round(N*g), sparse_max_weight=2)`, or add sparse budget explicitly.
+- Candidate generation accepts only positive rank reductions. Zero and negative reductions are discarded.
+- `min_buckets` is the guaranteed TODD z-bucket count. `max_buckets > 0` caps the search for TODD's reserve target; if no positive TODD action has been retained at that cap, scanning continues until one is found or all buckets are exhausted.
 
 Scoring:
 - `ExplorationScore(weights=[wred, wdim, wbucket, wvw, wz], centers=[...], pow=...)`
@@ -92,16 +87,12 @@ Required API:
 - `extract_active() -> list[float]`: returns the active parameter vector.
 
 Current-interface examples:
-- `self.set_tohpe_vector_samples([400, 100, 0])`
-- `self.set_todd_vector_samples([40, 10, 30])`
-- `self.set_tohpe_pool_size(10)`
-- `self.set_todd_pool_size(0)` disables full TODD.
-- `self.set_min_tohpe_actions(2)`
-- `self.set_min_todd_actions(1)`
-- `self.set_tohpe_sample(4)`
-- `self.set_bucket_temperature(0.15)`
-- `self.set_bucket_random_fraction(0.03)`
-- `self.set_max_per_signature(2)`
+- `self.set_scores(PolicyScores(exploration=pool_score, final=final_score))`
+- `self.set_action_selection(ActionSelection(count=1, mode="softmax", temperature=0.15))`
+- `self.set_action_pool(ActionPool(final_size=12))`
+- `self.set_tohpe_search(TohpeSearch(sampling=SamplingBudget(one_hot="all", sparse=0, dense=32, sparse_max_weight=2), pool=SourcePool(keep=2, reserve=0), z_choices=4))`
+- `self.set_todd_search(ToddSearch(sampling=SamplingBudget(one_hot=40, sparse=10, dense=30, sparse_max_weight=4), pool=SourcePool(keep=10, reserve=1), actions_per_bucket=2, buckets=ZBucketSearch(min_buckets=500, max_buckets=300000, temperature=0.15, random_fraction=0.03)))`
+- `self.set_widths(beam=2, actions=1)`
 
 Useful fields:
 - `best_rank`: current best rank.

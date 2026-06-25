@@ -1,6 +1,21 @@
 from typing import Iterable
 import numpy as np
-from scripts.optimization_core.helper import get_matrix, BaseEvaluator, Matrix, find_rank, ExplorationScore, FinalizationScore
+from scripts.optimization_core.helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    Matrix,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+    find_rank,
+    get_matrix,
+)
 import random
 
 np.random.seed(42)
@@ -22,22 +37,20 @@ class Evaluator(BaseEvaluator):
         w_final = [FinalizationScore([1,0,0,0,0,0],
                                   pow=1
                                   ) for r in ranks]
-        self.set_pool_scores(ranks, w_pool)
-        self.set_final_scores(ranks, w_final)
-        self.set_min_pool_size(1)
-        self.set_min_z_to_research(100000)
-        self.set_temperature(0.0)
-        self.set_tohpe_vector_samples([15, 0, 15])
-        self.set_todd_vector_samples([15, 0, 15])
-        self.set_max_pool_size(1)
-        self.set_tohpe_pool_size(1)
-        self.set_todd_pool_size(0)
-        self.set_max_reduction(100)
-        self.set_min_reduction(1)
-        self.set_max_from_single_ns(1)
-        self.set_tohpe_sample(1)
-        self.set_todd_width(1)
-        self.set_beamsearch_width(1)
+        sampling = SamplingBudget(one_hot=15, sparse=0, dense=15, sparse_max_weight=8)
+        self.set_scores(ranks, [PolicyScores(exploration=w_pool[0], final=w_final[0])])
+        self.set_action_selection(ActionSelection(count=1, mode="best", temperature=0.0))
+        self.set_action_pool(ActionPool(final_size=1))
+        self.set_tohpe_search(TohpeSearch(sampling=sampling, pool=SourcePool(keep=1, reserve=0), z_choices=1))
+        self.set_todd_search(
+            ToddSearch(
+                sampling=sampling,
+                pool=SourcePool(keep=0, reserve=0),
+                actions_per_bucket=1,
+                buckets=ZBucketSearch(min_buckets=100000, max_buckets=100000),
+            )
+        )
+        self.set_widths(actions=1, beam=1)
 
     def __call__(self, params: Iterable):
         tcounts = self.run(params, self.seeds, max_workers=1)

@@ -3,10 +3,14 @@
 #include "todd_generator.hpp"
 #include <boost/program_options.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cctype>
+#include <filesystem>
 #include <iostream>
 #include <memory>
-#include <filesystem>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace po = boost::program_options;
@@ -18,22 +22,24 @@ int main(int argc, char* argv[]) {
         ("help,h", "produce help message")
         ("file,f", po::value<std::string>()->required(), "input matrix file")
         ("output_file,o", po::value<std::string>()->default_value(""), "output matrix file")
-        ("tohpe-vector-samples", po::value<std::vector<int>>()->multitoken()->default_value(std::vector<int>{16, 32, 16}, "16 32 16"), "TOHPE sample caps: one-hot sparse dense")
-        ("todd-vector-samples", po::value<std::vector<int>>()->multitoken()->default_value(std::vector<int>{16, 32, 16}, "16 32 16"), "full Todd sample caps: one-hot sparse dense")
-        ("min-z,mz", po::value<int>()->default_value(10000), "minimum Z buckets to research")
-        ("max-z", po::value<int>()->default_value(10000), "maximum Z buckets to research")
-        ("sparse-max-weight", po::value<int>()->default_value(8), "maximum sparse vector weight")
-        ("tohpe-pool-size", po::value<int>()->default_value(1), "max TOHPE candidates kept; 0 disables TOHPE")
-        ("todd-pool-size", po::value<int>()->default_value(1), "max full Todd candidates kept; 0 disables full Todd")
-        ("min-tohpe-actions", po::value<int>()->default_value(0), "minimum TOHPE actions before final merge")
-        ("min-todd-actions", po::value<int>()->default_value(0), "minimum full Todd actions before final merge")
-        ("tohpe-sample", po::value<int>()->default_value(1), "number of TOHPE z candidates per vector")
-        ("bucket-temperature", po::value<double>()->default_value(0.0), "Gumbel temperature for bucket choice")
-        ("bucket-random-fraction", po::value<double>()->default_value(0.0), "fraction of researched buckets chosen randomly")
-        ("max-per-signature", po::value<int>()->default_value(2), "candidate cap per diversity signature; 0 disables")
+        ("action-count", po::value<int>()->default_value(1), "number of final actions to apply")
+        ("selection-mode", po::value<std::string>()->default_value("best"), "final action selection mode: best or softmax")
+        ("selection-temperature", po::value<double>()->default_value(0.0), "softmax temperature for final action selection")
+        ("action-pool-final-size", po::value<int>()->default_value(16), "final merged action pool size")
+        ("tohpe-sampling", po::value<std::vector<std::string>>()->multitoken()->default_value(std::vector<std::string>{"all", "0", "32", "2"}, "all 0 32 2"), "TOHPE sampling: one_hot sparse dense sparse_max_weight")
+        ("todd-sampling", po::value<std::vector<std::string>>()->multitoken()->default_value(std::vector<std::string>{"all", "0", "32", "2"}, "all 0 32 2"), "full Todd sampling: one_hot sparse dense sparse_max_weight")
+        ("tohpe-pool-keep", po::value<int>()->default_value(2), "TOHPE candidates kept; 0 disables TOHPE")
+        ("tohpe-pool-reserve", po::value<int>()->default_value(0), "minimum TOHPE actions reserved before final merge")
+        ("tohpe-z-choices", po::value<int>()->default_value(8), "number of TOHPE z candidates per vector")
+        ("todd-pool-keep", po::value<int>()->default_value(16), "full Todd candidates kept; 0 disables full Todd")
+        ("todd-pool-reserve", po::value<int>()->default_value(0), "minimum full Todd actions reserved before final merge")
+        ("todd-actions-per-bucket", po::value<int>()->default_value(4), "full Todd actions kept from each z bucket")
+        ("z-min-buckets,mz", po::value<int>()->default_value(32), "minimum Z buckets to research")
+        ("z-max-buckets", po::value<int>()->default_value(0), "maximum Z buckets to research; 0 means unlimited")
+        ("z-temperature", po::value<double>()->default_value(0.0), "Gumbel temperature for bucket choice")
+        ("z-random-fraction", po::value<double>()->default_value(0.0), "fraction of researched buckets chosen randomly")
         ("escore-wred,er", po::value<int>()->default_value(1), "exploration score wred")
-        ("fscore-wred,fr", po::value<int>()->default_value(-1), "finalization score wred")
-        ("min-reduction", po::value<int>()->default_value(1), "minimum reduction")
+        ("fscore-wred,fr", po::value<int>()->default_value(1), "finalization score wred")
         ("seed,s", po::value<int>()->default_value(4), "seed")
     ;
     
@@ -67,28 +73,41 @@ int main(int argc, char* argv[]) {
     }
     
     PolicyConfig policy_cfg;
-    auto sample_caps = [](const std::vector<int>& values) {
-        std::array<Int, 3> caps = {0, 0, 0};
-        for (std::size_t i = 0; i < std::min<std::size_t>(caps.size(), values.size()); ++i)
-            caps[i] = values[i];
-        return caps;
+    auto parse_one_hot = [](std::string value) -> Int {
+        std::ranges::transform(value, value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        if (value == "all")
+            return k_all_one_hot_samples;
+        return static_cast<Int>(std::max(0, std::stoi(value)));
     };
-    policy_cfg.tohpe_vector_samples = sample_caps(vm["tohpe-vector-samples"].as<std::vector<int>>());
-    policy_cfg.todd_vector_samples = sample_caps(vm["todd-vector-samples"].as<std::vector<int>>());
-    policy_cfg.min_z_to_research = vm["min-z"].as<int>();
-    policy_cfg.max_z_to_research = vm["max-z"].as<int>();
-    policy_cfg.sparse_max_weight = vm["sparse-max-weight"].as<int>();
-    policy_cfg.tohpe_pool_size = vm["tohpe-pool-size"].as<int>();
-    policy_cfg.todd_pool_size = vm["todd-pool-size"].as<int>();
-    policy_cfg.min_tohpe_actions = vm["min-tohpe-actions"].as<int>();
-    policy_cfg.min_todd_actions = vm["min-todd-actions"].as<int>();
-    policy_cfg.tohpe_sample = vm["tohpe-sample"].as<int>();
-    policy_cfg.bucket_temperature = static_cast<float>(vm["bucket-temperature"].as<double>());
-    policy_cfg.bucket_random_fraction = static_cast<float>(vm["bucket-random-fraction"].as<double>());
-    policy_cfg.max_per_signature = vm["max-per-signature"].as<int>();
-    policy_cfg.escore.weights[0] = vm["escore-wred"].as<int>();
-    policy_cfg.fscore.weights[0] = vm["fscore-wred"].as<int>();
-    policy_cfg.min_reduction = vm["min-reduction"].as<int>();
+    auto parse_sampling = [&](const std::vector<std::string>& values) {
+        if (values.size() != 4)
+            throw std::runtime_error("sampling budget expects four values: one_hot sparse dense sparse_max_weight");
+        return SamplingBudget{parse_one_hot(values[0]), static_cast<Int>(std::max(0, std::stoi(values[1]))),
+                              static_cast<Int>(std::max(0, std::stoi(values[2]))),
+                              static_cast<Int>(std::max(0, std::stoi(values[3])))};
+    };
+    policy_cfg.selection = ActionSelection{static_cast<Int>(vm["action-count"].as<int>()),
+                                           vm["selection-mode"].as<std::string>(),
+                                           static_cast<float>(vm["selection-temperature"].as<double>())};
+    policy_cfg.pool      = ActionPool{static_cast<Int>(vm["action-pool-final-size"].as<int>())};
+    policy_cfg.tohpe     = TohpeSearch{
+        parse_sampling(vm["tohpe-sampling"].as<std::vector<std::string>>()),
+        SourcePool{static_cast<Int>(vm["tohpe-pool-keep"].as<int>()),
+                   static_cast<Int>(vm["tohpe-pool-reserve"].as<int>())},
+        static_cast<Int>(vm["tohpe-z-choices"].as<int>())};
+    policy_cfg.todd = ToddSearch{
+        parse_sampling(vm["todd-sampling"].as<std::vector<std::string>>()),
+        SourcePool{static_cast<Int>(vm["todd-pool-keep"].as<int>()),
+                   static_cast<Int>(vm["todd-pool-reserve"].as<int>())},
+        static_cast<Int>(vm["todd-actions-per-bucket"].as<int>()),
+        ZBucketSearch{static_cast<Int>(vm["z-min-buckets"].as<int>()),
+                      static_cast<Int>(vm["z-max-buckets"].as<int>()),
+                      static_cast<float>(vm["z-temperature"].as<double>()),
+                      static_cast<float>(vm["z-random-fraction"].as<double>())}};
+    policy_cfg.scores.exploration.weights[0] = vm["escore-wred"].as<int>();
+    policy_cfg.scores.final.weights[0]       = vm["fscore-wred"].as<int>();
 	
 	auto init_matrix = Matrix::from_npy(filename);
 	auto finit_matrix = init_matrix;

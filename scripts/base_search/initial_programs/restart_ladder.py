@@ -4,7 +4,19 @@ import random
 import numpy as np
 import pyswarms as ps
 
-from helper import BaseEvaluator, ExplorationScore, FinalizationScore
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
 
 np.random.seed(44)
 random.seed(42)
@@ -45,33 +57,30 @@ class Evaluator(BaseEvaluator):
 
         pool = [0.55 + red, -0.30, 0.80 + bucket, 0.10, 0.0]
         final = [0.55 + red, -0.20, 0.90 + bucket, 0.05, 0.0, 0.0]
-        self.set_pool_scores(ExplorationScore(weights=pool, pow=1))
-        self.set_final_scores(
-            FinalizationScore(weights=final, centers=[0, 0, 0, 0, 0, 0], pow=2)
+        self.set_scores(
+            PolicyScores(
+                exploration=ExplorationScore(weights=pool, pow=1),
+                final=FinalizationScore(weights=final, centers=[0, 0, 0, 0, 0, 0], pow=2),
+            )
         )
 
         deep = self.phase == "deep"
-        top_pool = 8 + int(10 * diversity)
+        final_pool_size = 8 + int(10 * diversity)
         tohpe_pool = 4
         sample_caps = self._sample_caps(10 + int(10 * diversity), 0.42 + 0.35 * diversity)
-        self.set_min_pool_size(1 + int(3 * diversity))
-        self.set_tohpe_vector_samples(sample_caps)
-        self.set_todd_vector_samples(sample_caps)
-        self.set_sparse_max_weight(4)
-        self.set_max_pool_size(top_pool)
-        self.set_tohpe_pool_size(tohpe_pool)
-        self.set_todd_pool_size(max(1, top_pool - tohpe_pool) if deep else 0)
-        self.set_min_tohpe_actions(1)
-        self.set_min_todd_actions(1 if deep else 0)
-        self.set_tohpe_sample(5)
-        self.set_temperature(0.16 + 0.10 * diversity)
-        self.set_min_z_to_research(500 + 2200 * z_budget)
-        self.set_max_z_to_research(900_000 if deep else 180_000)
-        self.set_min_reduction(1)
-        self.set_max_reduction(10)
-        self.set_max_from_single_ns(2)
-        self.set_beamsearch_width(1)
-        self.set_todd_width(1)
+        sampling = SamplingBudget(one_hot=sample_caps[0], sparse=sample_caps[1], dense=sample_caps[2], sparse_max_weight=4)
+        self.set_action_selection(ActionSelection(count=1, mode="softmax", temperature=0.16 + 0.10 * diversity))
+        self.set_action_pool(ActionPool(final_size=final_pool_size))
+        self.set_tohpe_search(TohpeSearch(sampling=sampling, pool=SourcePool(keep=tohpe_pool, reserve=1), z_choices=5))
+        self.set_todd_search(
+            ToddSearch(
+                sampling=sampling,
+                pool=SourcePool(keep=max(1, final_pool_size - tohpe_pool) if deep else 0, reserve=1 if deep else 0),
+                actions_per_bucket=2,
+                buckets=ZBucketSearch(min_buckets=500 + 2200 * z_budget, max_buckets=900_000 if deep else 180_000),
+            )
+        )
+        self.set_widths(actions=1, beam=1)
 
     def __call__(self, params: Iterable):
         ranks = self.run(params, self.seeds)

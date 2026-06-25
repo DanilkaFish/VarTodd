@@ -4,7 +4,19 @@ import random
 import cma
 import numpy as np
 
-from helper import BaseEvaluator, ExplorationScore, FinalizationScore
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
 
 np.random.seed(43)
 random.seed(41)
@@ -46,37 +58,46 @@ class Evaluator(BaseEvaluator):
 
         pool = [0.35, -0.25, 1.0 + 0.8 * bucket_bias, 1 - 2*self.map_par(sigmoid, 0),  1 - 2*self.map_par(sigmoid, 0)]
         final = [-0.45, -0.15, 1.1 + 0.6 * bucket_bias, 1 - 2*self.map_par(sigmoid, 0), 1 - 2*self.map_par(sigmoid, 0), 0.0]
-        self.set_pool_scores(ExplorationScore(weights=pool, pow=1))
-        self.set_final_scores(
-            FinalizationScore(weights=final, centers=[0, 0, 0, 0, 0, 0], pow=2)
+        self.set_scores(
+            PolicyScores(
+                exploration=ExplorationScore(weights=pool, pow=1),
+                final=FinalizationScore(weights=final, centers=[0, 0, 0, 0, 0, 0], pow=2),
+            )
         )
 
         deep = self.phase == "deep"
         beam = 3 + int(width_bias > 0.55)
-        self.set_beamsearch_width(ranks, [beam, 3, 2])
-        self.set_todd_width(ranks, [1, 1, 1])
-        self.set_min_pool_size(ranks, [2, 1, 1])
         sample_caps = [
             self._sample_caps(10, 0.34 + 0.22 * bucket_bias),
             self._sample_caps(8, 0.52 + 0.22 * bucket_bias),
             self._sample_caps(8, 0.64 + 0.16 * bucket_bias),
         ]
-        self.set_tohpe_vector_samples(ranks, sample_caps)
-        self.set_todd_vector_samples(ranks, sample_caps)
-        self.set_sparse_max_weight(4)
-        self.set_max_pool_size(ranks, [10, 8, 6])
-        self.set_tohpe_pool_size(ranks, [5, 4, 3])
-        self.set_todd_pool_size(ranks, [3 if deep else 0, 3 if deep else 0, 2 if deep else 0])
-        self.set_min_tohpe_actions(ranks, [2, 1, 1])
-        self.set_min_todd_actions(ranks, [1 if deep else 0, 1 if deep else 0, 1 if deep else 0])
-        self.set_tohpe_sample(ranks, [5, 4, 3])
-        self.set_temperature(ranks, [0.22, 0.14, 0.08])
-        self.set_min_z_to_research(ranks, [900 + 2600 * z_budget, 650 + 1800 * z_budget, 450 + 1200 * z_budget])
-        self.set_max_z_to_research(ranks, [240_000, 440_000 if deep else 240_000, 1_000_000 if deep else 300_000])
-        self.set_min_reduction(1)
-        self.set_max_reduction(10)
-        self.set_max_from_single_ns(2)
-
+        samplings = [SamplingBudget(one_hot=c[0], sparse=c[1], dense=c[2], sparse_max_weight=4) for c in sample_caps]
+        temps = [0.22, 0.14, 0.08]
+        min_z = [900 + 2600 * z_budget, 650 + 1800 * z_budget, 450 + 1200 * z_budget]
+        max_z = [240_000, 440_000 if deep else 240_000, 1_000_000 if deep else 300_000]
+        self.set_widths(beam=list(zip(ranks, [beam, 3, 2])), actions=list(zip(ranks, [1, 1, 1])))
+        self.set_action_selection(ranks, [ActionSelection(count=1, mode="softmax", temperature=t) for t in temps])
+        self.set_action_pool(ranks, [ActionPool(final_size=size) for size in [10, 8, 6]])
+        self.set_tohpe_search(
+            ranks,
+            [
+                TohpeSearch(sampling=samplings[i], pool=SourcePool(keep=keep, reserve=reserve), z_choices=z)
+                for i, (keep, reserve, z) in enumerate(zip([5, 4, 3], [2, 1, 1], [5, 4, 3]))
+            ],
+        )
+        self.set_todd_search(
+            ranks,
+            [
+                ToddSearch(
+                    sampling=samplings[i],
+                    pool=SourcePool(keep=keep, reserve=1 if deep else 0),
+                    actions_per_bucket=2,
+                    buckets=ZBucketSearch(min_buckets=min_z[i], max_buckets=max_z[i]),
+                )
+                for i, keep in enumerate([3 if deep else 0, 3 if deep else 0, 2 if deep else 0])
+            ],
+        )
     def __call__(self, params: Iterable):
         ranks = self.run(params, self.seeds)
         return float(np.quantile(ranks, 0.72) + 0.010 * np.std(ranks))

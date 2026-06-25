@@ -104,12 +104,47 @@ static Matrix matrix_from_numpy(py::array_t<bool, py::array::c_style | py::array
     return M;
 }
 
+static Int parse_one_hot_budget(py::handle value) {
+    if (py::isinstance<py::str>(value)) {
+        const auto text = py::cast<std::string>(value);
+        if (text == "all")
+            return k_all_one_hot_samples;
+        throw py::value_error("SamplingBudget.one_hot string value must be 'all'");
+    }
+    return value.cast<Int>();
+}
+
+static py::object one_hot_budget_to_python(Int value) {
+    if (value < 0)
+        return py::str("all");
+    return py::int_(value);
+}
+
+static std::string one_hot_budget_repr(Int value) {
+    if (value < 0)
+        return "'all'";
+    return std::to_string((long long)value);
+}
+
+static std::string sampling_budget_repr(const SamplingBudget& s) {
+    return "SamplingBudget(one_hot=" + one_hot_budget_repr(s.one_hot) +
+           ", sparse=" + std::to_string((long long)s.sparse) +
+           ", dense=" + std::to_string((long long)s.dense) +
+           ", sparse_max_weight=" + std::to_string((long long)s.sparse_max_weight) + ")";
+}
+
+static std::string source_pool_repr(const SourcePool& p) {
+    return "SourcePool(keep=" + std::to_string((long long)p.keep) +
+           ", reserve=" + std::to_string((long long)p.reserve) + ")";
+}
+
 static py::tuple candidate_to_tuple(const CandidateExport& c) {
     py::object tD = (c.tohpe_dim == -1) ? py::none() : py::object(py::int_(c.tohpe_dim));
     py::object k  = (c.k == k_single_sentinel<Int>()) ? py::none() : py::object(py::int_(c.k));
     py::object l  = (c.l == k_single_sentinel<Int>()) ? py::none() : py::object(py::int_(c.l));
     return py::make_tuple(c.pool_score, c.final_score, c.reduction, k, l, c.basis_dim, c.bucket_size, tD,
-                          c.num_better_dim, c.num_better_red, c.num_better_pool_score);
+                          c.num_better_dim, c.num_better_red, c.num_better_pool_score, c.pool_size,
+                          c.pool_tohpe_size, c.pool_todd_size);
 }
 
 struct PyTohpeGenerator {
@@ -352,12 +387,18 @@ py::class_<CandidateExport>(m, "CandidateExport")
     .def_readwrite("num_better_dim", &CandidateExport::num_better_dim)
     .def_readwrite("num_better_red", &CandidateExport::num_better_red)
     .def_readwrite("num_better_pool_score", &CandidateExport::num_better_pool_score)
+    .def_readwrite("pool_size", &CandidateExport::pool_size)
+    .def_readwrite("pool_tohpe_size", &CandidateExport::pool_tohpe_size)
+    .def_readwrite("pool_todd_size", &CandidateExport::pool_todd_size)
     .def("__repr__", [](const CandidateExport& c) {
         return "CandidateExport(score=" + std::to_string(c.pool_score) +
                 ", reduction=" + std::to_string((long long)c.reduction) + ", k=" + std::to_string((long long)c.k) +
                 ", l=" + std::to_string((long long)c.l) + ", basis_dim=" + std::to_string((long long)c.basis_dim) +
                 ", tohpe_dim=" + std::to_string((long long)c.tohpe_dim) +
-                ", bucket_size=" + std::to_string((long long)c.bucket_size) + ")";
+                ", bucket_size=" + std::to_string((long long)c.bucket_size) +
+                ", pool_size=" + std::to_string((long long)c.pool_size) +
+                ", pool_tohpe_size=" + std::to_string((long long)c.pool_tohpe_size) +
+                ", pool_todd_size=" + std::to_string((long long)c.pool_todd_size) + ")";
     })
     .def(py::pickle(
         [](const CandidateExport& c) {
@@ -372,11 +413,14 @@ py::class_<CandidateExport>(m, "CandidateExport")
                 c.bucket_size,
                 c.num_better_dim,
                 c.num_better_red,
-                c.num_better_pool_score
+                c.num_better_pool_score,
+                c.pool_size,
+                c.pool_tohpe_size,
+                c.pool_todd_size
             );
         },
         [](py::tuple t) { 
-            if (t.size() != 11)
+            if (t.size() != 11 && t.size() != 14)
                 throw std::runtime_error("Invalid state!");
 
             CandidateExport c;
@@ -392,6 +436,11 @@ py::class_<CandidateExport>(m, "CandidateExport")
             c.num_better_dim = t[8].cast<decltype(c.num_better_dim)>();
             c.num_better_red = t[9].cast<decltype(c.num_better_red)>();
             c.num_better_pool_score = t[10].cast<decltype(c.num_better_pool_score)>();
+            if (t.size() == 14) {
+                c.pool_size = t[11].cast<decltype(c.pool_size)>();
+                c.pool_tohpe_size = t[12].cast<decltype(c.pool_tohpe_size)>();
+                c.pool_todd_size = t[13].cast<decltype(c.pool_todd_size)>();
+            }
             
             return c;
         }
@@ -624,99 +673,195 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
                    ", seed=" + std::to_string((unsigned long long)r.seed) + ")";
         });
 
-    py::class_<PolicyConfig>(m, "PolicyConfig")
-        .def(py::init<>())
-        .def(py::init([](ExplorationScore es, FinalizationScore fs, std::string selection, float temperature,
-                         std::array<Int, 3> tohpe_vector_samples, std::array<Int, 3> todd_vector_samples,
-                         float bucket_temperature, float bucket_random_fraction, Int sparse_max_weight,
-                         Int num_candidates, Int top_pool, Int max_from_single_ns,
-                         Int min_reduction, Int max_reduction, Int min_z_to_research, Int max_z_to_research,
-                         Int min_pool_size, Int tohpe_pool_size, Int todd_pool_size, Int min_tohpe_actions,
-                         Int min_todd_actions, Int tohpe_sample, Int max_per_signature) {
-                 PolicyConfig c;
-                 c.escore                 = std::move(es);
-                 c.fscore                 = std::move(fs);
-                 c.selection              = std::move(selection);
-                 c.temperature            = temperature;
-                 c.tohpe_vector_samples   = tohpe_vector_samples;
-                 c.todd_vector_samples    = todd_vector_samples;
-                 c.bucket_temperature     = bucket_temperature;
-                 c.bucket_random_fraction = bucket_random_fraction;
-                 c.sparse_max_weight      = sparse_max_weight;
-                 c.num_candidates         = num_candidates;
-                 c.top_pool               = top_pool;
-                 c.max_from_single_ns     = max_from_single_ns;
-                 c.min_reduction          = min_reduction;
-                 c.max_reduction          = max_reduction;
-                 c.min_z_to_research      = min_z_to_research;
-                 c.max_z_to_research      = max_z_to_research;
-                 c.min_pool_size          = min_pool_size;
-                 c.tohpe_pool_size        = tohpe_pool_size;
-                 c.todd_pool_size         = todd_pool_size;
-                 c.min_tohpe_actions      = min_tohpe_actions;
-                 c.min_todd_actions       = min_todd_actions;
-                 c.tohpe_sample           = tohpe_sample;
-                 c.max_per_signature      = max_per_signature;
-                 return c;
+    py::class_<PolicyScores>(m, "PolicyScores")
+        .def(py::init([](ExplorationScore exploration, FinalizationScore final) {
+                 return PolicyScores{std::move(exploration), std::move(final)};
              }),
-             py::arg("ExplorationScore") = ExplorationScore(), py::arg("FinalizationScore") = FinalizationScore(),
-             py::arg("selection") = "greedy", py::arg("temperature") = 0.0f,
-             py::arg("tohpe_vector_samples") = std::array<Int, 3>{16, 32, 16},
-             py::arg("todd_vector_samples") = std::array<Int, 3>{16, 32, 16},
-             py::arg("bucket_temperature") = 0.0f, py::arg("bucket_random_fraction") = 0.0f,
-             py::arg("sparse_max_weight") = 8, py::arg("num_candidates") = 1,
-             py::arg("top_pool") = 1, py::arg("max_from_single_ns") = 10, py::arg("min_reduction") = 0,
-             py::arg("max_reduction") = k_single_sentinel<Int>(), py::arg("min_z_to_research") = 1 << 30,
-             py::arg("max_z_to_research") = 1 << 30, py::arg("min_pool_size") = 1,
-             py::arg("tohpe_pool_size") = 1, py::arg("todd_pool_size") = 1, py::arg("min_tohpe_actions") = 0,
-             py::arg("min_todd_actions") = 0, py::arg("tohpe_sample") = 1, py::arg("max_per_signature") = 2)
-        .def_readwrite("tohpe_vector_samples", &PolicyConfig::tohpe_vector_samples)
-        .def_readwrite("todd_vector_samples", &PolicyConfig::todd_vector_samples)
-        .def_readwrite("sparse_max_weight", &PolicyConfig::sparse_max_weight)
-        .def_readwrite("num_candidates", &PolicyConfig::num_candidates)
-        .def_readwrite("top_pool", &PolicyConfig::top_pool)
+             py::arg("exploration") = ExplorationScore(), py::arg("final") = FinalizationScore())
+        .def_readwrite("exploration", &PolicyScores::exploration)
+        .def_readwrite("final", &PolicyScores::final)
+        .def("__repr__", [](const PolicyScores&) { return "PolicyScores(...)"; })
+        .def(py::pickle(
+            [](const PolicyScores& s) { return py::make_tuple(s.exploration, s.final); },
+            [](py::tuple t) {
+                if (t.size() != 2)
+                    throw std::runtime_error("Invalid state for PolicyScores");
+                return PolicyScores{t[0].cast<ExplorationScore>(), t[1].cast<FinalizationScore>()};
+            }));
+
+    py::class_<ActionSelection>(m, "ActionSelection")
+        .def(py::init([](Int count, std::string mode, float temperature) {
+                 return ActionSelection{count, std::move(mode), temperature};
+             }),
+             py::arg("count") = 1, py::arg("mode") = "best", py::arg("temperature") = 0.0f)
+        .def_readwrite("count", &ActionSelection::count)
+        .def_readwrite("mode", &ActionSelection::mode)
+        .def_readwrite("temperature", &ActionSelection::temperature)
+        .def("__repr__", [](const ActionSelection& s) {
+            return "ActionSelection(count=" + std::to_string((long long)s.count) + ", mode='" + s.mode +
+                   "', temperature=" + std::to_string(s.temperature) + ")";
+        })
+        .def(py::pickle(
+            [](const ActionSelection& s) { return py::make_tuple(s.count, s.mode, s.temperature); },
+            [](py::tuple t) {
+                if (t.size() != 3)
+                    throw std::runtime_error("Invalid state for ActionSelection");
+                return ActionSelection{t[0].cast<Int>(), t[1].cast<std::string>(), t[2].cast<float>()};
+            }));
+
+    py::class_<ActionPool>(m, "ActionPool")
+        .def(py::init([](Int final_size) { return ActionPool{final_size}; }), py::arg("final_size") = 16)
+        .def_readwrite("final_size", &ActionPool::final_size)
+        .def("__repr__", [](const ActionPool& p) {
+            return "ActionPool(final_size=" + std::to_string((long long)p.final_size) + ")";
+        })
+        .def(py::pickle(
+            [](const ActionPool& p) { return py::make_tuple(p.final_size); },
+            [](py::tuple t) {
+                if (t.size() != 1)
+                    throw std::runtime_error("Invalid state for ActionPool");
+                return ActionPool{t[0].cast<Int>()};
+            }));
+
+    py::class_<SamplingBudget>(m, "SamplingBudget")
+        .def(py::init([](py::object one_hot, Int sparse, Int dense, Int sparse_max_weight) {
+                 return SamplingBudget{parse_one_hot_budget(one_hot), sparse, dense, sparse_max_weight};
+             }),
+             py::arg("one_hot") = py::str("all"), py::arg("sparse") = 0, py::arg("dense") = 32,
+             py::arg("sparse_max_weight") = 2)
+        .def_property("one_hot", [](const SamplingBudget& s) { return one_hot_budget_to_python(s.one_hot); },
+                      [](SamplingBudget& s, py::object value) { s.one_hot = parse_one_hot_budget(value); })
+        .def_readwrite("sparse", &SamplingBudget::sparse)
+        .def_readwrite("dense", &SamplingBudget::dense)
+        .def_readwrite("sparse_max_weight", &SamplingBudget::sparse_max_weight)
+        .def("__repr__", &sampling_budget_repr)
+        .def(py::pickle(
+            [](const SamplingBudget& s) {
+                return py::make_tuple(one_hot_budget_to_python(s.one_hot), s.sparse, s.dense, s.sparse_max_weight);
+            },
+            [](py::tuple t) {
+                if (t.size() != 4)
+                    throw std::runtime_error("Invalid state for SamplingBudget");
+                return SamplingBudget{parse_one_hot_budget(t[0]), t[1].cast<Int>(), t[2].cast<Int>(),
+                                      t[3].cast<Int>()};
+            }));
+
+    py::class_<SourcePool>(m, "SourcePool")
+        .def(py::init([](Int keep, Int reserve) { return SourcePool{keep, reserve}; }),
+             py::arg("keep") = 1, py::arg("reserve") = 0)
+        .def_readwrite("keep", &SourcePool::keep)
+        .def_readwrite("reserve", &SourcePool::reserve)
+        .def("__repr__", &source_pool_repr)
+        .def(py::pickle(
+            [](const SourcePool& p) { return py::make_tuple(p.keep, p.reserve); },
+            [](py::tuple t) {
+                if (t.size() != 2)
+                    throw std::runtime_error("Invalid state for SourcePool");
+                return SourcePool{t[0].cast<Int>(), t[1].cast<Int>()};
+            }));
+
+    py::class_<TohpeSearch>(m, "TohpeSearch")
+        .def(py::init([](SamplingBudget sampling, SourcePool pool, Int z_choices) {
+                 return TohpeSearch{std::move(sampling), pool, z_choices};
+             }),
+             py::arg("sampling") = SamplingBudget(), py::arg("pool") = SourcePool{2, 0}, py::arg("z_choices") = 8)
+        .def_readwrite("sampling", &TohpeSearch::sampling)
+        .def_readwrite("pool", &TohpeSearch::pool)
+        .def_readwrite("z_choices", &TohpeSearch::z_choices)
+        .def("__repr__", [](const TohpeSearch& s) {
+            return "TohpeSearch(sampling=" + sampling_budget_repr(s.sampling) + ", pool=" +
+                   source_pool_repr(s.pool) + ", z_choices=" + std::to_string((long long)s.z_choices) + ")";
+        })
+        .def(py::pickle(
+            [](const TohpeSearch& s) { return py::make_tuple(s.sampling, s.pool, s.z_choices); },
+            [](py::tuple t) {
+                if (t.size() != 3)
+                    throw std::runtime_error("Invalid state for TohpeSearch");
+                return TohpeSearch{t[0].cast<SamplingBudget>(), t[1].cast<SourcePool>(), t[2].cast<Int>()};
+            }));
+
+    py::class_<ZBucketSearch>(m, "ZBucketSearch")
+        .def(py::init([](Int min_buckets, Int max_buckets, float temperature, float random_fraction) {
+                 return ZBucketSearch{min_buckets, max_buckets, temperature, random_fraction};
+             }),
+             py::arg("min_buckets") = 32, py::arg("max_buckets") = 0, py::arg("temperature") = 0.0f,
+             py::arg("random_fraction") = 0.0f)
+        .def_readwrite("min_buckets", &ZBucketSearch::min_buckets)
+        .def_readwrite("max_buckets", &ZBucketSearch::max_buckets)
+        .def_readwrite("temperature", &ZBucketSearch::temperature)
+        .def_readwrite("random_fraction", &ZBucketSearch::random_fraction)
+        .def("__repr__", [](const ZBucketSearch& b) {
+            return "ZBucketSearch(min_buckets=" + std::to_string((long long)b.min_buckets) +
+                   ", max_buckets=" + std::to_string((long long)b.max_buckets) +
+                   ", temperature=" + std::to_string(b.temperature) +
+                   ", random_fraction=" + std::to_string(b.random_fraction) + ")";
+        })
+        .def(py::pickle(
+            [](const ZBucketSearch& b) {
+                return py::make_tuple(b.min_buckets, b.max_buckets, b.temperature, b.random_fraction);
+            },
+            [](py::tuple t) {
+                if (t.size() != 4)
+                    throw std::runtime_error("Invalid state for ZBucketSearch");
+                return ZBucketSearch{t[0].cast<Int>(), t[1].cast<Int>(), t[2].cast<float>(), t[3].cast<float>()};
+            }));
+
+    py::class_<ToddSearch>(m, "ToddSearch")
+        .def(py::init([](SamplingBudget sampling, SourcePool pool, Int actions_per_bucket, ZBucketSearch buckets) {
+                 return ToddSearch{std::move(sampling), pool, actions_per_bucket, buckets};
+             }),
+             py::arg("sampling") = SamplingBudget(), py::arg("pool") = SourcePool{16, 0},
+             py::arg("actions_per_bucket") = 4, py::arg("buckets") = ZBucketSearch())
+        .def_readwrite("sampling", &ToddSearch::sampling)
+        .def_readwrite("pool", &ToddSearch::pool)
+        .def_readwrite("actions_per_bucket", &ToddSearch::actions_per_bucket)
+        .def_readwrite("buckets", &ToddSearch::buckets)
+        .def("__repr__", [](const ToddSearch& s) {
+            return "ToddSearch(sampling=" + sampling_budget_repr(s.sampling) + ", pool=" +
+                   source_pool_repr(s.pool) + ", actions_per_bucket=" +
+                   std::to_string((long long)s.actions_per_bucket) + ", buckets=ZBucketSearch(...))";
+        })
+        .def(py::pickle(
+            [](const ToddSearch& s) {
+                return py::make_tuple(s.sampling, s.pool, s.actions_per_bucket, s.buckets);
+            },
+            [](py::tuple t) {
+                if (t.size() != 4)
+                    throw std::runtime_error("Invalid state for ToddSearch");
+                return ToddSearch{t[0].cast<SamplingBudget>(), t[1].cast<SourcePool>(), t[2].cast<Int>(),
+                                  t[3].cast<ZBucketSearch>()};
+            }));
+
+    py::class_<PolicyConfig>(m, "PolicyConfig")
+        .def(py::init([](PolicyScores scores, ActionSelection selection, ActionPool pool, TohpeSearch tohpe,
+                         ToddSearch todd) {
+                 return PolicyConfig{std::move(scores), std::move(selection), pool, std::move(tohpe),
+                                     std::move(todd)};
+             }),
+             py::arg("scores") = PolicyScores(), py::arg("selection") = ActionSelection(),
+             py::arg("pool") = ActionPool(), py::arg("tohpe") = TohpeSearch(), py::arg("todd") = ToddSearch())
+        .def_readwrite("scores", &PolicyConfig::scores)
         .def_readwrite("selection", &PolicyConfig::selection)
-        .def_readwrite("temperature", &PolicyConfig::temperature)
-        .def_readwrite("max_from_single_ns", &PolicyConfig::max_from_single_ns)
-        .def_readwrite("min_reduction", &PolicyConfig::min_reduction)
-        .def_readwrite("max_reduction", &PolicyConfig::max_reduction)
-        .def_readwrite("min_pool_size", &PolicyConfig::min_pool_size)
-        .def_readwrite("min_z_to_research", &PolicyConfig::min_z_to_research)
-        .def_readwrite("max_z_to_research", &PolicyConfig::max_z_to_research)
-        .def_readwrite("tohpe_pool_size", &PolicyConfig::tohpe_pool_size)
-        .def_readwrite("todd_pool_size", &PolicyConfig::todd_pool_size)
-        .def_readwrite("min_tohpe_actions", &PolicyConfig::min_tohpe_actions)
-        .def_readwrite("min_todd_actions", &PolicyConfig::min_todd_actions)
-        .def_readwrite("tohpe_sample", &PolicyConfig::tohpe_sample)
-        .def_readwrite("bucket_temperature", &PolicyConfig::bucket_temperature)
-        .def_readwrite("bucket_random_fraction", &PolicyConfig::bucket_random_fraction)
-        .def_readwrite("max_per_signature", &PolicyConfig::max_per_signature)
+        .def_readwrite("pool", &PolicyConfig::pool)
+        .def_readwrite("tohpe", &PolicyConfig::tohpe)
+        .def_readwrite("todd", &PolicyConfig::todd)
         .def("__repr__", [](const PolicyConfig& c) {
-            auto caps_to_string = [](std::array<Int, 3> caps) {
-                return "[" + std::to_string((long long)caps[0]) + ", " + std::to_string((long long)caps[1]) + ", " +
-                       std::to_string((long long)caps[2]) + "]";
-            };
-            return "PolicyConfig(tohpe_vector_samples=" + caps_to_string(c.tohpe_vector_samples) +
-                   ", todd_vector_samples=" + caps_to_string(c.todd_vector_samples) +
-                   ", sparse_max_weight=" + std::to_string((long long)c.sparse_max_weight) +
-                   ", num_candidates=" + std::to_string((long long)c.num_candidates) +
-                   ", top_pool=" + std::to_string((long long)c.top_pool) + ", selection='" + c.selection + "'" +
-                   ", temperature=" + std::to_string(c.temperature) +
-                   ", max_from_single_ns=" + std::to_string((long long)c.max_from_single_ns) +
-                   ", min_reduction=" + std::to_string((long long)c.min_reduction) +
-                   ", max_reduction=" + std::to_string((long long)c.max_reduction) +
-                   ", min_pool_size=" + std::to_string((long long)c.min_pool_size) +
-                   ", min_z_to_research=" + std::to_string((long long)c.min_z_to_research) +
-                   ", max_z_to_research=" + std::to_string((long long)c.max_z_to_research) +
-                   ", tohpe_pool_size=" + std::to_string((long long)c.tohpe_pool_size) +
-                   ", todd_pool_size=" + std::to_string((long long)c.todd_pool_size) +
-                   ", min_tohpe_actions=" + std::to_string((long long)c.min_tohpe_actions) +
-                   ", min_todd_actions=" + std::to_string((long long)c.min_todd_actions) +
-                   ", tohpe_sample=" + std::to_string((long long)c.tohpe_sample) +
-                   ", bucket_temperature=" + std::to_string(c.bucket_temperature) +
-                   ", bucket_random_fraction=" + std::to_string(c.bucket_random_fraction) +
-                   ", max_per_signature=" + std::to_string((long long)c.max_per_signature) + ")";
-        });
+            return "PolicyConfig(selection=ActionSelection(count=" + std::to_string((long long)c.selection.count) +
+                   ", mode='" + c.selection.mode + "'), pool=ActionPool(final_size=" +
+                   std::to_string((long long)c.pool.final_size) + "), tohpe=" + source_pool_repr(c.tohpe.pool) +
+                   ", todd=" + source_pool_repr(c.todd.pool) + ")";
+        })
+        .def(py::pickle(
+            [](const PolicyConfig& c) {
+                return py::make_tuple(c.scores, c.selection, c.pool, c.tohpe, c.todd);
+            },
+            [](py::tuple t) {
+                if (t.size() != 5)
+                    throw std::runtime_error("Invalid state for PolicyConfig");
+                return PolicyConfig{t[0].cast<PolicyScores>(), t[1].cast<ActionSelection>(),
+                                    t[2].cast<ActionPool>(), t[3].cast<TohpeSearch>(),
+                                    t[4].cast<ToddSearch>()};
+            }));
 
     m.def(
         "policy_iteration",

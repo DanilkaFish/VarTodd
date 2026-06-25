@@ -1,7 +1,7 @@
-from copy import deepcopy
 from typing import Iterable
 import random
 
+import cma
 import numpy as np
 import pyswarms as ps
 
@@ -19,12 +19,12 @@ from helper import (
     ZBucketSearch,
 )
 
-np.random.seed(42)
-random.seed(40)
+np.random.seed(52)
+random.seed(52)
 
 
-def _w_tanh(z: float, scale: float = 4.0, sharp: float = 1.5) -> float:
-    return float(scale * np.tanh(float(z) / sharp))
+def weight(x: float) -> float:
+    return float(4.0 * np.tanh(float(x) / 1.5))
 
 
 def sigmoid(x: float) -> float:
@@ -38,28 +38,26 @@ def softmin(xs: Iterable[float], beta: float = 6.0) -> float:
 
 
 class Evaluator(BaseEvaluator):
-    """Validated full-score PSO seed copied from the strong full_pso setting."""
+    """Full-score policy optimized by PSO scout and CMA local refinement."""
 
     seeds = [random.randint(1, 10000) for _ in range(2)]
-    validation_seeds = [random.randint(1, 10000) for _ in range(12)]
 
     @staticmethod
-    def _sample_caps(sample_count: int, one_hot_fraction: float):
+    def sample_caps(sample_count: int, one_hot_fraction: float):
         one_hot = max(0, int(round(sample_count * one_hot_fraction)))
         dense = max(0, int(sample_count) - one_hot)
-        return [one_hot, 0, dense]
+        return [one_hot, 1, dense]
 
     def policy_mapping(self):
         ranks = [0]
-        pool_score = ExplorationScore([self.map_par(_w_tanh) for _ in range(5)], pow=1)
-        final_score = FinalizationScore([self.map_par(_w_tanh) for _ in range(6)], pow=1)
+        pool_score = ExplorationScore([self.map_par(weight) for _ in range(5)], pow=1)
+        final_score = FinalizationScore([self.map_par(weight) for _ in range(6)], pow=1)
         self.set_scores(ranks, [PolicyScores(exploration=pool_score, final=final_score)])
 
         z_budget = self.map_par(sigmoid)
         sample_budget = self.map_par(sigmoid)
         one_hot_fraction = 0.1 + 0.5 * self.map_par(sigmoid)
-        sample_count = 8 + int(48 * sample_budget)
-        sample_caps = self._sample_caps(sample_count, one_hot_fraction)
+        sample_caps = self.sample_caps(8 + int(48 * sample_budget), one_hot_fraction)
 
         sampling = SamplingBudget(
             one_hot=sample_caps[0],
@@ -80,66 +78,64 @@ class Evaluator(BaseEvaluator):
         )
         self.set_widths(actions=1, beam=1)
 
-    def evaluate(
-        self,
-        params: Iterable[float],
-        seeds: Iterable[int] | None = None,
-    ) -> float:
-        seed_list = list(self.seeds if seeds is None else seeds)
-        ranks = self.run(params, seed_list, max_workers=4)
+    def __call__(self, params: Iterable):
+        ranks = self.run(params, self.seeds)
         spread = float(np.std(ranks)) if len(ranks) > 1 else 0.0
         return softmin(ranks, beta=6.0) + 0.02 * spread
 
-    def __call__(self, params: Iterable):
-        return self.evaluate(params, seeds=self.validation_seeds)
 
-def _score_position(
-    fun: Evaluator,
-    position: Iterable[float],
-    seeds: Iterable[int] | None = None,
-) -> tuple[float, Evaluator]:
-    cost = fun.evaluate(np.asarray(position, dtype=float), seeds=seeds)
-    return float(cost), fun
-
-def run_opt(fun: Evaluator, num_eval: int = 10) -> np.ndarray:
+def run_pso(fun: Evaluator, iters: int) -> np.ndarray:
     n_params = len(fun.extract_active())
     if n_params == 0:
         return np.asarray([], dtype=float)
 
-    search_history = []
-
     def objective(positions):
-        costs = []
-        for position in positions:
-            pos = np.asarray(position, dtype=float)
-            cost, local_fun = _score_position(fun, pos)
-            local_fun.close_workers()
-            costs.append(cost)
-            search_history.append((float(cost), pos.copy()))
-        return np.asarray(costs, dtype=float)
+        return np.asarray([fun(position) for position in positions], dtype=float)
 
     optimizer = ps.single.GlobalBestPSO(
         n_particles=8,
         dimensions=n_params,
-        options={"c1": 0.4, "c2": 0.4, "w": 0.7},
+        options={"c1": 0.9, "c2": 0.5, "w": 0.7},
         bounds=(np.full(n_params, -1.0), np.full(n_params, 1.0)),
     )
-    best_cost, best_position = optimizer.optimize(
+    _, best_position = optimizer.optimize(objective, iters=iters, verbose=False)
+    return np.asarray(best_position, dtype=float)
+
+
+def run_cma(fun: Evaluator, x0: np.ndarray, maxfevals: int) -> np.ndarray:
+    low, high = -1.0, 1.0
+    def objective(position):
+        return float(fun(np.asarray(position, dtype=float)))
+
+    x0 = np.asarray(x0, dtype=float)
+    if x0.size == 0:
+        return x0
+    x0 = np.clip(x0, low + 1e-9, high - 1e-9)
+    xopt, _ = cma.fmin2(
         objective,
-        iters=num_eval,
-        verbose=True,
+        x0,
+        0.25,
+        options={
+            "bounds": [low, high],
+            "maxfevals": maxfevals,
+            "popsize": 4,
+            "seed": 52,
+            "verbose": -9,
+        },
+        restarts=0,
+        bipop=False,
     )
-    return best_position
+    return np.asarray(xopt, dtype=float)
 
 
-def entrypoint(mat):
-    fun = Evaluator(mat=mat, fin_rank=170, max_depth=200)
-    x0 = run_opt(fun, 4)
-    return fun.get_best()
-    best_rank = int(fun.best_paths[0].final_node.state.rows)
-    late_rank_thr = max(best_rank + 1, best_rank + (fun.init_rank - best_rank) // 4)
-
-    for rank_thr in (late_rank_thr,):
-        active = fun.set_up_new_init(0, rank_thr=rank_thr, xopt=None)
-        x0 = run_opt(fun, 20)
+def entrypoint():
+    fun = Evaluator(path_name="init", fin_rank=170, max_depth=100)
+    x0 = run_pso(fun, iters=28)
+    if fun.best_paths:
+        xopt = fun.set_up_new_init(0, rank_thr=int(fun.best_rank + 55), xopt=x0)
+        if xopt is not None and len(xopt):
+            run_cma(fun, xopt, 50)
+        xopt = fun.set_up_new_init(0, rank_thr=int(fun.best_rank + 10), xopt=xopt)
+        if xopt is not None and len(xopt):
+            run_cma(fun, xopt, 50)
     return fun.get_best()

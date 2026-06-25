@@ -14,8 +14,8 @@ class Todd:
     def _beam_key(node: Node):
         cand = node.incoming.cand if node.incoming is not None else None
         if cand is None:
-            return (-node.state.rows, 0.0, 0)
-        return (-node.state.rows, float(cand.final_score), int(cand.reduction))
+            return (0.0, 0, -node.state.rows)
+        return (float(cand.final_score), int(cand.reduction), -node.state.rows)
 
     def run(self, path: Path, width, todd_width, with_report=False, seed=1):
         root = path.final_node
@@ -29,7 +29,7 @@ class Todd:
             new_nodes = []
             counter = max(counter, len(nodes))
             for node in nodes:
-                pcfg = self.dao.policy_config_at(depth=node.state.rows, mode="default", num_candidates=todd_width.at(node.state.rows))
+                pcfg = self.dao.policy_config_at(depth=node.state.rows, mode="default", action_count=todd_width.at(node.state.rows))
                 out: Result = policy_iteration(cur_mat=node.state, policy_cfg=pcfg, seed=seed, add_seed=0)
                 chosen = out.chosen
                 states = out.states

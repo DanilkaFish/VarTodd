@@ -6,11 +6,11 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <random.hpp>
 #include <stdexcept>
-#include <unordered_map>
 
 namespace todd {
 
@@ -122,189 +122,102 @@ index_t mixed_seed(std::uint64_t base_seed, std::uint64_t a, std::uint64_t b, st
     return static_cast<index_t>((x >> 32) ^ x);
 }
 
-Int log2_bin(Int value) {
-    if (value <= 0)
-        return 0;
-    Int bin = 0;
-    while (value > 1) {
-        value >>= 1;
-        ++bin;
-    }
-    return bin;
-}
-
-std::uint64_t candidate_signature(Candidate const& c) {
-    auto pack = [](std::uint64_t key, std::uint64_t value, unsigned bits) {
-        const auto mask = (bits >= 64) ? ~0ULL : ((1ULL << bits) - 1ULL);
-        return (key << bits) | (value & mask);
-    };
-
-    const Int red_bin = std::clamp<Int>(c.reduction + 64, 0, 127);
-    std::uint64_t key = 0;
-    key               = pack(key, static_cast<std::uint64_t>(c.source), 3);
-    key               = pack(key, static_cast<std::uint64_t>(red_bin), 7);
-    key               = pack(key, static_cast<std::uint64_t>(log2_bin(c.basis_dim)), 6);
-    key               = pack(key, static_cast<std::uint64_t>(log2_bin(c.bucket_size)), 6);
-    key               = pack(key, static_cast<std::uint64_t>(log2_bin(c.vec_weight)), 6);
-    key               = pack(key, static_cast<std::uint64_t>(log2_bin(c.z_weight)), 6);
-    return key;
-}
-
-std::array<index_t, 3> normalize_sample_caps(std::array<Int, 3> caps) {
-    return {
-        static_cast<index_t>(std::max<Int>(caps[0], 0)),
-        static_cast<index_t>(std::max<Int>(caps[1], 0)),
-        static_cast<index_t>(std::max<Int>(caps[2], 0)),
-    };
-}
-
 template <class Mean, class Value> void update_mean_value(Mean& mean, Value value, Int n) {
     mean += (value - mean) / std::max((Int)1, n);
 }
 
-float safe_normalizer(float value) noexcept {
-    return (value > 0.0f && std::isfinite(value)) ? value : 1.0f;
-}
+using FinalizationPool = TopKPool<FinalizationScore>;
 
-std::array<float, 6> finalization_raw_features(Candidate const& cand, FinalizationScore const& score) {
-    const float bucket_norm = safe_normalizer(score.bn);
-    const float dim_norm    = safe_normalizer(score.dn);
-    const float vec_norm    = safe_normalizer(score.wvwn);
-    const float z_size      = safe_normalizer(static_cast<float>(cand.z_size));
+struct NormalizedSamplingBudget {
+    std::array<index_t, 3> vector_samples{};
+    Int                   sparse_max_weight = 2;
+};
+
+struct NormalizedSourcePool {
+    Int keep    = 0;
+    Int reserve = 0;
+};
+
+struct NormalizedTohpeSearch {
+    NormalizedSamplingBudget sampling{};
+    NormalizedSourcePool     pool{};
+    Int                      z_choices = 1;
+};
+
+struct NormalizedZBucketSearch {
+    Int   min_buckets     = 0;
+    Int   max_buckets     = 0;
+    float temperature     = 0.0f;
+    float random_fraction = 0.0f;
+};
+
+struct NormalizedToddSearch {
+    NormalizedSamplingBudget sampling{};
+    NormalizedSourcePool     pool{};
+    Int                      actions_per_bucket = 1;
+    NormalizedZBucketSearch  buckets{};
+};
+
+struct NormalizedPolicyConfig {
+    ExplorationScore      escore{};
+    FinalizationScore     fscore{};
+    ActionSelection       selection{};
+    ActionPool            pool{};
+    NormalizedTohpeSearch tohpe{};
+    NormalizedToddSearch  todd{};
+};
+
+NormalizedSamplingBudget normalize_sampling_budget(SamplingBudget sampling) {
+    auto one_hot_count = static_cast<index_t>(std::numeric_limits<index_t>::max());
+    if (sampling.one_hot >= 0)
+        one_hot_count = static_cast<index_t>(sampling.one_hot);
+
     return {
-        cand.reduction / bucket_norm / 2.0f,
-        cand.basis_dim / dim_norm,
-        cand.bucket_size / bucket_norm,
-        cand.vec_weight / vec_norm,
-        cand.z_weight / z_size,
-        cand.tohpe_dim / dim_norm,
+        .vector_samples =
+            {
+                one_hot_count,
+                static_cast<index_t>(std::max<Int>(sampling.sparse, 0)),
+                static_cast<index_t>(std::max<Int>(sampling.dense, 0)),
+            },
+        .sparse_max_weight = std::max(sampling.sparse_max_weight, (Int)2),
     };
 }
 
-class FinalizationQuantiles {
-  public:
-    static constexpr std::size_t feature_count = 6;
-
-    void observe(Candidate const& cand, FinalizationScore const& score, bool include_tohpe_dim) {
-        const auto features = finalization_raw_features(cand, score);
-        const auto n        = include_tohpe_dim ? feature_count : feature_count - 1;
-        for (std::size_t i = 0; i < n; ++i) {
-            if (std::isfinite(features[i]))
-                values_[i].push_back(features[i]);
-        }
-        finalized_ = false;
-    }
-
-    void observe_tohpe_dim(Candidate const& cand, FinalizationScore const& score) {
-        const auto features = finalization_raw_features(cand, score);
-        if (std::isfinite(features[feature_count - 1]))
-            values_[feature_count - 1].push_back(features[feature_count - 1]);
-        finalized_ = false;
-    }
-
-    void finalize() {
-        if (finalized_)
-            return;
-        for (auto& values : values_)
-            std::ranges::sort(values);
-        finalized_ = true;
-    }
-
-    std::array<float, feature_count> normalize(Candidate const& cand, FinalizationScore const& score,
-                                               bool include_tohpe_dim) const {
-        const auto raw = finalization_raw_features(cand, score);
-        const auto n   = include_tohpe_dim ? feature_count : feature_count - 1;
-        std::array<float, feature_count> out{};
-        for (std::size_t i = 0; i < n; ++i)
-            out[i] = quantile(values_[i], raw[i]);
-        return out;
-    }
-
-  private:
-    std::array<std::vector<float>, feature_count> values_{};
-    bool                                          finalized_ = false;
-
-    static float quantile(std::vector<float> const& sorted, float value) {
-        if (sorted.size() <= 1 || !std::isfinite(value))
-            return 0.5f;
-        const auto lower = std::lower_bound(sorted.begin(), sorted.end(), value);
-        const auto upper = std::upper_bound(sorted.begin(), sorted.end(), value);
-        const float left = static_cast<float>(lower - sorted.begin());
-        const float right = static_cast<float>(upper - sorted.begin() - 1);
-        const float denom = static_cast<float>(sorted.size() - 1);
-        return std::clamp(((left + right) * 0.5f) / denom, 0.0f, 1.0f);
-    }
-};
-
-struct QuantileFinalizationScore {
-    FinalizationScore     score;
-    FinalizationQuantiles quantiles;
-
-    auto operator()(Candidate& cand) {
-        const bool        include_tohpe_dim = score.needs_tohpe_dim();
-        const auto        x                 = quantiles.normalize(cand, score, include_tohpe_dim);
-        const std::size_t n                 = include_tohpe_dim ? FinalizationQuantiles::feature_count
-                                                : FinalizationQuantiles::feature_count - 1;
-        cand.final_score = score.sc.evaluate(score.weights, score.centers, std::span<const float>(x.data(), n));
-        return std::make_pair(cand.final_score, cand.tohpe_dim);
-    }
-};
-
-using FinalizationPool = TopKPool<QuantileFinalizationScore>;
-
-struct NormalizedPolicyConfig {
-    ExplorationScore      escore;
-    FinalizationScore     fscore;
-    std::string           selection;
-    float                 temperature;
-    float                 bucket_temperature;
-    float                 bucket_random_fraction;
-    std::array<index_t, 3> tohpe_vector_samples;
-    std::array<index_t, 3> todd_vector_samples;
-    Int                   sparse_max_weight;
-    Int                   num_candidates;
-    Int                   top_pool;
-    Int                   max_from_single_ns;
-    Int                   min_reduction;
-    Int                   max_reduction;
-    Int                   min_z_to_research;
-    Int                   max_z_to_research;
-    Int                   min_pool_size;
-    Int                   tohpe_pool_size;
-    Int                   todd_pool_size;
-    Int                   min_tohpe_actions;
-    Int                   min_todd_actions;
-    Int                   tohpe_sample;
-    Int                   max_per_signature;
-};
+NormalizedSourcePool normalize_source_pool(SourcePool pool) {
+    return {
+        .keep    = std::max(pool.keep, (Int)0),
+        .reserve = std::max(pool.reserve, (Int)0),
+    };
+}
 
 NormalizedPolicyConfig normalize_policy_config(PolicyConfig config) {
     NormalizedPolicyConfig out{
-        .escore                 = std::move(config.escore),
-        .fscore                 = std::move(config.fscore),
-        .selection              = std::move(config.selection),
-        .temperature            = config.temperature,
-        .bucket_temperature     = std::max(config.bucket_temperature, 0.0f),
-        .bucket_random_fraction = std::clamp(config.bucket_random_fraction, 0.0f, 1.0f),
-        .tohpe_vector_samples   = normalize_sample_caps(config.tohpe_vector_samples),
-        .todd_vector_samples    = normalize_sample_caps(config.todd_vector_samples),
-        .sparse_max_weight      = std::max(config.sparse_max_weight, (Int)2),
-        .num_candidates         = std::max(config.num_candidates, (Int)1),
-        .top_pool               = config.top_pool,
-        .max_from_single_ns     = std::max(config.max_from_single_ns, (Int)1),
-        .min_reduction          = std::max(config.min_reduction, (Int)0),
-        .max_reduction          = config.max_reduction > 0 ? config.max_reduction : k_single_sentinel<Int>(),
-        .min_z_to_research      = config.min_z_to_research,
-        .max_z_to_research      = config.max_z_to_research,
-        .min_pool_size          = std::max(config.min_pool_size, (Int)1),
-        .tohpe_pool_size        = std::max(config.tohpe_pool_size, (Int)0),
-        .todd_pool_size         = std::max(config.todd_pool_size, (Int)0),
-        .min_tohpe_actions      = std::max(config.min_tohpe_actions, (Int)0),
-        .min_todd_actions       = std::max(config.min_todd_actions, (Int)0),
-        .tohpe_sample           = std::max(config.tohpe_sample, (Int)1),
-        .max_per_signature      = std::max(config.max_per_signature, (Int)0),
+        .escore    = std::move(config.scores.exploration),
+        .fscore    = std::move(config.scores.final),
+        .selection = std::move(config.selection),
+        .pool      = config.pool,
+        .tohpe =
+            {
+                .sampling  = normalize_sampling_budget(config.tohpe.sampling),
+                .pool      = normalize_source_pool(config.tohpe.pool),
+                .z_choices = std::max(config.tohpe.z_choices, (Int)1),
+            },
+        .todd =
+            {
+                .sampling           = normalize_sampling_budget(config.todd.sampling),
+                .pool               = normalize_source_pool(config.todd.pool),
+                .actions_per_bucket = std::max(config.todd.actions_per_bucket, (Int)1),
+                .buckets =
+                    {
+                        .min_buckets     = std::max(config.todd.buckets.min_buckets, (Int)0),
+                        .max_buckets     = std::max(config.todd.buckets.max_buckets, (Int)0),
+                        .temperature     = std::max(config.todd.buckets.temperature, 0.0f),
+                        .random_fraction = std::clamp(config.todd.buckets.random_fraction, 0.0f, 1.0f),
+                    },
+            },
     };
-    out.top_pool = std::max({out.num_candidates, out.top_pool, out.min_tohpe_actions + out.min_todd_actions});
+    out.selection.count = std::max(out.selection.count, (Int)1);
+    out.pool.final_size = std::max({out.selection.count, out.pool.final_size, out.tohpe.pool.reserve + out.todd.pool.reserve});
     return out;
 }
 
@@ -342,39 +255,17 @@ PolicyIterationContext make_policy_context(const std::shared_ptr<MatrixWithData>
     return ctx;
 }
 
-class SignatureLimiter {
-  public:
-    explicit SignatureLimiter(Int limit) : limit_(std::max<Int>(0, limit)) {}
-
-    bool accept(Candidate const& c) {
-        if (limit_ == 0)
-            return true;
-        auto& seen = counts_[candidate_signature(c)];
-        if (seen >= limit_)
-            return false;
-        ++seen;
-        return true;
-    }
-
-  private:
-    Int                                     limit_;
-    std::unordered_map<std::uint64_t, Int> counts_;
-};
-
 struct CandidatePools {
     TopKPool<ExplorationScore> tohpe_pool;
     TopKPool<ExplorationScore> todd_pool;
-    SignatureLimiter           signatures;
 
     explicit CandidatePools(const NormalizedPolicyConfig& config)
-        : tohpe_pool(config.tohpe_pool_size, config.escore), todd_pool(config.todd_pool_size, config.escore),
-          signatures(config.max_per_signature) {}
+        : tohpe_pool(config.tohpe.pool.keep, config.escore), todd_pool(config.todd.pool.keep, config.escore) {}
 };
 
 struct GenerationOutput {
     CandidatePools pools;
     SeenValues     svs;
-    FinalizationQuantiles final_quantiles;
     Stats          stats;
 
     explicit GenerationOutput(const NormalizedPolicyConfig& config) : pools(config) {}
@@ -496,12 +387,12 @@ void take_source_quota(std::vector<Candidate>& out, std::vector<Candidate>& src,
 }
 
 std::vector<Candidate> merge_source_candidates(std::vector<Candidate> tohpe, std::vector<Candidate> todd,
-                                               std::size_t top_pool, std::size_t min_tohpe_actions,
-                                               std::size_t min_todd_actions) {
+                                               std::size_t final_size, std::size_t tohpe_reserve,
+                                               std::size_t todd_reserve) {
     std::vector<Candidate> out;
-    out.reserve(top_pool);
-    take_source_quota(out, tohpe, min_tohpe_actions, top_pool);
-    take_source_quota(out, todd, min_todd_actions, top_pool);
+    out.reserve(final_size);
+    take_source_quota(out, tohpe, tohpe_reserve, final_size);
+    take_source_quota(out, todd, todd_reserve, final_size);
 
     std::vector<Candidate> rest;
     rest.reserve(tohpe.size() + todd.size());
@@ -512,7 +403,7 @@ std::vector<Candidate> merge_source_candidates(std::vector<Candidate> tohpe, std
 
     std::sort(rest.begin(), rest.end(), pool_preferred);
     for (auto& c : rest) {
-        if (out.size() >= top_pool)
+        if (out.size() >= final_size)
             break;
         out.push_back(std::move(c));
     }
@@ -620,11 +511,11 @@ std::vector<Candidate> pick_softmax_view(FinalizationPool& pool, std::size_t n, 
 }
 
 template <class FullGenProvider>
-Result build_result(FinalizationPool& pool, bool is_best, std::size_t num_candidates, float temperature,
+Result build_result(FinalizationPool& pool, bool is_best, std::size_t action_count, float temperature,
                     PyRNG& pick_rng, SeenValues const& svs, TohpeGenerator& tohpe_gen, FullGenProvider& get_full_gen,
                     Stats const& global_stats, std::uint64_t base_seed) {
     auto chosen_view =
-        is_best ? pick_best_view(pool, num_candidates) : pick_softmax_view(pool, num_candidates, temperature, pick_rng);
+        is_best ? pick_best_view(pool, action_count) : pick_softmax_view(pool, action_count, temperature, pick_rng);
 
     Result out;
     out.stats = global_stats;
@@ -658,42 +549,36 @@ Result build_result(FinalizationPool& pool, bool is_best, std::size_t num_candid
 
 void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPolicyConfig& config,
                                GenerationOutput& out) {
-    if (config.tohpe_pool_size <= 0)
+    if (config.tohpe.pool.keep <= 0)
         return;
 
-    auto local_beyond_pool = TopKPool<ExplorationScore>(config.tohpe_pool_size, config.escore);
-    auto local_pool        = TopKPool<ExplorationScore>(config.tohpe_pool_size, config.escore);
+    auto local_pool = TopKPool<ExplorationScore>(config.tohpe.pool.keep, config.escore);
 
     const index_t dim     = ctx.tohpe_dim;
     out.stats.max_basis = dim;
 
     PyRNG local_rng(mixed_seed(ctx.base_seed, 0, 0, 0, CandidateSourceTohpe));
-    auto  beyond = [&](const auto red) { return (red < config.min_reduction || red > config.max_reduction); };
 
     std::vector<TohpeZInfo> scratch_best_z;
-    local_rng.for_each_capped_bitvector(dim, config.tohpe_vector_samples, config.sparse_max_weight, [&](RowCView coefs) {
+    local_rng.for_each_capped_bitvector(dim, config.tohpe.sampling.vector_samples,
+                                        config.tohpe.sampling.sparse_max_weight, [&](RowCView coefs) {
         assert(coefs.count() != 0);
         out.stats.evaluated++;
         auto vec = linear_combination_from_basis(ctx.tohpe_basis, coefs);
-        ctx.tohpe_gen.best_z_n_details_into(vec, config.tohpe_sample, scratch_best_z);
+        ctx.tohpe_gen.best_z_n_details_into(vec, config.tohpe.z_choices, scratch_best_z);
         for (std::size_t zi = 0; zi < scratch_best_z.size(); ++zi) {
             auto&      info = scratch_best_z[zi];
             const auto red  = info.reduction;
-            if (beyond(red) && red <= 0) {
+            if (red <= 0) {
                 out.stats.rejected++;
                 continue;
             }
             Row       cand_vec = (zi + 1 == scratch_best_z.size()) ? std::move(vec) : Row(vec);
             Candidate c(0, (Int)red, k_single_sentinel<Int>(), k_single_sentinel<Int>(), std::move(cand_vec),
                         std::move(info.z), (Int)dim, (Int)info.bucket_size, info.bucket_id, CandidateSourceTohpe);
-            if (!out.pools.signatures.accept(c)) {
-                out.stats.rejected++;
-                continue;
-            }
             out.stats.nonzero++;
             out.stats.accepted_tohpe++;
-            out.final_quantiles.observe(c, config.fscore, false);
-            auto [score, tohpe] = (beyond(red)) ? local_beyond_pool.push(std::move(c)) : local_pool.push(std::move(c));
+            auto [score, tohpe] = local_pool.push(std::move(c));
             (void)tohpe;
             out.svs.observe(red, dim, score);
 
@@ -705,40 +590,45 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
         }
     });
     out.pools.tohpe_pool.merge_from(local_pool);
-    out.pools.tohpe_pool.merge_from(local_beyond_pool);
 }
 
 void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolicyConfig& config,
                               GenerationOutput& out) {
-    if (config.todd_pool_size <= 0)
+    if (config.todd.pool.keep <= 0)
         return;
 
     auto& buckets = ctx.data->index().sum_key_sizes_scratch();
-    const auto max_bucket_research =
-        std::min<std::size_t>(buckets.size(), static_cast<std::size_t>(std::max<Int>(0, config.max_z_to_research)));
-    PyRNG bucket_rng(mixed_seed(ctx.base_seed, buckets.size(), max_bucket_research, 0, CandidateSourceTodd));
-    diversify_buckets(buckets, max_bucket_research, config.bucket_temperature, config.bucket_random_fraction, bucket_rng);
+    const auto reserve_search_cap =
+        config.todd.buckets.max_buckets <= 0
+            ? buckets.size()
+            : std::min<std::size_t>(buckets.size(), static_cast<std::size_t>(config.todd.buckets.max_buckets));
+    PyRNG bucket_rng(mixed_seed(ctx.base_seed, buckets.size(), config.todd.buckets.max_buckets, 0,
+                                CandidateSourceTodd));
+    diversify_buckets(buckets, buckets.size(), config.todd.buckets.temperature,
+                      config.todd.buckets.random_fraction, bucket_rng);
 
-    const auto min_z_to_research =
-        std::min<std::size_t>(buckets.size(), static_cast<std::size_t>(std::max<Int>(0, config.min_z_to_research)));
+    const auto min_buckets_to_search =
+        std::min<std::size_t>(buckets.size(), static_cast<std::size_t>(config.todd.buckets.min_buckets));
 
     Stats stats;
 
-    const auto required_todd_actions =
-        static_cast<std::size_t>(std::max<Int>(config.min_pool_size, config.min_todd_actions));
-    auto       local_beyond_pool = TopKPool<ExplorationScore>(required_todd_actions, config.escore);
-    auto       local_pool        = TopKPool<ExplorationScore>(config.todd_pool_size, config.escore);
-    auto&      local_gen         = ctx.get_full_gen();
-    auto       local_svs         = SeenValues{};
-    local_pool.reserve(config.todd_pool_size);
+    const auto reserve_target =
+        static_cast<std::size_t>(std::min(config.todd.pool.keep, std::max(config.todd.pool.reserve, (Int)1)));
+    auto  local_pool = TopKPool<ExplorationScore>(config.todd.pool.keep, config.escore);
+    auto& local_gen  = ctx.get_full_gen();
+    auto  local_svs  = SeenValues{};
+    local_pool.reserve(config.todd.pool.keep);
 
     const SumEntry* ptr = nullptr;
     auto            len = index_t{};
 
     for (std::size_t i = 0; i < buckets.size(); ++i) {
-        if (i >= min_z_to_research &&
-            (local_pool.size() >= required_todd_actions || local_beyond_pool.size() >= required_todd_actions)) {
-            break;
+        if (i >= min_buckets_to_search) {
+            const bool reserve_met = local_pool.size() >= reserve_target;
+            const bool cap_reached = config.todd.buckets.max_buckets > 0 && i >= reserve_search_cap;
+            if (reserve_met || (cap_reached && !local_pool.empty())) {
+                break;
+            }
         }
 
         auto& [key, bucket_size] = buckets[i];
@@ -762,18 +652,18 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
             continue;
 
         PyRNG local_rng(mixed_seed(ctx.base_seed, k, is_single ? 0 : l, i, CandidateSourceTodd));
-        auto  beyond = [&](const auto red) { return (red < config.min_reduction || red > config.max_reduction); };
 
         stats.max_bucket = std::max(stats.max_bucket, (Int)bucket_size);
 
-        auto local_local_pool = TopKPool<ExplorationScore>(config.max_from_single_ns, config.escore);
-        local_rng.for_each_capped_bitvector(dim, config.todd_vector_samples, config.sparse_max_weight,
+        auto local_local_pool = TopKPool<ExplorationScore>(config.todd.actions_per_bucket, config.escore);
+        local_rng.for_each_capped_bitvector(dim, config.todd.sampling.vector_samples,
+                                            config.todd.sampling.sparse_max_weight,
                                             [&](RowCView coefs) {
                                                 stats.evaluated++;
                                                 auto       vec = ns.linear_combination(coefs);
                                                 const auto red = ns.rank_divergence(vec);
 
-                                                if (beyond(red) && red <= 0) {
+                                                if (red <= 0) {
                                                     stats.rejected++;
                                                     return;
                                                 }
@@ -782,16 +672,9 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
                                                 Candidate c(0, (Int)red, static_cast<Int>(k), cand_l, std::move(vec),
                                                             (Int)dim, (Int)bucket_size, static_cast<Int>(key.count()),
                                                             static_cast<Int>(key.size()), CandidateSourceTodd);
-                                                if (!out.pools.signatures.accept(c)) {
-                                                    stats.rejected++;
-                                                    return;
-                                                }
                                                 stats.accepted++;
                                                 stats.nonzero++;
-                                                out.final_quantiles.observe(c, config.fscore, false);
-                                                auto [score, tohpe] = (beyond(red))
-                                                                          ? local_beyond_pool.push(std::move(c))
-                                                                          : local_local_pool.push(std::move(c));
+                                                auto [score, tohpe] = local_local_pool.push(std::move(c));
                                                 (void)tohpe;
                                                 local_svs.observe(red, dim, score);
 
@@ -804,11 +687,7 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
         local_pool.merge_from(local_local_pool);
     }
 
-    if (local_pool.size() > 0) {
-        out.pools.todd_pool.merge_from(local_pool);
-    } else {
-        out.pools.todd_pool.merge_from(local_beyond_pool);
-    }
+    out.pools.todd_pool.merge_from(local_pool);
     out.svs.merge_from(local_svs);
 
     if (stats.total > 0) {
@@ -840,9 +719,22 @@ FinalizationPool merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
                                                GenerationOutput& out) {
     auto merged_candidates =
         merge_source_candidates(out.pools.tohpe_pool.release_unsorted(), out.pools.todd_pool.release_unsorted(),
-                                config.top_pool, static_cast<std::size_t>(config.min_tohpe_actions),
-                                static_cast<std::size_t>(config.min_todd_actions));
-    auto quantiles = out.final_quantiles;
+                                config.pool.final_size, static_cast<std::size_t>(config.tohpe.pool.reserve),
+                                static_cast<std::size_t>(config.todd.pool.reserve));
+    const Int pool_size = static_cast<Int>(merged_candidates.size());
+    Int       pool_tohpe_size = 0;
+    Int       pool_todd_size  = 0;
+    for (const auto& cand : merged_candidates) {
+        if (cand.source == CandidateSourceTohpe)
+            ++pool_tohpe_size;
+        else if (cand.source == CandidateSourceTodd)
+            ++pool_todd_size;
+    }
+    for (auto& cand : merged_candidates) {
+        cand.pool_size       = pool_size;
+        cand.pool_tohpe_size = pool_tohpe_size;
+        cand.pool_todd_size  = pool_todd_size;
+    }
     const bool need_tohpe_dim = config.fscore.needs_tohpe_dim();
     if (!merged_candidates.empty()) {
         std::vector<std::uint8_t> scratch_killed;
@@ -851,13 +743,11 @@ FinalizationPool merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
             for (auto& cand : merged_candidates) {
                 auto ns        = make_candidate_nullspace(cand, ctx.tohpe_gen, get_full_gen);
                 cand.tohpe_dim = static_cast<Int>(get_tohpe_basis(ns.apply(cand.vec, scratch_killed)).rows());
-                quantiles.observe_tohpe_dim(cand, config.fscore);
             }
         }
     }
 
-    quantiles.finalize();
-    auto final_pool = FinalizationPool(config.top_pool, QuantileFinalizationScore{config.fscore, std::move(quantiles)});
+    auto final_pool = FinalizationPool(config.pool.final_size, config.fscore);
     if (!merged_candidates.empty()) {
         int n = 0;
         for (auto& cand : merged_candidates) {
@@ -877,11 +767,11 @@ Result select_and_apply_candidates(PolicyIterationContext& ctx, const Normalized
                                    FinalizationPool& final_pool, const SeenValues& svs, const Stats& stats,
                                    index_t seed) {
     PyRNG pick_rng(seed);
-    bool  is_best = (config.selection == "greedy" || config.selection == "best");
+    bool  is_best = (config.selection.mode == "greedy" || config.selection.mode == "best");
 
     auto get_full_gen = [&]() -> FullToddGenerator& { return ctx.get_full_gen(); };
-    return build_result(final_pool, is_best, config.num_candidates, config.temperature, pick_rng, svs, ctx.tohpe_gen,
-                        get_full_gen, stats, ctx.base_seed);
+    return build_result(final_pool, is_best, config.selection.count, config.selection.temperature, pick_rng,
+                        svs, ctx.tohpe_gen, get_full_gen, stats, ctx.base_seed);
 }
 auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyConfig config, index_t seed,
                            index_t add_seed) -> Result {
