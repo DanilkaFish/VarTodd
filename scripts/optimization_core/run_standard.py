@@ -12,7 +12,10 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from helper import Matrix, Tensor3D, load_matrix_array, normalize_matrix_array
+try:
+    from .helper import Matrix, Tensor3D, load_matrix_array, normalize_matrix_array
+except ImportError:  # allows direct execution: python scripts/optimization_core/run_standard.py
+    from helper import Matrix, Tensor3D, load_matrix_array, normalize_matrix_array
 
 DATA_ROOT = ROOT_DIR / "data/init_npy"
 DEFAULT_INIT_CIRCUIT = "gf_mult_Vandaele_wo_ancilla"
@@ -117,17 +120,22 @@ def validate(
     result: tuple[np.ndarray, str, str],
     name: Optional[str] = None,
 ) -> dict[str, object]:
+    if name is None:
+        raise ValueError("validate requires a matrix name")
+
     context = get_matrix(name)
     result, report, best_path = result
     res = Matrix.from_numpy(result)
     if Tensor3D(context) != Tensor3D(res):
-        print(f"{context.rows=} {context.cols=}")
-        print(f"{res.rows=} {res.cols=}")
-        raise RuntimeError("AHTUNG")
+        raise RuntimeError(
+            f"tensor mismatch for {name}: "
+            f"expected {context.rows}x{context.cols}, got {res.rows}x{res.cols}"
+        )
     print(report + best_path)
-    return {"result": result,
-            "mcts info": report + best_path,
-            }
+    return {
+        "result": result,
+        "mcts info": report + best_path,
+    }
 
 def _run_one(
     name: str,

@@ -4,30 +4,39 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Generic, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
-from node import (
-    ActionPool,
-    ActionSelection,
-    CandidateExport,
-    ExplorationScore,
-    FinalizationScore,
-    Node,
-    PolicyConfig,
-    PolicyScores,
-    SamplingBudget,
-    SourcePool,
-    Stats,
-    ToddSearch,
-    TohpeSearch,
-    ZBucketSearch,
-)
+try:
+    from .node import (
+        ActionPool,
+        ActionSelection,
+        ExplorationScore,
+        FinalizationScore,
+        Node,
+        PolicyConfig,
+        PolicyScores,
+        SamplingBudget,
+        SourcePool,
+        ToddSearch,
+        TohpeSearch,
+        ZBucketSearch,
+    )
+except ImportError:  # kept for generated scripts that import helper as a flat module
+    from node import (
+        ActionPool,
+        ActionSelection,
+        ExplorationScore,
+        FinalizationScore,
+        Node,
+        PolicyConfig,
+        PolicyScores,
+        SamplingBudget,
+        SourcePool,
+        ToddSearch,
+        TohpeSearch,
+        ZBucketSearch,
+    )
 from copy import deepcopy
 
 RANK_SCHEDULE_SENTINEL = 10**9
-
-def _q_ge(num_better: int, total: int) -> float:
-    if not total:
-        return 0.0
-    return 1.0 - (num_better / total)
 
 def _fmt_float(value: float, digits: int = 2) -> str:
     return f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
@@ -248,6 +257,7 @@ class Path:
             ("todd_actions_per_bucket", _as_int(todd.actions_per_bucket)),
             ("z_min_buckets", _as_int(buckets.min_buckets)),
             ("z_max_buckets", _as_int(buckets.max_buckets)),
+            ("z_limit_bucket", _as_int(buckets.limit_bucket)),
             ("pool_scores", self._format_score(scores.exploration, ["red", "dim", "bucket", "vw", "z"])),
             ("final_scores", self._format_score(scores.final, ["red", "dim", "bucket", "vw", "z", "tohpe"])),
         ]
@@ -290,6 +300,7 @@ class Path:
         tohpe_z_choices = values.get("tohpe_z_choices", "8")
         min_z = values.get("z_min_buckets", "32")
         max_z = values.get("z_max_buckets", "0")
+        limit_z = values.get("z_limit_bucket", "-1")
         actions_per_bucket = values.get("todd_actions_per_bucket", "4")
         pool_scores = values.get("pool_scores", "(none;p=1)")
         final_scores = values.get("final_scores", "(none;p=1)")
@@ -304,7 +315,7 @@ class Path:
             f"search_shape=beam:{beam}/actions:{action_count}/selection:{selection_mode}@{selection_temp} "
             f"pool=final:{final_pool}/tohpe:{tohpe_pool}/todd:{todd_pool} "
             f"samples=tohpe:{tohpe_sampling_label}/todd:{todd_samples}/tohpe_z:{tohpe_z_choices} "
-            f"z_buckets=min:{min_z}/reserve_cap:{max_z} "
+            f"z_buckets=min:{min_z}/reserve_cap:{max_z}/hard_cap:{limit_z} "
             f"diversity={'/'.join(diversity_parts)} "
             f"scores=pool{pool_scores} final{final_scores}"
         )
@@ -683,6 +694,7 @@ def _as_z_bucket_search(x: Any) -> ZBucketSearch:
             max_buckets=_as_int(x.get("max_buckets", 0)),
             temperature=_as_float(x.get("temperature", 0.0)),
             random_fraction=_as_float(x.get("random_fraction", 0.0)),
+            limit_bucket=_as_int(x.get("limit_bucket", -1)),
         )
     raise TypeError(f"expected ZBucketSearch or mapping, got {type(x).__name__}")
 
@@ -862,12 +874,24 @@ def _default_todd_search() -> ToddSearch:
         sampling=SamplingBudget(one_hot="all", sparse=0, dense=32, sparse_max_weight=2),
         pool=SourcePool(keep=16, reserve=0),
         actions_per_bucket=4,
-        buckets=ZBucketSearch(min_buckets=32, max_buckets=0, temperature=0.0, random_fraction=0.0),
+        buckets=ZBucketSearch(
+            min_buckets=32,
+            max_buckets=0,
+            temperature=0.0,
+            random_fraction=0.0,
+            limit_bucket=-1,
+        ),
     )
 
 
 @dataclass(slots=True)
 class UctDao:
+    """Compatibility payload for old path backups.
+
+    The current Python runner calls pyvartodd through PolicyConfig only; UCT is
+    not read by Todd.run.
+    """
+
     name: str = "puct"
     c: DepthSchedule[float] = field(default_factory=lambda: DepthSchedule.constant(2.5))
     fn: Optional[Callable[..., float]] = None
@@ -886,6 +910,12 @@ class UctDao:
 
 @dataclass(slots=True)
 class TreeDao:
+    """Compatibility payload for old path backups.
+
+    Rollout tree controls are not part of the current pyvartodd PolicyConfig
+    interface.
+    """
+
     rollout_add: bool = True
     rollout_active: bool = False
     rollout_frozen_until: int = 0
@@ -949,6 +979,13 @@ class ModeDao:
 
 @dataclass(slots=True)
 class Dao:
+    """Search configuration.
+
+    Current execution uses only ``modes`` to construct a pyvartodd PolicyConfig.
+    The remaining scalar/tree fields stay here so older saved path backups can
+    still be loaded and summarized.
+    """
+
     iterations: int = 3600
     discount: float = 0.995
     max_depth: int = 32
@@ -1001,6 +1038,11 @@ class Dao:
         return _as_int(self.rollout_depth.at(depth))
 
     def policy_config_at(self, depth: int, mode: str="default", action_count: int = 1) -> PolicyConfig:
+        """Build the pyvartodd PolicyConfig active at a rank.
+
+        The parameter is still named ``depth`` for compatibility with older
+        scripts, but callers pass the current matrix rank.
+        """
         m = self.modes.get(mode)
         if m is None:
             raise KeyError(f"unknown mode: {mode}")

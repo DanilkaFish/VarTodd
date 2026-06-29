@@ -1,31 +1,46 @@
 
 from __future__ import annotations
 
-from mcts_dao import Dao, Path
-from node import ActionInfo, Result, policy_iteration
-
 import heapq
+from typing import Any
+
+try:
+    from .mcts_dao import Dao, Path
+    from .node import ActionInfo, Node, Result, policy_iteration
+except ImportError:  # kept for generated scripts that import helper as a flat module
+    from mcts_dao import Dao, Path
+    from node import ActionInfo, Node, Result, policy_iteration
+
+
 class Todd:
-    def __init__(self, dao: Dao, depth):
+    def __init__(self, dao: Dao, depth: int):
         self.dao: Dao = dao
-        self.depth = depth
+        self.depth = int(depth)
 
     @staticmethod
-    def _beam_key(node: Node):
+    def _beam_key(node: Node) -> tuple[int, float]:
         cand = node.incoming.cand if node.incoming is not None else None
         if cand is None:
-            return (0.0, 0, -node.state.rows)
-        return (float(cand.final_score), int(cand.reduction), -node.state.rows)
+            return (-node.state.rows, 0.0)
+        return (-node.state.rows, float(cand.final_score))
 
-    def run(self, path: Path, width, todd_width, with_report=False, seed=1):
+    def run(
+        self,
+        path: Path,
+        width: Any,
+        todd_width: Any,
+        with_report: bool = False,
+        seed: int = 1,
+    ):
         root = path.final_node
-        node = root
+        if root is None:
+            raise ValueError("cannot run TODD from an empty path")
+
         best_node = root
         counter = 0
         best_counter = 0
         nodes = [root]
-        # print(best_node.state.rows)
-        for i in range(self.depth):
+        for _ in range(self.depth):
             new_nodes = []
             counter = max(counter, len(nodes))
             for node in nodes:
@@ -53,11 +68,9 @@ class Todd:
             if not new_nodes:
                 break 
             nodes = heapq.nlargest(width.at(best_node.state.rows), new_nodes, self._beam_key)
-            # if i % 10 == 0:
-            #     print(best_node.state.rows)
+
         if with_report:
             best_counter = min(counter, best_counter)
             return best_node, (counter, best_counter)
-        else:
-            nodes = heapq.nlargest(width.at(best_node.state.rows), new_nodes, self._beam_key)
-            return node.state.to_numpy()
+
+        return best_node.state.to_numpy()

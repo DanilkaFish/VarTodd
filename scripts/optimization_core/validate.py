@@ -1,22 +1,27 @@
-from typing import List, Tuple
 import re
+from typing import Tuple
 
 import numpy as np
-from helper import Matrix, Tensor3D, get_matrix
+
+try:
+    from .helper import Matrix, Tensor3D, get_matrix
+except ImportError:  # kept for generated scripts that import helper as a flat module
+    from helper import Matrix, Tensor3D, get_matrix
 
 
 def validate(
     result: Tuple[np.ndarray, str, str]
-) -> dict[str, float]:
+) -> dict[str, object]:
     context = get_matrix()
     result, report, best_path = result
-    if np.any(Tensor3D(context) != Tensor3D(Matrix.from_numpy(result))):
-        return {"fitness": float('inf'),
-                "is_valid": 0.0,
-                "aux info": report + best_path,
-                }
-    
     full_report = report + best_path
+    if np.any(Tensor3D(context) != Tensor3D(Matrix.from_numpy(result))):
+        return {
+            "fitness": float("inf"),
+            "is_valid": 0.0,
+            "aux info": full_report,
+        }
+    
     base_fitness = result.shape[0] + np.sum(result) / np.size(result)
     penalty = 0.0
     m = re.search(r"\bloaded_rank:\s*(\d+)", full_report)
@@ -25,7 +30,8 @@ def validate(
         found_rank = int(result.shape[0])
         if found_rank >= loaded_rank:
             penalty = 5.0
-    return {"fitness": base_fitness + penalty, 
-            "is_valid": 1.0,
-            "aux info": full_report,
-            }
+    return {
+        "fitness": base_fitness + penalty,
+        "is_valid": 1.0,
+        "aux info": full_report,
+    }

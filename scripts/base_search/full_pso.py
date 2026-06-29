@@ -24,6 +24,14 @@ np.random.seed(42)
 random.seed(40)
 
 LEGACY_ONE_HOT_CAP = 1 << 20
+PSO_PARTICLES = 16
+PSO_WORKERS = 16
+VALIDATION_TOP_K = 8
+Z_RESERVE_CAP_MIN = 50_000
+Z_RESERVE_CAP_SPAN = 150_000
+Z_HARD_CAP_MIN = 100_000
+Z_HARD_CAP_SPAN = 400_000
+TODD_RESERVE_MAX = 3
 
 def _w_tanh(z: float, scale: float = 4.0, sharp: float = 1.5) -> float:
     return float(scale * np.tanh(z / sharp))
@@ -35,6 +43,9 @@ def softmin(xs, beta=6.0):
 
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
+
+def budget_int(budget: float, minimum: int, span: int) -> int:
+    return int(minimum + int(span * float(budget)))
 
 class Evaluator(BaseEvaluator):
     seeds = [random.randint(1, 10000) for _ in range(2)]
@@ -57,10 +68,15 @@ class Evaluator(BaseEvaluator):
         self.set_scores(ranks, [PolicyScores(exploration=pool_score, final=final_score)])
 
         z_budget = self.map_par(sigmoid)
+        z_research_budget = self.map_par(sigmoid)
+        todd_reserve_budget = self.map_par(sigmoid)
         sample_budget = self.map_par(sigmoid)
         one_hot_fraction = 0.1 + 0.5 * self.map_par(sigmoid)
         sample_count = 8 + int(48 * sample_budget)
         sample_caps = self._sample_caps(sample_count, one_hot_fraction)
+        z_reserve_cap = budget_int(z_research_budget, Z_RESERVE_CAP_MIN, Z_RESERVE_CAP_SPAN)
+        z_hard_cap = max(z_reserve_cap, budget_int(z_research_budget, Z_HARD_CAP_MIN, Z_HARD_CAP_SPAN))
+        todd_reserve = min(TODD_RESERVE_MAX, int(TODD_RESERVE_MAX * todd_reserve_budget))
 
         sampling = SamplingBudget(one_hot="all", sparse=sample_caps[1], dense=sample_caps[2], sparse_max_weight=2)
         self.set_action_selection(ActionSelection(count=2, mode="softmax", temperature=0.2))
@@ -69,9 +85,13 @@ class Evaluator(BaseEvaluator):
         self.set_todd_search(
             ToddSearch(
                 sampling=sampling,
-                pool=SourcePool(keep=12, reserve=0),
+                pool=SourcePool(keep=12, reserve=todd_reserve),
                 actions_per_bucket=1,
-                buckets=ZBucketSearch(min_buckets=10 + int(250 * z_budget), max_buckets=100000),
+                buckets=ZBucketSearch(
+                    min_buckets=10 + int(250 * z_budget),
+                    max_buckets=z_reserve_cap,
+                    limit_bucket=z_hard_cap,
+                ),
             )
         )
         self.set_widths(actions=2, beam=2)
@@ -107,7 +127,10 @@ def _clone_for_pso_eval(fun: Evaluator) -> Evaluator:
 
 def _score_position(fun: Evaluator, position, seeds=None) -> tuple[float, Evaluator]:
     local_fun = _clone_for_pso_eval(fun)
-    cost = local_fun.evaluate(np.asarray(position, dtype=float), seeds=seeds)
+    try:
+        cost = local_fun.evaluate(np.asarray(position, dtype=float), seeds=seeds)
+    finally:
+        local_fun.close_workers()
     return float(cost), local_fun
 
 def _unique_positions(items, limit: int):
@@ -145,22 +168,21 @@ def run_opt(fun: Evaluator, num_eval: int=10, label: str = "pso") -> np.ndarray:
         'w': 0.7,
     }
 
-    workers = 16
     search_history = []
 
     print(f"{label}: optimizing {n_params} params for {num_eval} iterations")
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with ThreadPoolExecutor(max_workers=PSO_WORKERS) as executor:
         def objective(positions):
             positions = [np.asarray(pos, dtype=float) for pos in positions]
-            costs = np.asarray(
-                list(executor.map(lambda pos: _score_position(fun, pos)[0], positions)),
-                dtype=float,
-            )
+            results = list(executor.map(lambda pos: _score_position(fun, pos), positions))
+            for _, local_fun in results:
+                fun.merge_run_state_from(local_fun)
+            costs = np.asarray([cost for cost, _ in results], dtype=float)
             search_history.extend((float(cost), pos.copy()) for cost, pos in zip(costs, positions))
             return costs
 
         optimizer = ps.single.GlobalBestPSO(
-            n_particles=16,
+            n_particles=PSO_PARTICLES,
             dimensions=n_params,
             options=options,
             bounds=bounds,
@@ -171,27 +193,21 @@ def run_opt(fun: Evaluator, num_eval: int=10, label: str = "pso") -> np.ndarray:
             verbose=True
         )
 
-    validation_top_k = 8
     ranked = sorted(search_history + [(float(best_cost), np.asarray(best_position, dtype=float).copy())],
                     key=lambda item: item[0])
-    validation_candidates = _unique_positions(ranked, validation_top_k)
+    validation_candidates = _unique_positions(ranked, VALIDATION_TOP_K)
     validated_position, validated_cost = _validate_top_positions(fun, validation_candidates)
     print(f"validation best cost={validated_cost:.3f} over {len(validation_candidates)} policies "
           f"and {len(fun.validation_seeds)} seeds")
     return validated_position
-
-def evaluate_final(fun: Evaluator, x: np.ndarray, label: str):
-    print(f"{label}: evaluating selected policy on {len(fun.validation_seeds)} validation seeds")
-    return fun(x)
         
 def entrypoint(mat: Matrix):
     fun = Evaluator(mat=mat, fin_rank=170, max_depth=100)
     num_eval = 50
     x0 = run_opt(fun, num_eval, label="initial pso")
-    evaluate_final(fun, x0, "initial final")
-    print(f"{fun.best_pathes[0].final_node.state.rows=}")
+    print(f"{fun.best_paths[0].final_node.state.rows=}")
 
-    best_rank = fun.best_pathes[0].final_node.state.rows
+    best_rank = fun.best_paths[0].final_node.state.rows
     mid_rank_thr = max(best_rank + 1, (fun.init_rank + best_rank) // 2)
     late_rank_thr = max(best_rank + 1, best_rank + (mid_rank_thr - best_rank) // 2)
 
@@ -202,5 +218,4 @@ def entrypoint(mat: Matrix):
             print(f"restart {stage}: no branch found")
             break
         x0 = run_opt(fun, 30, label=f"restart {stage} pso")
-        evaluate_final(fun, x0, f"restart {stage} final")
     return fun.get_best()

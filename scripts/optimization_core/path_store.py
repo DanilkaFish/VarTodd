@@ -16,8 +16,12 @@ except ImportError:  # pragma: no cover - Linux in production, fallback for port
 
 import numpy as np
 
-from mcts_dao import Path as MctsPath, Dao
-from node import Node, Matrix, ActionInfo
+try:
+    from .mcts_dao import Path as MctsPath, Dao
+    from .node import ActionInfo, Matrix, Node
+except ImportError:  # kept for generated scripts that import helper as a flat module
+    from mcts_dao import Path as MctsPath, Dao
+    from node import ActionInfo, Matrix, Node
 
 X0_LENGTH = 200
 USAGE_INDEX_NAME = "_usage_index.json"
@@ -190,15 +194,16 @@ class PathStore:
                 else:
                     incoming_info.append((node.incoming.cand, node.incoming.global_info, node.incoming.source))
             x0s = [list(x0) for x0 in path.x0s]
-            #TODO
             for x0 in x0s:
                 while x0 and x0[-1] == 0:
                     x0.pop()
+            limit_buckets = self._path_limit_buckets({}, path.daos)
             meta["paths"].append(
                 {
                     "matrix_keys": matrix_keys,
                     "ranks_thr": list(path.ranks_thr),
                     "x0s": x0s,
+                    "limit_buckets": limit_buckets,
                 }
             )
             incoming_payload.append(incoming_info)
@@ -254,11 +259,51 @@ class PathStore:
         mid_rank_key = int(mid_rank) if mid_rank is not None else -1
         return (
             int(record["rank"]),
+            PathStore._limit_buckets_sort_key(record.get("limit_buckets")),
             -int(record.get("improved_count") or 0),
             -mid_rank_key,
             int(record.get("used_count") or 0),
             record["name"],
         )
+
+    @staticmethod
+    def _limit_buckets_sort_key(value: Any) -> int:
+        if value is None:
+            return 10**18 - 1
+        value = int(value)
+        if value < 0:
+            return 10**18
+        return value
+
+    @staticmethod
+    def _format_limit_buckets(value: Any) -> str:
+        if value is None:
+            return "unknown"
+        value = int(value)
+        if value < 0:
+            return "-1(full)"
+        return str(value)
+
+    @staticmethod
+    def _path_limit_buckets(path_meta: dict[str, Any], daos: Optional[Sequence[Dao]]) -> Optional[int]:
+        stored = path_meta.get("limit_buckets")
+        if stored is not None:
+            return int(stored)
+        if not daos:
+            return None
+
+        limits: list[int] = []
+        for dao in daos:
+            try:
+                for _rank, todd in dao.mode.todd.points:
+                    limits.append(int(todd.buckets.limit_bucket))
+            except Exception:
+                continue
+        if not limits:
+            return None
+        if any(limit < 0 for limit in limits):
+            return -1
+        return max(limits)
 
     def iter_path_records(self) -> list[dict[str, Any]]:
         import re
@@ -286,8 +331,9 @@ class PathStore:
 
                 best_rank = None
                 best_depth = None
+                best_path_idx = None
                 with np.load(matrices_path) as data:
-                    for p in paths_meta:
+                    for p_idx, p in enumerate(paths_meta):
                         keys = p.get("matrix_keys", [])
                         if not keys:
                             continue
@@ -299,9 +345,32 @@ class PathStore:
                         if best_rank is None or rank < best_rank:
                             best_rank = rank
                             best_depth = depth
+                            best_path_idx = p_idx
 
                 if best_rank is None:
                     continue
+
+                best_path_meta = (
+                    paths_meta[best_path_idx]
+                    if best_path_idx is not None and best_path_idx < len(paths_meta)
+                    else {}
+                )
+                daos_for_best: Optional[Sequence[Dao]] = None
+                if self._path_limit_buckets(best_path_meta, None) is None:
+                    daos_path = backup_dir / "daos.pkl"
+                    if daos_path.exists():
+                        try:
+                            with open(daos_path, "rb") as f:
+                                daos_payload = pickle.load(f)
+                            if (
+                                isinstance(daos_payload, list)
+                                and best_path_idx is not None
+                                and best_path_idx < len(daos_payload)
+                            ):
+                                daos_for_best = daos_payload[best_path_idx]
+                        except Exception:
+                            daos_for_best = None
+                limit_buckets = self._path_limit_buckets(best_path_meta, daos_for_best)
 
                 init_rank = None
                 init_thr_rank = None
@@ -333,6 +402,7 @@ class PathStore:
                         "name": backup_dir.name,
                         "rank": best_rank,
                         "depth": best_depth,
+                        "limit_buckets": limit_buckets,
                         "init_rank": init_rank,
                         "init_rank_thr": init_thr_rank,
                         "kind": self._path_kind(backup_dir.name, init_rank, init_thr_rank),
@@ -350,7 +420,10 @@ class PathStore:
                         "last_used_at": usage_record.get("last_used_at"),
                         "last_improved_at": usage_record.get("last_improved_at"),
                         "parent_path_name": parent_path_name,
-                        "parent_loaded_rank": parent_info.get("loaded_rank"),
+                        "parent_loaded_rank": parent_info.get(
+                            "loaded_path_rank", parent_info.get("loaded_rank")
+                        ),
+                        "parent_loaded_start_rank": parent_info.get("loaded_rank"),
                         "parent_init_rank_thr": parent_info.get("init_rank_thr"),
                         "parent_best_child_rank": parent_best_child_rank,
                         "child_improved_loaded": parent_info.get("child_improved_loaded"),
@@ -389,13 +462,17 @@ class PathStore:
         best_child_text = "none" if best_child is None else str(best_child)
         parent_text = ""
         if record.get("parent_path_name"):
+            start_rank = record.get("parent_loaded_start_rank")
+            start_text = f" start={start_rank}" if start_rank is not None else ""
             parent_text = (
                 f" parent={record['parent_path_name']}"
                 f" loaded={record.get('parent_loaded_rank')}"
+                f"{start_text}"
                 f" thr={record.get('parent_init_rank_thr')}"
             )
         return (
             f"{record['name']} rank={record['rank']} depth={record['depth']} "
+            f"limit_buckets={PathStore._format_limit_buckets(record.get('limit_buckets'))} "
             f"u/i={record['used_count']}/{record['improved_count']} "
             f"child={best_child_text} kind={record['kind']} "
             f"band={record.get('restart_band', 'unknown')}"
