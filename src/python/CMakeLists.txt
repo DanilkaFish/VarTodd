@@ -53,5 +53,6 @@ if (WITH_PY_STUBS)
                 -o . pyvartodd
         WORKING_DIRECTORY $<TARGET_FILE_DIR:pyvartodd>
         COMMENT "Generating .pyi file next to pyvartodd module"
+        VERBATIM
     )
 endif()

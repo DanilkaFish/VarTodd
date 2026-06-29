@@ -781,29 +781,34 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
             }));
 
     py::class_<ZBucketSearch>(m, "ZBucketSearch")
-        .def(py::init([](Int min_buckets, Int max_buckets, float temperature, float random_fraction) {
-                 return ZBucketSearch{min_buckets, max_buckets, temperature, random_fraction};
+        .def(py::init([](Int min_buckets, Int max_buckets, float temperature, float random_fraction,
+                         Int limit_bucket) {
+                 return ZBucketSearch{min_buckets, max_buckets, temperature, random_fraction, limit_bucket};
              }),
              py::arg("min_buckets") = 32, py::arg("max_buckets") = 0, py::arg("temperature") = 0.0f,
-             py::arg("random_fraction") = 0.0f)
+             py::arg("random_fraction") = 0.0f, py::arg("limit_bucket") = -1)
         .def_readwrite("min_buckets", &ZBucketSearch::min_buckets)
         .def_readwrite("max_buckets", &ZBucketSearch::max_buckets)
         .def_readwrite("temperature", &ZBucketSearch::temperature)
         .def_readwrite("random_fraction", &ZBucketSearch::random_fraction)
+        .def_readwrite("limit_bucket", &ZBucketSearch::limit_bucket)
         .def("__repr__", [](const ZBucketSearch& b) {
             return "ZBucketSearch(min_buckets=" + std::to_string((long long)b.min_buckets) +
                    ", max_buckets=" + std::to_string((long long)b.max_buckets) +
                    ", temperature=" + std::to_string(b.temperature) +
-                   ", random_fraction=" + std::to_string(b.random_fraction) + ")";
+                   ", random_fraction=" + std::to_string(b.random_fraction) +
+                   ", limit_bucket=" + std::to_string((long long)b.limit_bucket) + ")";
         })
         .def(py::pickle(
             [](const ZBucketSearch& b) {
-                return py::make_tuple(b.min_buckets, b.max_buckets, b.temperature, b.random_fraction);
+                return py::make_tuple(b.min_buckets, b.max_buckets, b.temperature, b.random_fraction,
+                                      b.limit_bucket);
             },
             [](py::tuple t) {
-                if (t.size() != 4)
+                if (t.size() != 4 && t.size() != 5)
                     throw std::runtime_error("Invalid state for ZBucketSearch");
-                return ZBucketSearch{t[0].cast<Int>(), t[1].cast<Int>(), t[2].cast<float>(), t[3].cast<float>()};
+                return ZBucketSearch{t[0].cast<Int>(), t[1].cast<Int>(), t[2].cast<float>(), t[3].cast<float>(),
+                                     t.size() >= 5 ? t[4].cast<Int>() : (Int)-1};
             }));
 
     py::class_<ToddSearch>(m, "ToddSearch")

@@ -323,6 +323,7 @@ struct ZBucketSearch {
     Int   max_buckets     = 0;
     float temperature     = 0.0f;
     float random_fraction = 0.0f;
+    Int   limit_bucket    = -1;
 };
 
 struct ToddSearch {
