@@ -6,6 +6,8 @@
 *pycache*
 *build*
 outcmaes*
+.codex
+.agents
 
 # Generated artifacts
 benchmark_results/

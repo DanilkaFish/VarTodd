@@ -80,6 +80,14 @@ The demo expects a NumPy `.npy` file storing a 2D `uint8` array. Any non‑zero 
 
 Example datasets live under `data/init_npy/`.
 
+## GF VarTODD vs FastTODD Comparison
+
+The GF benchmark compares `vartodd_fasttodd_mimic.py` against the Rust FastTODD stage runner on the same GF phase-polynomial matrices. The VarTODD mimic follows FastTODD's policy and action-generation structure while using the VarTODD C++ evaluator. The source data is `benchmark_results/gf_comparison.csv`; benchmark details and regeneration commands are in `scripts/benchmarks/README_gf_comparison.md`.
+
+![TODD stage and TOHPE action time](benchmark_results/gf_todd_stage_time.svg)
+
+![Total runtime and final T-count reduction](benchmark_results/gf_total_time_reduction.svg)
+
 ## Project Layout
 
 - `src/core/`: main C++ implementation
