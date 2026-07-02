@@ -68,34 +68,35 @@ class ToddIndex {
     bool          sum_bucket(RowCView key, const SumEntry*& ptr, index_t& len) const noexcept;
     bool          sum_bucket(std::uint32_t id, const SumEntry*& ptr, index_t& len) const noexcept;
     index_t       bucket_size(std::uint32_t id) const noexcept {
-        return (id < buckets_.size()) ? (index_t)buckets_[(std::size_t)id].len : 0;
+        return (id < bucket_len_.size()) ? (index_t)bucket_len_[(std::size_t)id] : 0;
     }
 
     const std::vector<HashKey>&               row_hashes() const noexcept { return hP_; }
     std::vector<std::pair<RowCView, index_t>> sum_key_sizes() const;
     std::vector<SumKeySize>&                  sum_key_sizes_scratch() const;
     const std::vector<std::uint32_t>&         single_id() const noexcept { return single_id_; }
-    const std::vector<std::uint32_t>&         pair_id() const noexcept { return pair_id_; }
     std::uint32_t pair_bucket_id(index_t i, index_t j) const noexcept {
         assert(i != j);
         return pair_id_[pair_index_fast_(i, j)];
     }
-    RowCView      key_of(std::uint32_t id) const noexcept { return bucket_keys_[(index_t)id]; }
-    index_t       buckets_num() const noexcept { return buckets_.size(); }
+    RowCView      key_of(std::uint32_t id) const noexcept { return bucket_key_(id); }
+    index_t       buckets_num() const noexcept { return bucket_len_.size(); }
     index_t       max_bucket() const noexcept;
 
   private:
-    struct BucketInfo {
-        std::uint32_t off = 0, len = 0, cur = 0, next = std::numeric_limits<std::uint32_t>::max();
-    };
     const Matrix&                                                     P_;
     index_t                                                           m_{}, n_bits_{};
     std::vector<HashKey>                                              masks_;
     std::vector<HashKey>                                              hP_;
     std::vector<std::uint32_t>                                        single_id_;
     std::vector<std::uint32_t>                                        pair_id_;
-    std::vector<BucketInfo>                                           buckets_;
-    Matrix                                                            bucket_keys_;
+    std::vector<std::size_t>                                          pair_row_offset_;
+    std::vector<std::uint32_t>                                        bucket_off_;
+    std::vector<std::uint32_t>                                        bucket_len_;
+    std::vector<std::uint32_t>                                        bucket_cur_;
+    std::vector<std::uint32_t>                                        bucket_next_;
+    std::vector<std::uint64_t>                                        bucket_key_blocks_;
+    index_t                                                           bucket_key_blocks_per_row_{};
     std::vector<SumEntry>                                             sum_entries_;
     mutable std::vector<SumKeySize>                                   scratch_sum_key_sizes_;
     ankerl::unordered_dense::map<HashKey, std::uint32_t, HashKeyHash> head_;
@@ -106,8 +107,21 @@ class ToddIndex {
     std::size_t pair_index_fast_(index_t i, index_t j) const noexcept {
         assert(i >= 0 && j >= 0);
         assert(i < m_ && j < m_);
-        return static_cast<std::size_t>(i) * static_cast<std::size_t>(m_) + static_cast<std::size_t>(j);
+        assert(i != j);
+        if (i > j)
+            std::swap(i, j);
+        return pair_row_offset_[(std::size_t)i] + static_cast<std::size_t>(j - i - 1);
     }
+
+    RowCView bucket_key_(std::uint32_t id) const noexcept {
+        const auto* data = bucket_key_blocks_per_row_
+                               ? bucket_key_blocks_.data() +
+                                     static_cast<std::size_t>(id) * static_cast<std::size_t>(bucket_key_blocks_per_row_)
+                               : nullptr;
+        return RowCView(data, n_bits_, bucket_key_blocks_per_row_);
+    }
+
+    void push_bucket_key_(RowCView key);
 
     std::uint32_t get_bucket_id_(HashKey hk, RowCView sumv);
 };
