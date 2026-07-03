@@ -12,8 +12,8 @@ outcmaes*
 # Generated artifacts
 benchmark_results/
 data/path_backups/
-data/baseline_npy/**/*.npy
-data/baseline_npy/**/*.npz
+# data/baseline_npy/**/*.npy
+# data/baseline_npy/**/*.npz
 data/baseline_npy/fastTODD_results.txt
 
 # Configs
