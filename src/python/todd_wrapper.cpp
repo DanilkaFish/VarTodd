@@ -335,7 +335,10 @@ py::class_<Tensor3D>(m, "Tensor3D")
     .def("__ne__", &Tensor3D::operator!=, py::is_operator());
 
 py::class_<MatrixWithData, std::shared_ptr<MatrixWithData>>(m, "MatrixWithData")
-    .def(py::init([](Matrix P) { return std::make_shared<MatrixWithData>(std::move(P)); }), py::arg("P"))
+    .def(py::init([](Matrix P, bool build_full_todd) {
+             return std::make_shared<MatrixWithData>(std::move(P), build_full_todd);
+         }),
+         py::arg("P"), py::arg("build_full_todd") = true)
     .def_property_readonly("P", &MatrixWithData::P, py::return_value_policy::reference_internal)
     .def_property_readonly("tohpe_basis", &MatrixWithData::tohpe_basis, py::return_value_policy::reference_internal)
     .def("tohpe_dim", [](const MatrixWithData& M) { return M.tohpe_basis().rows(); });
@@ -871,7 +874,9 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
     m.def(
         "policy_iteration",
         [](Matrix cur_mat, PolicyConfig pcfg, index_t seed, index_t add_seed) {
-            auto data = std::make_shared<MatrixWithData>(std::move(cur_mat));
+            const bool build_full_todd =
+                std::max(pcfg.todd.pool.keep, (Int)0) > 0 || std::max(pcfg.todd.pool.reserve, (Int)0) > 0;
+            auto data = std::make_shared<MatrixWithData>(std::move(cur_mat), build_full_todd);
             return policy_iteration_impl(data, pcfg, seed, add_seed);
         },
         py::arg("cur_mat"), py::arg("policy_cfg") = PolicyConfig{}, py::arg("seed") = 21, py::arg("add_seed") = 0,

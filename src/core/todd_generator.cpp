@@ -287,6 +287,24 @@ void diversify_buckets(Buckets& buckets, std::size_t max_count, float temperatur
     temperature           = std::max(0.0f, temperature);
     random_fraction       = std::clamp(random_fraction, 0.0f, 1.0f);
 
+    if (temperature == 0.0f && random_fraction == 0.0f) {
+        std::vector<std::size_t> idx(N);
+        std::iota(idx.begin(), idx.end(), 0);
+        auto better = [&](std::size_t a, std::size_t b) { return buckets[a].second > buckets[b].second; };
+        if (cap < N) {
+            std::nth_element(idx.begin(), idx.begin() + static_cast<std::ptrdiff_t>(cap), idx.end(), better);
+            idx.resize(cap);
+        }
+        std::sort(idx.begin(), idx.end(), better);
+
+        Buckets out;
+        out.reserve(idx.size());
+        for (auto id : idx)
+            out.push_back(std::move(buckets[id]));
+        buckets = std::move(out);
+        return;
+    }
+
     std::vector<std::size_t> idx(N);
     std::vector<double>      score(N);
     std::iota(idx.begin(), idx.end(), 0);
@@ -601,7 +619,8 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
     if (config.todd.pool.keep <= 0)
         return;
 
-    auto& buckets = ctx.data->index().sum_key_sizes_scratch();
+    const ToddIndex& index   = ctx.data->index();
+    auto&            buckets = index.sum_bucket_id_sizes_scratch();
     const auto bucket_search_limit =
         config.todd.buckets.limit_bucket < 0
             ? buckets.size()
@@ -640,16 +659,17 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
             }
         }
 
-        auto& [key, bucket_size] = buckets[i];
+        auto& [bucket_id, bucket_size] = buckets[i];
         stats.total += 1;
         stats.z_researched += 1;
-        if (!ctx.data->index().sum_bucket(key, ptr, len) || len == 0)
+        if (!index.sum_bucket(bucket_id, ptr, len) || len == 0)
             continue;
 
         const index_t k         = ptr[0].a;
         const bool    is_single = !ptr[0].is_pair();
         const index_t l         = is_single ? k_single_sentinel<index_t>() : (index_t)ptr[0].b;
-        auto          ns        = is_single ? local_gen.make(k) : local_gen.make(k, l);
+        const RowCView key      = index.key_of(bucket_id);
+        auto          ns        = local_gen.make(key, ptr, static_cast<int>(len));
 
         const auto dim = ns.basis().rows();
         const auto n   = stats.total;

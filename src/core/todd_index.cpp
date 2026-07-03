@@ -102,6 +102,7 @@ void ToddIndex::build_sum_buckets_() {
     bucket_len_.clear();
     bucket_cur_.clear();
     bucket_next_.clear();
+    max_bucket_ = 0;
     bucket_off_.reserve(reserve_hint);
     bucket_len_.reserve(reserve_hint);
     bucket_cur_.reserve(reserve_hint);
@@ -144,6 +145,7 @@ void ToddIndex::build_sum_buckets_() {
         bucket_off_[(std::size_t)id] = off;
         off += bucket_len_[(std::size_t)id];
         bucket_cur_[(std::size_t)id] = 0;
+        max_bucket_ = std::max(max_bucket_, (index_t)bucket_len_[(std::size_t)id]);
     }
     sum_entries_.assign((std::size_t)off, SumEntry{0, 0});
     for (index_t i = 0; i < n; ++i) {
@@ -215,10 +217,11 @@ std::vector<ToddIndex::SumKeySize>& ToddIndex::sum_key_sizes_scratch() const {
     return scratch_sum_key_sizes_;
 }
 
-index_t ToddIndex::max_bucket() const noexcept {
-    index_t max = 0;
-    for (const auto len : bucket_len_)
-        max = std::max(max, (index_t)len);
-    return max;
+std::vector<ToddIndex::BucketIdSize>& ToddIndex::sum_bucket_id_sizes_scratch() const {
+    scratch_bucket_id_sizes_.clear();
+    scratch_bucket_id_sizes_.reserve(bucket_len_.size());
+    for (std::uint32_t id = 0; id < bucket_len_.size(); ++id)
+        scratch_bucket_id_sizes_.emplace_back(id, (index_t)bucket_len_[(std::size_t)id]);
+    return scratch_bucket_id_sizes_;
 }
 } // namespace todd

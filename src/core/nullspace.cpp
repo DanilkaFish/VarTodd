@@ -100,6 +100,25 @@ static bool rows_are_linearly_independent(const Matrix& rows) {
 }
 #endif
 
+static auto build_tohpe_basis_precompute(const Matrix& P) -> Matrix {
+    if (P.rows() == 0) {
+        return Matrix(0, 0);
+    }
+
+    Matrix   L = L_expansion(P);
+    Matrix   Y = Matrix::identity(P.rows());
+    PivotMap pivots;
+    pivots.reset(L.cols());
+    gauss_elimination_inplace_rref(L, Y, pivots);
+
+    Matrix tohpe_basis = extract_basis(Y, pivots);
+#ifndef NDEBUG
+    assert(tohpe_basis == get_tohpe_basis(P));
+    assert(rows_are_linearly_independent(tohpe_basis));
+#endif
+    return tohpe_basis;
+}
+
 // Build both TOHPE and full-TODD data from one elimination pass over L(P).
 static auto build_matrix_with_data_precompute(const Matrix& P)
     -> std::pair<Matrix, MatrixWithData::FullToddData> {
@@ -152,8 +171,7 @@ static auto build_matrix_with_data_precompute(const Matrix& P)
     }
     out.nonpiv_cols = nonpiv_cols;
 
-    Matrix               LY_nonpivot((index_t)pivot_source_rows.size(), nonpiv_cols + P.rows());
-    std::vector<uint8_t> is_zero(LY_nonpivot.rows(), true);
+    Matrix LY_nonpivot((index_t)pivot_source_rows.size(), nonpiv_cols + P.rows());
     for (index_t r = 0; r < LY_nonpivot.rows(); ++r) {
         auto       dst = LY_nonpivot[r];
         const auto lr  = L[pivot_source_rows[(std::size_t)r]];
@@ -161,17 +179,14 @@ static auto build_matrix_with_data_precompute(const Matrix& P)
             const std::int64_t idx = out.nonpivot_index[(std::size_t)p];
             if (idx >= 0) {
                 dst.set((index_t)idx);
-                is_zero[r] = false;
             }
         }
 
         const auto yr = Y[pivot_source_rows[(std::size_t)r]];
         if (!yr.none()) {
             or_shifted(dst, nonpiv_cols, yr);
-            is_zero[r] = false;
         }
     }
-    out.is_zero     = std::move(is_zero);
     out.LY_nonpivot = std::move(LY_nonpivot);
     return {std::move(tohpe_basis), std::move(out)};
 }
@@ -296,16 +311,25 @@ void CountWS::argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) co
     std::ranges::sort(scratch_out, better);
 }
 
-MatrixWithData::MatrixWithData(Matrix P) : P_{std::move(P)}, index_{P_} {
-    auto precomputed = build_matrix_with_data_precompute(P_);
-    tohpe_basis_     = std::move(precomputed.first);
-    full_todd_       = std::move(precomputed.second);
+MatrixWithData::MatrixWithData(Matrix P, bool build_full_todd) : P_{std::move(P)}, index_{P_} {
+    if (build_full_todd) {
+        auto precomputed = build_matrix_with_data_precompute(P_);
+        tohpe_basis_     = std::move(precomputed.first);
+        full_todd_       = std::move(precomputed.second);
+    } else {
+        tohpe_basis_ = build_tohpe_basis_precompute(P_);
+    }
 #ifndef NDEBUG
     assert(rows_are_linearly_independent(tohpe_basis_));
 #endif
 }
 
-const MatrixWithData::FullToddData& MatrixWithData::full_todd() const { return full_todd_; }
+const MatrixWithData::FullToddData& MatrixWithData::full_todd() const {
+    if (!full_todd_) {
+        throw std::runtime_error("MatrixWithData was constructed without full TODD data");
+    }
+    return *full_todd_;
+}
 
 Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{M}, z_{std::move(z)}, special_{-1} {
     const ToddIndex& idx = M_->index();
@@ -368,6 +392,9 @@ TohpeWitness::TohpeWitness(std::shared_ptr<MatrixWithData> M, Row z, const SumEn
 
 ToddWitness::ToddWitness(std::shared_ptr<MatrixWithData> M, Row z, Matrix&& Y)
     : Witness(M, std::move(z)), Y_{std::move(Y)} {}
+
+ToddWitness::ToddWitness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntry* ptr, index_t len, Matrix&& Y)
+    : Witness(M, std::move(z), ptr, len), Y_{std::move(Y)} {}
 
 int Witness::rank_divergence(RowCView y) const {
     if (!simple_entries_)
@@ -620,11 +647,15 @@ NullSpace FullToddGenerator::make(RowCView z) const {
     const SumEntry* ptr = nullptr;
     index_t         len = 0;
     M_->index().sum_bucket(z, ptr, len);
+    return make(z, ptr, static_cast<int>(len));
+}
+
+NullSpace FullToddGenerator::make(RowCView z, const SumEntry* ptr, int len) const {
     Matrix Y = full_todd_kernel(z, ptr, len);
 #ifndef NDEBUG
     assert(rows_are_linearly_independent(Y));
 #endif
-    return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, z, std::move(Y))));
+    return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, Row(z), ptr, len, std::move(Y))));
 }
 
 NullSpace FullToddGenerator::make(index_t row) const {
@@ -636,7 +667,7 @@ NullSpace FullToddGenerator::make(index_t row) const {
 #ifndef NDEBUG
     assert(rows_are_linearly_independent(Y));
 #endif
-    return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, std::move(z), std::move(Y))));
+    return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, std::move(z), ptr, len, std::move(Y))));
 }
 
 NullSpace FullToddGenerator::make(index_t row1, index_t row2) const {
@@ -649,7 +680,7 @@ NullSpace FullToddGenerator::make(index_t row1, index_t row2) const {
 #ifndef NDEBUG
     assert(rows_are_linearly_independent(Y));
 #endif
-    return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, std::move(z), std::move(Y))));
+    return NullSpace(M_, std::make_unique<ToddWitness>(ToddWitness(M_, std::move(z), ptr, len, std::move(Y))));
 }
 
 } // namespace todd

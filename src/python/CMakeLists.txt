@@ -32,7 +32,7 @@ target_compile_definitions(pyvartodd PRIVATE
 )
 
 # ---- Stub generation ----
-set(WITH_PY_STUBS_DEFAULT OFF)
+set(WITH_PY_STUBS_DEFAULT ON)
 
 option(WITH_PY_STUBS
     "Generate Python stub files (.pyi) for the Python module."

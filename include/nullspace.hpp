@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -35,7 +36,7 @@ struct CountWS {
 // object with precacluated data used to build nullspaces and new ranks
 class MatrixWithData {
   public:
-    MatrixWithData(Matrix P);
+    explicit MatrixWithData(Matrix P, bool build_full_todd = true);
 
     const ToddIndex& index() const noexcept { return index_; }
     const Matrix&    P() const noexcept { return P_; }
@@ -47,7 +48,6 @@ class MatrixWithData {
         std::vector<std::uint64_t> offset;
         std::vector<std::int64_t>  pivot_row_of_col;
         std::vector<std::int64_t>  nonpivot_index;
-        std::vector<uint8_t>       is_zero;
         index_t                    nonpiv_cols{};
     };
 
@@ -57,7 +57,7 @@ class MatrixWithData {
     Matrix                              P_;
     Matrix                              tohpe_basis_;
     const ToddIndex                     index_;
-    FullToddData                        full_todd_;
+    std::optional<FullToddData>         full_todd_;
 };
 
 // base object for prediction of rank divergence
@@ -96,6 +96,7 @@ class TohpeWitness final : public Witness {
 class ToddWitness final : public Witness {
   public:
     ToddWitness(std::shared_ptr<MatrixWithData> M, Row z, Matrix&& Y);
+    ToddWitness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntry* ptr, index_t len, Matrix&& Y);
     const Matrix& get_Y() const override { return Y_; }
 
   private:
@@ -159,6 +160,7 @@ class FullToddGenerator {
   public:
     explicit FullToddGenerator(std::shared_ptr<MatrixWithData> M);
     auto make(RowCView z) const -> NullSpace;
+    auto make(RowCView z, const SumEntry* ptr, int len) const -> NullSpace;
     auto make(index_t row) const -> NullSpace;
     auto make(index_t row1, index_t row2) const -> NullSpace;
     auto full_todd_kernel(RowCView z) const -> Matrix;
