@@ -219,6 +219,7 @@ class ToddIndex {
     std::vector<std::pair<RowCView, index_t>> sum_key_sizes() const;
     std::vector<SumKeySize>&                  sum_key_sizes_scratch() const;
     std::vector<BucketIdSize>&                sum_bucket_id_sizes_scratch() const;
+    std::vector<BucketIdSize>&                top_sum_bucket_id_sizes_scratch(std::size_t max_count) const;
     const std::vector<std::uint32_t>&         single_id() const noexcept { return single_id_; }
     std::uint32_t pair_bucket_id(index_t i, index_t j) const noexcept {
         assert(i != j);
@@ -235,10 +236,8 @@ class ToddIndex {
     std::vector<HashKey>                                              hP_;
     std::vector<std::uint32_t>                                        single_id_;
     std::vector<std::uint32_t>                                        pair_id_;
-    std::vector<std::size_t>                                          pair_row_offset_;
     std::vector<std::uint32_t>                                        bucket_off_;
     std::vector<std::uint32_t>                                        bucket_len_;
-    std::vector<std::uint32_t>                                        bucket_cur_;
     std::vector<std::uint32_t>                                        bucket_next_;
     std::vector<std::uint64_t>                                        bucket_key_blocks_;
     index_t                                                           bucket_key_blocks_per_row_{};
@@ -257,7 +256,10 @@ class ToddIndex {
         assert(i != j);
         if (i > j)
             std::swap(i, j);
-        return pair_row_offset_[(std::size_t)i] + static_cast<std::size_t>(j - i - 1);
+        const auto ii = static_cast<std::size_t>(i);
+        const auto jj = static_cast<std::size_t>(j);
+        const auto mm = static_cast<std::size_t>(m_);
+        return (ii * (2 * mm - ii - 1)) / 2 + (jj - ii - 1);
     }
 
     RowCView bucket_key_(std::uint32_t id) const noexcept {

@@ -20,11 +20,11 @@ struct TohpeZInfo {
 };
 
 struct CountWS {
-    std::vector<index_t> cnt;
-    std::vector<index_t> tag;
-    std::vector<index_t> used;
-    index_t              epoch = 1;
-    bool                 parity;
+    std::vector<std::uint32_t> cnt;
+    std::vector<std::uint16_t> tag;
+    std::vector<std::uint32_t> used;
+    std::uint16_t              epoch = 1;
+    bool                       parity;
 
     auto argmax_n(std::size_t n) const -> std::vector<index_t>;
     void argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) const;

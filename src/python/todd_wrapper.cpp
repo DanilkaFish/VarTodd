@@ -881,4 +881,11 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         },
         py::arg("cur_mat"), py::arg("policy_cfg") = PolicyConfig{}, py::arg("seed") = 21, py::arg("add_seed") = 0,
         py::call_guard<py::gil_scoped_release>());
+    m.def(
+        "policy_iteration",
+        [](std::shared_ptr<MatrixWithData> data, PolicyConfig pcfg, index_t seed, index_t add_seed) {
+            return policy_iteration_impl(data, pcfg, seed, add_seed);
+        },
+        py::arg("data"), py::arg("policy_cfg") = PolicyConfig{}, py::arg("seed") = 21, py::arg("add_seed") = 0,
+        py::call_guard<py::gil_scoped_release>());
 }

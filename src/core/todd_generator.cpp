@@ -619,21 +619,33 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
     if (config.todd.pool.keep <= 0)
         return;
 
-    const ToddIndex& index   = ctx.data->index();
-    auto&            buckets = index.sum_bucket_id_sizes_scratch();
-    const auto bucket_search_limit =
+    const ToddIndex& index = ctx.data->index();
+    const auto       bucket_count = static_cast<std::size_t>(index.buckets_num());
+    const auto requested_bucket_limit =
         config.todd.buckets.limit_bucket < 0
-            ? buckets.size()
-            : std::min<std::size_t>(buckets.size(), static_cast<std::size_t>(config.todd.buckets.limit_bucket));
+            ? bucket_count
+            : std::min<std::size_t>(bucket_count, static_cast<std::size_t>(config.todd.buckets.limit_bucket));
+    const bool deterministic_bucket_order =
+        config.todd.buckets.temperature == 0.0f && config.todd.buckets.random_fraction == 0.0f;
+
+    std::vector<ToddIndex::BucketIdSize>* buckets_ptr = nullptr;
+    if (deterministic_bucket_order) {
+        buckets_ptr = &index.top_sum_bucket_id_sizes_scratch(requested_bucket_limit);
+    } else {
+        buckets_ptr = &index.sum_bucket_id_sizes_scratch();
+        PyRNG bucket_rng(mixed_seed(ctx.base_seed, bucket_count, config.todd.buckets.max_buckets,
+                                    config.todd.buckets.limit_bucket < 0 ? (Int)0 : config.todd.buckets.limit_bucket,
+                                    CandidateSourceTodd));
+        diversify_buckets(*buckets_ptr, requested_bucket_limit, config.todd.buckets.temperature,
+                          config.todd.buckets.random_fraction, bucket_rng);
+    }
+
+    auto&      buckets             = *buckets_ptr;
+    const auto bucket_search_limit = buckets.size();
     const auto reserve_search_cap =
         config.todd.buckets.max_buckets <= 0
             ? bucket_search_limit
             : std::min<std::size_t>(bucket_search_limit, static_cast<std::size_t>(config.todd.buckets.max_buckets));
-    const auto limit_seed_component = config.todd.buckets.limit_bucket < 0 ? (Int)0 : config.todd.buckets.limit_bucket;
-    PyRNG bucket_rng(mixed_seed(ctx.base_seed, buckets.size(), config.todd.buckets.max_buckets,
-                                limit_seed_component, CandidateSourceTodd));
-    diversify_buckets(buckets, bucket_search_limit, config.todd.buckets.temperature,
-                      config.todd.buckets.random_fraction, bucket_rng);
 
     const auto min_buckets_to_search =
         std::min<std::size_t>(bucket_search_limit, static_cast<std::size_t>(config.todd.buckets.min_buckets));

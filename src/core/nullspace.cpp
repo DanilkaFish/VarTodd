@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <ranges>
 #include <stdexcept>
 #include <vector>
@@ -221,6 +222,8 @@ static void or_shifted(RowView dst, index_t offset, RowCView src) noexcept {
 } // namespace
 
 void CountWS::reset(std::size_t K) {
+    if (K > std::numeric_limits<std::uint32_t>::max())
+        throw std::overflow_error("CountWS supports at most 2^32-1 buckets");
     if (cnt.size() < K) {
         cnt.resize(K);
         tag.resize(K, 0);
@@ -234,21 +237,25 @@ void CountWS::reset(std::size_t K) {
 }
 
 void CountWS::add(index_t id, index_t delta) {
-    if (tag[id] != epoch) {
-        tag[id] = epoch;
-        cnt[id] = delta - parity;
-        used.push_back(id);
+    assert(id < cnt.size());
+    assert(id <= std::numeric_limits<std::uint32_t>::max());
+    assert(delta <= std::numeric_limits<std::uint32_t>::max());
+    const auto idx = static_cast<std::size_t>(id);
+    if (tag[idx] != epoch) {
+        tag[idx] = epoch;
+        cnt[idx] = static_cast<std::uint32_t>(delta - parity);
+        used.push_back(static_cast<std::uint32_t>(id));
     } else
-        cnt[id] += delta;
+        cnt[idx] += static_cast<std::uint32_t>(delta);
 }
 
 index_t CountWS::argmax() const {
     assert(used.size() > 0);
-    index_t best = used[0];
+    std::uint32_t best = used[0];
     for (auto id : used)
         if (cnt[id] > cnt[best] || (cnt[id] == cnt[best] && id < best))
             best = id;
-    return best;
+    return static_cast<index_t>(best);
 }
 
 std::vector<index_t> CountWS::argmax_n(std::size_t n) const {

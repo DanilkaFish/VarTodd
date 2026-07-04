@@ -44,7 +44,6 @@ std::uint32_t ToddIndex::get_bucket_id_(HashKey hk, RowCView sumv) {
     push_bucket_key_(sumv);
     bucket_off_.push_back(0);
     bucket_len_.push_back(0);
-    bucket_cur_.push_back(0);
     bucket_next_.push_back(head_id);
     head_id = new_id;
     return new_id;
@@ -85,12 +84,9 @@ void ToddIndex::build_sum_buckets_() {
     const index_t n = m_;
     single_id_.assign((std::size_t)n, 0);
 
-    pair_row_offset_.assign((std::size_t)n, 0);
     std::size_t pair_count = 0;
-    for (index_t i = 0; i < n; ++i) {
-        pair_row_offset_[(std::size_t)i] = pair_count;
+    for (index_t i = 0; i < n; ++i)
         pair_count += static_cast<std::size_t>(n - i - 1);
-    }
     pair_id_.assign(pair_count, 0);
     const std::size_t sum_count    = static_cast<std::size_t>(n) + pair_count;
     const std::size_t reserve_hint = std::min<std::size_t>(sum_count, 2000000);
@@ -100,12 +96,10 @@ void ToddIndex::build_sum_buckets_() {
     head_.max_load_factor(0.7f);
     bucket_off_.clear();
     bucket_len_.clear();
-    bucket_cur_.clear();
     bucket_next_.clear();
     max_bucket_ = 0;
     bucket_off_.reserve(reserve_hint);
     bucket_len_.reserve(reserve_hint);
-    bucket_cur_.reserve(reserve_hint);
     bucket_next_.reserve(reserve_hint);
     const index_t              nb = (n_bits_ + 63) / 64;
     bucket_key_blocks_per_row_ = nb;
@@ -144,19 +138,19 @@ void ToddIndex::build_sum_buckets_() {
     for (std::uint32_t id = 0; id < bucket_len_.size(); ++id) {
         bucket_off_[(std::size_t)id] = off;
         off += bucket_len_[(std::size_t)id];
-        bucket_cur_[(std::size_t)id] = 0;
         max_bucket_ = std::max(max_bucket_, (index_t)bucket_len_[(std::size_t)id]);
     }
+    std::vector<std::uint32_t> bucket_cur(bucket_len_.size(), 0);
     sum_entries_.assign((std::size_t)off, SumEntry{0, 0});
     for (index_t i = 0; i < n; ++i) {
         const std::uint32_t id  = single_id_[(std::size_t)i];
-        const std::uint32_t cur = bucket_cur_[(std::size_t)id]++;
+        const std::uint32_t cur = bucket_cur[(std::size_t)id]++;
         sum_entries_[(std::size_t)(bucket_off_[(std::size_t)id] + cur)] = SumEntry{i};
     }
     for (index_t i = 0; i < n; ++i) {
         for (index_t j = i + 1; j < n; ++j) {
             const std::uint32_t id  = pair_id_[pair_index_fast_(i, j)];
-            const std::uint32_t cur = bucket_cur_[(std::size_t)id]++;
+            const std::uint32_t cur = bucket_cur[(std::size_t)id]++;
             sum_entries_[(std::size_t)(bucket_off_[(std::size_t)id] + cur)] = SumEntry{i, j};
         }
     }
@@ -222,6 +216,33 @@ std::vector<ToddIndex::BucketIdSize>& ToddIndex::sum_bucket_id_sizes_scratch() c
     scratch_bucket_id_sizes_.reserve(bucket_len_.size());
     for (std::uint32_t id = 0; id < bucket_len_.size(); ++id)
         scratch_bucket_id_sizes_.emplace_back(id, (index_t)bucket_len_[(std::size_t)id]);
+    return scratch_bucket_id_sizes_;
+}
+
+std::vector<ToddIndex::BucketIdSize>& ToddIndex::top_sum_bucket_id_sizes_scratch(std::size_t max_count) const {
+    scratch_bucket_id_sizes_.clear();
+    const std::size_t N = bucket_len_.size();
+    if (N == 0 || max_count == 0)
+        return scratch_bucket_id_sizes_;
+
+    const std::size_t cap = std::min(N, max_count);
+    std::vector<std::size_t> idx(N);
+    for (std::size_t i = 0; i < N; ++i)
+        idx[i] = i;
+
+    auto better = [&](std::size_t a, std::size_t b) {
+        return bucket_len_[a] > bucket_len_[b];
+    };
+
+    if (cap < N) {
+        std::nth_element(idx.begin(), idx.begin() + static_cast<std::ptrdiff_t>(cap), idx.end(), better);
+        idx.resize(cap);
+    }
+    std::sort(idx.begin(), idx.end(), better);
+
+    scratch_bucket_id_sizes_.reserve(idx.size());
+    for (auto id : idx)
+        scratch_bucket_id_sizes_.emplace_back(static_cast<std::uint32_t>(id), (index_t)bucket_len_[id]);
     return scratch_bucket_id_sizes_;
 }
 } // namespace todd
