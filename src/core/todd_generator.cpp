@@ -1,6 +1,7 @@
 #include "todd_generator.hpp"
 
 #include "nullspace.hpp"
+#include "random.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,7 +10,6 @@
 #include <limits>
 #include <numeric>
 #include <optional>
-#include <random.hpp>
 #include <stdexcept>
 
 namespace todd {
@@ -48,22 +48,11 @@ template <class Score> class TopKPool {
 
     std::vector<Candidate> release_unsorted() {
         std::vector<Candidate> out;
-        std::ranges::sort(heap_, worse_node_);
         out.reserve(heap_.size());
         for (auto& n : heap_)
             out.push_back(std::move(n.cand));
         heap_.clear();
         return out;
-    }
-
-    void set_keyfn(Score k) {
-        keyfn_ = std::move(k);
-        for (auto& n : heap_) {
-            const auto [key, tohpe] = keyfn_(n.cand);
-            (void)tohpe;
-            n.key = key;
-        }
-        std::make_heap(heap_.begin(), heap_.end(), worse_node_);
     }
 
   private:
@@ -122,8 +111,9 @@ index_t mixed_seed(std::uint64_t base_seed, std::uint64_t a, std::uint64_t b, st
     return static_cast<index_t>((x >> 32) ^ x);
 }
 
-template <class Mean, class Value> void update_mean_value(Mean& mean, Value value, Int n) {
-    mean += (value - mean) / std::max((Int)1, n);
+template <class Mean, class Value, class Count> void update_mean_value(Mean& mean, Value value, Count n) {
+    const auto denom = n > Count{0} ? n : Count{1};
+    mean += (value - mean) / denom;
 }
 
 using FinalizationPool = TopKPool<FinalizationScore>;
@@ -180,14 +170,14 @@ NormalizedSamplingBudget normalize_sampling_budget(SamplingBudget sampling) {
                 static_cast<index_t>(std::max<Int>(sampling.sparse, 0)),
                 static_cast<index_t>(std::max<Int>(sampling.dense, 0)),
             },
-        .sparse_max_weight = std::max(sampling.sparse_max_weight, (Int)2),
+        .sparse_max_weight = std::max(sampling.sparse_max_weight, static_cast<Int>(2)),
     };
 }
 
 NormalizedSourcePool normalize_source_pool(SourcePool pool) {
     return {
-        .keep    = std::max(pool.keep, (Int)0),
-        .reserve = std::max(pool.reserve, (Int)0),
+        .keep    = std::max(pool.keep, static_cast<Int>(0)),
+        .reserve = std::max(pool.reserve, static_cast<Int>(0)),
     };
 }
 
@@ -201,27 +191,29 @@ NormalizedPolicyConfig normalize_policy_config(PolicyConfig config) {
             {
                 .sampling  = normalize_sampling_budget(config.tohpe.sampling),
                 .pool      = normalize_source_pool(config.tohpe.pool),
-                .z_choices = std::max(config.tohpe.z_choices, (Int)1),
+                .z_choices = std::max(config.tohpe.z_choices, static_cast<Int>(1)),
             },
         .todd =
             {
                 .sampling           = normalize_sampling_budget(config.todd.sampling),
                 .pool               = normalize_source_pool(config.todd.pool),
-                .actions_per_bucket = std::max(config.todd.actions_per_bucket, (Int)1),
+                .actions_per_bucket = std::max(config.todd.actions_per_bucket, static_cast<Int>(1)),
                 .buckets =
                     {
-                        .min_buckets     = std::max(config.todd.buckets.min_buckets, (Int)0),
-                        .max_buckets     = std::max(config.todd.buckets.max_buckets, (Int)0),
+                        .min_buckets     = std::max(config.todd.buckets.min_buckets, static_cast<Int>(0)),
+                        .max_buckets     = std::max(config.todd.buckets.max_buckets, static_cast<Int>(0)),
                         .temperature     = std::max(config.todd.buckets.temperature, 0.0f),
                         .random_fraction = std::clamp(config.todd.buckets.random_fraction, 0.0f, 1.0f),
                         .limit_bucket    = config.todd.buckets.limit_bucket < 0
-                                               ? (Int)-1
-                                               : std::max(config.todd.buckets.limit_bucket, (Int)0),
+                                               ? static_cast<Int>(-1)
+                                               : std::max(config.todd.buckets.limit_bucket, static_cast<Int>(0)),
                     },
             },
     };
-    out.selection.count = std::max(out.selection.count, (Int)1);
-    out.pool.final_size = std::max({out.selection.count, out.pool.final_size, out.tohpe.pool.reserve + out.todd.pool.reserve});
+    out.selection.count = std::max(out.selection.count, static_cast<Int>(1));
+    const Int reserved_sources =
+        detail::checked_int_sum(out.tohpe.pool.reserve, out.todd.pool.reserve, "policy pool reserve overflow");
+    out.pool.final_size = std::max({out.selection.count, out.pool.final_size, reserved_sources});
     return out;
 }
 
@@ -397,12 +389,13 @@ bool pool_preferred(Candidate const& a, Candidate const& b) {
     return a.vec < b.vec;
 }
 
+// Move the reserved best prefix from one source; remaining candidates are merged and sorted later.
 void take_source_quota(std::vector<Candidate>& out, std::vector<Candidate>& src, std::size_t desired,
                        std::size_t hard_limit) {
     if (desired == 0 || hard_limit == 0 || out.size() >= hard_limit || src.empty())
         return;
-    std::sort(src.begin(), src.end(), pool_preferred);
     const std::size_t n = std::min({desired, hard_limit - out.size(), src.size()});
+    std::partial_sort(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(n), src.end(), pool_preferred);
     for (std::size_t i = 0; i < n; ++i)
         out.push_back(std::move(src[i]));
     src.erase(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(n));
@@ -423,10 +416,15 @@ std::vector<Candidate> merge_source_candidates(std::vector<Candidate> tohpe, std
     for (auto& c : todd)
         rest.push_back(std::move(c));
 
-    std::sort(rest.begin(), rest.end(), pool_preferred);
+    const std::size_t remaining = final_size - out.size();
+    if (remaining < rest.size()) {
+        std::partial_sort(rest.begin(), rest.begin() + static_cast<std::ptrdiff_t>(remaining), rest.end(),
+                          pool_preferred);
+        rest.resize(remaining);
+    } else {
+        std::sort(rest.begin(), rest.end(), pool_preferred);
+    }
     for (auto& c : rest) {
-        if (out.size() >= final_size)
-            break;
         out.push_back(std::move(c));
     }
     return out;
@@ -438,9 +436,9 @@ Row linear_combination_from_basis(const Matrix& basis, RowCView coefs) {
     }
     Row out(basis.cols());
     for (auto i = coefs.find_first(); i != Row::npos; i = coefs.find_next(i)) {
-        if ((index_t)i >= basis.rows())
+        if (static_cast<index_t>(i) >= basis.rows())
             break;
-        out ^= basis[(index_t)i];
+        out ^= basis[static_cast<index_t>(i)];
     }
     return out;
 }
@@ -500,6 +498,8 @@ std::vector<Candidate> pick_softmax_view(FinalizationPool& pool, std::size_t n, 
     std::vector<float>       key(N);
     std::vector<std::size_t> idx(N);
 
+    // Preserve the historical candidate-to-random-draw order for softmax selection.
+    std::ranges::sort(all, better);
     for (std::size_t i = 0; i < N; ++i) {
         double u = rng.rand_double(0.0, 1.0);
         if (u <= 0.0)
@@ -577,7 +577,8 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
     auto local_pool = TopKPool<ExplorationScore>(config.tohpe.pool.keep, config.escore);
 
     const index_t dim     = ctx.tohpe_dim;
-    out.stats.max_basis = dim;
+    const Int     dim_int = detail::checked_int_from_index(dim, "Stats basis dimension overflow");
+    out.stats.max_basis   = dim_int;
 
     PyRNG local_rng(mixed_seed(ctx.base_seed, 0, 0, 0, CandidateSourceTohpe));
 
@@ -596,17 +597,22 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
                 continue;
             }
             Row       cand_vec = (zi + 1 == scratch_best_z.size()) ? std::move(vec) : Row(vec);
-            Candidate c(0, (Int)red, k_single_sentinel<Int>(), k_single_sentinel<Int>(), std::move(cand_vec),
-                        std::move(info.z), (Int)dim, (Int)info.bucket_size, info.bucket_id, CandidateSourceTohpe);
+            Candidate c(0, detail::checked_int_from_index(red, "Candidate reduction overflow"),
+                        k_single_sentinel<Int>(), k_single_sentinel<Int>(), std::move(cand_vec), std::move(info.z),
+                        dim_int, detail::checked_int_from_index(info.bucket_size, "Candidate bucket size overflow"),
+                        info.bucket_id, CandidateSourceTohpe);
             out.stats.nonzero++;
+            out.stats.accepted++;
             out.stats.accepted_tohpe++;
             auto [score, tohpe] = local_pool.push(std::move(c));
             (void)tohpe;
-            out.svs.observe(red, dim, score);
+            out.svs.observe(detail::checked_int_from_index(red, "SeenValues reduction overflow"), dim_int, score);
 
             out.stats.max_pool_score = std::max(out.stats.max_pool_score, score);
-            out.stats.max_reduction  = std::max(out.stats.max_reduction, (Int)red);
-            out.stats.max_bucket     = std::max(out.stats.max_bucket, (Int)info.bucket_size);
+            out.stats.max_reduction =
+                std::max(out.stats.max_reduction, detail::checked_int_from_index(red, "Stats reduction overflow"));
+            out.stats.max_bucket = std::max(
+                out.stats.max_bucket, detail::checked_int_from_index(info.bucket_size, "Stats bucket size overflow"));
             update_mean_value(out.stats.mean_score, score, out.stats.nonzero);
             update_mean_value(out.stats.mean_reduction, red, out.stats.nonzero);
         }
@@ -634,7 +640,8 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
     } else {
         buckets_ptr = &index.sum_bucket_id_sizes_scratch();
         PyRNG bucket_rng(mixed_seed(ctx.base_seed, bucket_count, config.todd.buckets.max_buckets,
-                                    config.todd.buckets.limit_bucket < 0 ? (Int)0 : config.todd.buckets.limit_bucket,
+                                    config.todd.buckets.limit_bucket < 0 ? static_cast<Int>(0)
+                                                                         : config.todd.buckets.limit_bucket,
                                     CandidateSourceTodd));
         diversify_buckets(*buckets_ptr, requested_bucket_limit, config.todd.buckets.temperature,
                           config.todd.buckets.random_fraction, bucket_rng);
@@ -653,7 +660,8 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
     Stats stats;
 
     const auto reserve_target =
-        static_cast<std::size_t>(std::min(config.todd.pool.keep, std::max(config.todd.pool.reserve, (Int)1)));
+        static_cast<std::size_t>(
+            std::min(config.todd.pool.keep, std::max(config.todd.pool.reserve, static_cast<Int>(1))));
     auto  local_pool = TopKPool<ExplorationScore>(config.todd.pool.keep, config.escore);
     auto& local_gen  = ctx.get_full_gen();
     auto  local_svs  = SeenValues{};
@@ -679,24 +687,27 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
 
         const index_t k         = ptr[0].a;
         const bool    is_single = !ptr[0].is_pair();
-        const index_t l         = is_single ? k_single_sentinel<index_t>() : (index_t)ptr[0].b;
+        const index_t l         = is_single ? k_single_sentinel<index_t>() : static_cast<index_t>(ptr[0].b);
         const RowCView key      = index.key_of(bucket_id);
-        auto          ns        = local_gen.make(key, ptr, static_cast<int>(len));
+        auto          ns        = local_gen.make(key, ptr, len);
 
         const auto dim = ns.basis().rows();
         const auto n   = stats.total;
         update_mean_value(stats.mean_basis, dim, n);
         update_mean_value(stats.mean_mr, bucket_size, n);
-        stats.max_basis = std::max(stats.max_basis, (Int)dim);
+        stats.max_basis =
+            std::max(stats.max_basis, detail::checked_int_from_index(dim, "Stats basis dimension overflow"));
 
         if (dim == 0)
             continue;
 
         PyRNG local_rng(mixed_seed(ctx.base_seed, k, is_single ? 0 : l, i, CandidateSourceTodd));
 
-        stats.max_bucket = std::max(stats.max_bucket, (Int)bucket_size);
+        stats.max_bucket =
+            std::max(stats.max_bucket, detail::checked_int_from_index(bucket_size, "Stats bucket size overflow"));
 
         auto local_local_pool = TopKPool<ExplorationScore>(config.todd.actions_per_bucket, config.escore);
+        const Int dim_int = detail::checked_int_from_index(dim, "SeenValues dimension overflow");
         local_rng.for_each_capped_bitvector(dim, config.todd.sampling.vector_samples,
                                             config.todd.sampling.sparse_max_weight,
                                             [&](RowCView coefs) {
@@ -709,19 +720,32 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
                                                     return;
                                                 }
                                                 const Int cand_l =
-                                                    is_single ? k_single_sentinel<Int>() : static_cast<Int>(l);
-                                                Candidate c(0, (Int)red, static_cast<Int>(k), cand_l, std::move(vec),
-                                                            (Int)dim, (Int)bucket_size, static_cast<Int>(key.count()),
-                                                            static_cast<Int>(key.size()), CandidateSourceTodd);
+                                                    is_single ? k_single_sentinel<Int>()
+                                                              : detail::checked_int_from_index(
+                                                                    l, "Candidate l overflow");
+                                                Candidate c(0, red,
+                                                            detail::checked_int_from_index(k, "Candidate k overflow"),
+                                                            cand_l, std::move(vec), dim_int,
+                                                            detail::checked_int_from_index(
+                                                                bucket_size, "Candidate bucket size overflow"),
+                                                            detail::checked_int_from_index(key.count(),
+                                                                                           "Candidate z weight overflow"),
+                                                            detail::checked_int_from_index(key.size(),
+                                                                                           "Candidate z size overflow"),
+                                                            CandidateSourceTodd);
                                                 stats.accepted++;
+                                                stats.accepted_todd++;
                                                 stats.nonzero++;
                                                 auto [score, tohpe] = local_local_pool.push(std::move(c));
                                                 (void)tohpe;
-                                                local_svs.observe(red, dim, score);
+                                                local_svs.observe(red, dim_int, score);
 
                                                 stats.max_pool_score = std::max(stats.max_pool_score, score);
-                                                stats.max_reduction  = std::max(stats.max_reduction, (Int)red);
-                                                stats.max_bucket     = std::max(stats.max_bucket, (Int)bucket_size);
+                                                stats.max_reduction = std::max(stats.max_reduction, red);
+                                                stats.max_bucket    = std::max(
+                                                    stats.max_bucket,
+                                                    detail::checked_int_from_index(bucket_size,
+                                                                                   "Stats bucket size overflow"));
                                                 update_mean_value(stats.mean_score, score, stats.nonzero);
                                                 update_mean_value(stats.mean_reduction, red, stats.nonzero);
                                             });
@@ -746,6 +770,7 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
     }
     out.stats.rejected += stats.rejected;
     out.stats.accepted += stats.accepted;
+    out.stats.accepted_todd += stats.accepted_todd;
     out.stats.evaluated += stats.evaluated;
     out.stats.total += stats.total;
     out.stats.z_researched += stats.z_researched;
@@ -762,7 +787,8 @@ FinalizationPool merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
         merge_source_candidates(out.pools.tohpe_pool.release_unsorted(), out.pools.todd_pool.release_unsorted(),
                                 config.pool.final_size, static_cast<std::size_t>(config.tohpe.pool.reserve),
                                 static_cast<std::size_t>(config.todd.pool.reserve));
-    const Int pool_size = static_cast<Int>(merged_candidates.size());
+    const Int pool_size =
+        detail::checked_int_from_index(merged_candidates.size(), "Candidate pool size overflow");
     Int       pool_tohpe_size = 0;
     Int       pool_todd_size  = 0;
     for (const auto& cand : merged_candidates) {
@@ -783,14 +809,15 @@ FinalizationPool merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
             auto get_full_gen = [&]() -> FullToddGenerator& { return ctx.get_full_gen(); };
             for (auto& cand : merged_candidates) {
                 auto ns        = make_candidate_nullspace(cand, ctx.tohpe_gen, get_full_gen);
-                cand.tohpe_dim = static_cast<Int>(get_tohpe_basis(ns.apply(cand.vec, scratch_killed)).rows());
+                cand.tohpe_dim = detail::checked_int_from_index(get_tohpe_basis(ns.apply(cand.vec, scratch_killed)).rows(),
+                                                                "Candidate TOHPE dimension overflow");
             }
         }
     }
 
     auto final_pool = FinalizationPool(config.pool.final_size, config.fscore);
     if (!merged_candidates.empty()) {
-        int n = 0;
+        index_t n = 0;
         for (auto& cand : merged_candidates) {
             auto [score, tohpe] = final_pool.push(std::move(cand));
 
@@ -842,15 +869,21 @@ void SeenValues::reserve(std::size_t n) { pool_scores_sorted.reserve(n); }
 
 void SeenValues::observe(Int red, Int dim, float score) {
     red     = std::max<Int>(red, -1);
+    dim     = std::max<Int>(dim, 0);
     max_red = std::max(max_red, red);
     max_dim = std::max(max_dim, dim);
 
-    if (red_freq.size() <= max_red + 1)
-        red_freq.resize(max_red + 2, 0);
-    if (dim_freq.size() <= max_dim)
-        dim_freq.resize(max_dim + 1, 0);
-    ++red_freq[red + 1];
-    ++dim_freq[dim];
+    if (max_red > std::numeric_limits<Int>::max() - 2)
+        throw std::overflow_error("SeenValues reduction frequency overflow");
+    if (max_dim == std::numeric_limits<Int>::max())
+        throw std::overflow_error("SeenValues dimension frequency overflow");
+
+    if (red_freq.size() <= static_cast<std::size_t>(max_red) + 1)
+        red_freq.resize(static_cast<std::size_t>(max_red) + 2, 0);
+    if (dim_freq.size() <= static_cast<std::size_t>(max_dim))
+        dim_freq.resize(static_cast<std::size_t>(max_dim) + 1, 0);
+    ++red_freq[static_cast<std::size_t>(red + 1)];
+    ++dim_freq[static_cast<std::size_t>(dim)];
 
     pool_scores_sorted.push_back(score);
     finalized = false;
@@ -876,37 +909,45 @@ void SeenValues::finalize() {
 
 Int SeenValues::better_red(Int r) const {
     assert(finalized);
-    if (r + 1 < 0)
-        return red_suf.empty() ? 0 : red_suf[0];
-    if (r + 1 >= (Int)red_freq.size())
+    const auto signed_idx = static_cast<std::int64_t>(r) + 1;
+    if (signed_idx < 0)
+        return red_suf.empty() ? 0 : detail::checked_int_from_index(red_suf[0], "SeenValues red count overflow");
+    const auto idx = static_cast<std::size_t>(signed_idx);
+    if (idx >= red_freq.size())
         return 0;
-    return red_suf[r + 1]; // >= r
+    return detail::checked_int_from_index(red_suf[idx], "SeenValues red count overflow"); // >= r
 }
 
 Int SeenValues::better_dim(Int d) const {
     assert(finalized);
     if (d < 0)
-        return dim_suf.empty() ? 0 : dim_suf[0];
-    if (d >= (Int)dim_freq.size())
+        return dim_suf.empty() ? 0 : detail::checked_int_from_index(dim_suf[0], "SeenValues dim count overflow");
+    const auto idx = static_cast<std::size_t>(d);
+    if (idx >= dim_freq.size())
         return 0;
-    return dim_suf[d]; // >= d
+    return detail::checked_int_from_index(dim_suf[idx], "SeenValues dim count overflow"); // >= d
 }
 
 Int SeenValues::better_score(float s) const {
     assert(finalized);
     auto it = std::lower_bound(pool_scores_sorted.begin(), pool_scores_sorted.end(), s);
-    return (Int)(pool_scores_sorted.end() - it); // >= s
+    return detail::checked_int_from_index(static_cast<index_t>(pool_scores_sorted.end() - it),
+                                          "SeenValues score count overflow"); // >= s
 }
 
 void SeenValues::merge_from(const SeenValues& other) {
     finalized            = false;
     max_red              = std::max(max_red, other.max_red);
     max_dim              = std::max(max_dim, other.max_dim);
+    if (max_red > std::numeric_limits<Int>::max() - 2)
+        throw std::overflow_error("SeenValues reduction frequency overflow");
+    if (max_dim == std::numeric_limits<Int>::max())
+        throw std::overflow_error("SeenValues dimension frequency overflow");
     auto add_vector_data = [](auto& init, const auto& other) {
         std::transform(other.begin(), other.end(), init.begin(), init.begin(), std::plus<>{});
     };
-    dim_freq.resize(max_dim + 1, 0);
-    red_freq.resize(max_red + 2, 0);
+    dim_freq.resize(static_cast<std::size_t>(max_dim) + 1, 0);
+    red_freq.resize(static_cast<std::size_t>(max_red) + 2, 0);
     add_vector_data(dim_freq, other.dim_freq);
     add_vector_data(red_freq, other.red_freq);
 

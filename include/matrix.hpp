@@ -1,15 +1,18 @@
 #pragma once
 #include "typedef.hpp"
 #include <algorithm>
+#include <bit>
 #include <bitset>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <immintrin.h>
+#include <ostream>
+#include <type_traits>
 #include <vector>
 
 namespace todd {
-static inline index_t ceil_div64(index_t bits) { return (bits + 63) / 64; }
+static inline index_t ceil_div64(index_t bits) noexcept { return (bits / 64) + ((bits & 63) != 0); }
 
 static inline uint64_t tail_mask_bits(index_t nbits) {
     const index_t rem = nbits & 63;
@@ -18,13 +21,14 @@ static inline uint64_t tail_mask_bits(index_t nbits) {
 static inline unsigned popcount64(uint64_t x) noexcept { return static_cast<unsigned>(__builtin_popcountll(x)); }
 
 // -------------------- Views --------------------
+// Non-owning bit-row view. `size_` is the logical bit width; `blocks_` is the stored word count.
 template <class Ptr> class BasicRowView {
     Ptr     p_      = nullptr;
     index_t size_   = 0;
     index_t blocks_ = 0;
 
   public:
-    static constexpr index_t npos = (index_t)-1;
+    static constexpr index_t npos = k_single_sentinel<index_t>();
 
     BasicRowView() = default;
     BasicRowView(Ptr p, index_t size) noexcept : p_(p), size_(size), blocks_(ceil_div64(size_)) {}
@@ -44,26 +48,27 @@ template <class Ptr> class BasicRowView {
 
     bool test(index_t i) const noexcept { return (data()[i >> 6] >> (i & 63)) & 1ULL; }
     bool none() const noexcept {
-        auto* __restrict dst = this->data();
+        const index_t logical_blocks = std::min(blocks_, ceil_div64(size_));
+        if (logical_blocks == 0)
+            return true;
 
-        for (index_t k = 0; k < this->blocks(); ++k)
-            if (dst[k] != 0)
+        const auto* __restrict p = data();
+        const index_t          last = logical_blocks - 1;
+
+        for (index_t k = 0; k < last; ++k)
+            if (p[k] != 0)
                 return false;
-        return true;
+        return (p[last] & tail_mask_bits(size_)) == 0;
     }
     index_t count() const noexcept {
-        if (ceil_div64(size_) == 0)
+        const index_t logical_blocks = std::min(blocks_, ceil_div64(size_));
+        if (logical_blocks == 0)
             return 0;
         index_t total = 0;
-        for (index_t k = 0; k + 1 < ceil_div64(size_); ++k) {
+        for (index_t k = 0; k + 1 < logical_blocks; ++k) {
             total += popcount64(p_[k]);
         }
-        const index_t rem  = size_ & 63;
-        uint64_t      last = p_[ceil_div64(size_) - 1];
-        if (rem != 0) {
-            const uint64_t mask = (rem == 64) ? ~0ULL : ((1ULL << rem) - 1ULL);
-            last &= mask;
-        }
+        uint64_t last = p_[logical_blocks - 1] & tail_mask_bits(size_);
         total += popcount64(last);
         return total;
     }
@@ -90,16 +95,21 @@ template <class Ptr> class BasicRowView {
         std::fill_n(data(), blocks_, 0ULL);
     }
     index_t find_first() const noexcept {
-        const auto* __restrict p   = p_;
-        const auto* __restrict end = p_ + blocks_;
-        while (p != end && *p == 0)
-            ++p;
-        if (p == end)
+        const index_t logical_blocks = std::min(blocks_, ceil_div64(size_));
+        if (logical_blocks == 0)
             return npos;
 
-        size_t k   = size_t(p - p_);
-        size_t bit = std::countr_zero(*p);
-        return (k << 6) + bit;
+        const index_t last = logical_blocks - 1;
+        for (index_t k = 0; k < last; ++k) {
+            const uint64_t w = p_[k];
+            if (w != 0)
+                return (k << 6) + std::countr_zero(w);
+        }
+
+        const uint64_t w = p_[last] & tail_mask_bits(size_);
+        if (w == 0)
+            return npos;
+        return (last << 6) + std::countr_zero(w);
     }
 
     index_t find_next(index_t pos) const noexcept {
@@ -107,24 +117,35 @@ template <class Ptr> class BasicRowView {
             return npos;
         ++pos;
 
-        size_t   k = pos >> 6;
+        const index_t logical_blocks = std::min(blocks_, ceil_div64(size_));
+        index_t       k              = pos >> 6;
+        if (k >= logical_blocks)
+            return npos;
+
         uint64_t w = p_[k] & (~0ULL << (pos & 63));
+        const index_t last = logical_blocks - 1;
+        if (k == last)
+            w &= tail_mask_bits(size_);
 
         if (w) {
             return (k << 6) + std::countr_zero(w);
         }
 
-        const auto* __restrict p   = p_ + k + 1;
-        const auto* __restrict end = p_ + blocks_;
-        while (p != end && *p == 0)
-            ++p;
-        if (p == end)
-            return npos;
+        for (++k; k < last; ++k) {
+            w = p_[k];
+            if (w != 0)
+                return (k << 6) + std::countr_zero(w);
+        }
 
-        return ((p - p_) << 6) + std::countr_zero(*p);
+        if (k == last) {
+            w = p_[last] & tail_mask_bits(size_);
+            if (w != 0)
+                return (last << 6) + std::countr_zero(w);
+        }
+        return npos;
     }
     // implicit downgrade: RowView -> RowCView
-    operator BasicRowView<const uint64_t*>() const noexcept { return {data(), size_}; }
+    operator BasicRowView<const uint64_t*>() const noexcept { return {data(), size_, blocks_}; }
 };
 
 using RowView  = BasicRowView<uint64_t*>;
@@ -151,82 +172,107 @@ inline static void xor_rows(uint64_t* __restrict dst, const uint64_t* __restrict
         dst[i] ^= src[i];
 }
 
+template <ReadableRow R> inline uint64_t read_word_or_zero(const R& row, index_t block) noexcept {
+    return block < row.blocks() ? row.data()[block] : 0ULL;
+}
+
+template <WritableRow R> inline void mask_tail_inplace(R& row) noexcept {
+    const index_t rem = row.size() & 63;
+    if (rem != 0 && row.blocks() != 0)
+        row.data()[row.blocks() - 1] &= ((1ULL << rem) - 1ULL);
+}
+
 template <WritableRow L, ReadableRow R> inline L& operator^=(L& lhs, const R& rhs) noexcept {
     assert(lhs.size() == rhs.size());
-    assert(lhs.blocks() == rhs.blocks());
-    assert(lhs.data() != rhs.data());
-    xor_rows(lhs.data(), rhs.data(), lhs.blocks());
+    const index_t xor_blocks = std::min(lhs.blocks(), rhs.blocks());
+    xor_rows(lhs.data(), rhs.data(), xor_blocks);
+    mask_tail_inplace(lhs);
     return lhs;
 }
 
-// TODO: not good lvalue usage
 template <WritableRow L, ReadableRow R> inline L&& operator^=(L&& lhs, const R& rhs) noexcept {
     assert(lhs.size() == rhs.size());
-    assert(lhs.blocks() == rhs.blocks());
-    assert(lhs.data() != rhs.data());
-    xor_rows(lhs.data(), rhs.data(), lhs.blocks());
+    const index_t xor_blocks = std::min(lhs.blocks(), rhs.blocks());
+    xor_rows(lhs.data(), rhs.data(), xor_blocks);
+    mask_tail_inplace(lhs);
     return lhs;
 }
 
 template <ReadableRow L, ReadableRow R> inline bool operator==(const L& lhs, const R& rhs) noexcept {
-    assert(lhs.blocks() == rhs.blocks());
+    if (lhs.size() != rhs.size())
+        return false;
 
-    const uint64_t* a = lhs.data();
-    const uint64_t* b = rhs.data();
-
-    const index_t nb = lhs.blocks();
+    const index_t nb = ceil_div64(lhs.size());
     if (nb == 0)
         return true;
 
     const index_t last = nb - 1;
     for (index_t k = 0; k < last; ++k)
-        if (a[k] != b[k])
+        if (read_word_or_zero(lhs, k) != read_word_or_zero(rhs, k))
             return false;
 
-    return ((a[last]) == (b[last]));
+    const uint64_t mask = tail_mask_bits(lhs.size());
+    return (read_word_or_zero(lhs, last) & mask) == (read_word_or_zero(rhs, last) & mask);
 }
 
 template <ReadableRow L, ReadableRow R> inline std::strong_ordering operator<=>(const L& lhs, const R& rhs) noexcept {
-    assert(lhs.blocks() == rhs.blocks());
+    if (lhs.size() < rhs.size())
+        return std::strong_ordering::less;
+    if (lhs.size() > rhs.size())
+        return std::strong_ordering::greater;
 
-    const uint64_t* a  = lhs.data();
-    const uint64_t* b  = rhs.data();
-    const index_t   nb = lhs.blocks();
+    const index_t nb = ceil_div64(lhs.size());
     if (nb == 0)
         return std::strong_ordering::equal;
 
-    const index_t last = nb;
+    const index_t last = nb - 1;
 
     for (index_t k = 0; k < last; ++k) {
-        if (a[k] < b[k])
+        const uint64_t a = read_word_or_zero(lhs, k);
+        const uint64_t b = read_word_or_zero(rhs, k);
+        if (a < b)
             return std::strong_ordering::less;
-        if (a[k] > b[k])
+        if (a > b)
             return std::strong_ordering::greater;
     }
+
+    const uint64_t mask = tail_mask_bits(lhs.size());
+    const uint64_t al   = read_word_or_zero(lhs, last) & mask;
+    const uint64_t bl   = read_word_or_zero(rhs, last) & mask;
+    if (al < bl)
+        return std::strong_ordering::less;
+    if (al > bl)
+        return std::strong_ordering::greater;
     return std::strong_ordering::equal;
 }
 
 template <ReadableRow L, ReadableRow R> inline void assign(L& lhs, const R& rhs) noexcept {
     assert(lhs.size() == rhs.size());
-    assert(lhs.blocks() == rhs.blocks());
 
     auto* __restrict dst       = lhs.data();
     const auto* __restrict src = rhs.data();
+    const index_t            copy_blocks = std::min(lhs.blocks(), rhs.blocks());
 
-    for (index_t k = 0; k < lhs.blocks(); ++k)
-        dst[k] = src[k];
+    if (copy_blocks != 0 && dst != src)
+        std::memcpy(dst, src, static_cast<std::size_t>(copy_blocks) * sizeof(uint64_t));
+    if (copy_blocks < lhs.blocks())
+        std::fill_n(dst + copy_blocks, lhs.blocks() - copy_blocks, 0ULL);
+    mask_tail_inplace(lhs);
 }
 
-// used for view object which keep memories
+// Allows assignment into temporary row views such as matrix[i].
 template <ReadableRow L, ReadableRow R> inline void assign(L&& lhs, const R& rhs) noexcept {
     assert(lhs.size() == rhs.size());
-    assert(lhs.blocks() == rhs.blocks());
 
     auto* __restrict dst       = lhs.data();
     const auto* __restrict src = rhs.data();
+    const index_t            copy_blocks = std::min(lhs.blocks(), rhs.blocks());
 
-    for (index_t k = 0; k < lhs.blocks(); ++k)
-        dst[k] = src[k];
+    if (copy_blocks != 0 && dst != src)
+        std::memcpy(dst, src, static_cast<std::size_t>(copy_blocks) * sizeof(uint64_t));
+    if (copy_blocks < lhs.blocks())
+        std::fill_n(dst + copy_blocks, lhs.blocks() - copy_blocks, 0ULL);
+    mask_tail_inplace(lhs);
 }
 
 // -------------------- Owning Row --------------------
@@ -236,12 +282,18 @@ class Row {
     std::vector<uint64_t> blk_;
 
   public:
-    static constexpr index_t npos = (index_t)-1;
+    static constexpr index_t npos = k_single_sentinel<index_t>();
 
     Row() = default;
     template <ReadableRow T>
-    Row(const T& readable_row)
-        : size_(readable_row.size()), blk_(readable_row.data(), readable_row.data() + readable_row.blocks()) {}
+    Row(const T& readable_row) : size_(readable_row.size()) {
+        const index_t dst_blocks = ceil_div64(size_);
+        blk_.assign(static_cast<std::size_t>(dst_blocks), 0ULL);
+        const index_t take = std::min(dst_blocks, readable_row.blocks());
+        if (take != 0)
+            std::memcpy(blk_.data(), readable_row.data(), static_cast<std::size_t>(take) * sizeof(uint64_t));
+        mask_tail();
+    }
     explicit Row(index_t size) : size_(size), blk_(ceil_div64(size), 0ULL) {}
 
     index_t         size() const noexcept { return size_; }
@@ -264,19 +316,22 @@ class Row {
     operator RowCView() const noexcept { return cview(); }
 
     void mask_tail() noexcept {
-        if (!blk_.empty()) {
-            blk_.back() &= tail_mask_bits(size_);
-        }
+        const index_t rem = size_ & 63;
+        if (rem != 0 && !blk_.empty())
+            blk_.back() &= ((1ULL << rem) - 1ULL);
     }
 };
 
 template <ReadableRow L, ReadableRow R> inline Row operator^(const L& a, const R& b) {
     assert(a.size() == b.size());
-    assert(a.blocks() == b.blocks());
 
     Row out(a.size());
-    std::copy_n(a.data(), a.blocks(), out.data());
-    out ^= b; // uses operator^= above (Row is WritableRow)
+    const index_t copy_blocks = std::min(out.blocks(), a.blocks());
+    if (copy_blocks != 0)
+        std::memcpy(out.data(), a.data(), static_cast<std::size_t>(copy_blocks) * sizeof(uint64_t));
+    const index_t xor_blocks = std::min(out.blocks(), b.blocks());
+    for (index_t k = 0; k < xor_blocks; ++k)
+        out.data()[k] ^= b.data()[k];
     out.mask_tail();
     return out;
 }
@@ -286,11 +341,11 @@ struct RowHash {
     // enables find(RowCView) without constructing Row
     using is_transparent = void;
 
-    size_t operator()(const Row& r) const noexcept;
-    size_t operator()(RowCView v) const noexcept;
+    std::size_t operator()(const Row& r) const noexcept;
+    std::size_t operator()(RowCView v) const noexcept;
 
   private:
-    static size_t hash_view(RowCView v) noexcept;
+    static std::size_t hash_view(RowCView v) noexcept;
 };
 
 struct RowEq {
@@ -359,9 +414,8 @@ class Tensor3D {
 };
 
 template <ReadableRow T> std::ostream& operator<<(std::ostream& os, const T& row) {
-    for (auto bl = row.data(); bl - row.data() < row.blocks(); bl++) {
-        os << std::bitset<64>(*bl);
-    }
+    for (index_t k = 0; k < row.blocks(); ++k)
+        os << std::bitset<64>(row.data()[k]);
     return os;
 }
 std::ostream& operator<<(std::ostream& os, const Matrix& mat);

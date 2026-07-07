@@ -5,9 +5,9 @@
 
 #include <algorithm>
 #include <ankerl/unordered_dense.h>
+#include <cstddef>
 #include <cstring>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -15,13 +15,13 @@
 
 namespace todd {
 
-using HashKey = std::uint32_t;
+using HashKey = std::uint64_t;
 struct BucketRange {
-    std::uint32_t off;
-    std::uint32_t len;
+    index_t off;
+    index_t len;
 };
 
-// basic element
+// Compact row or row-pair reference stored inside a sum bucket.
 class SumEntry {
   public:
     using storage_t = std::uint32_t;
@@ -39,8 +39,8 @@ class SumEntry {
     storage_t b;
 };
 
-// Matrix solve_and_build_solution_basis(Matrix& A, index_t divider);
-Matrix solve_and_build_solution_basis(Matrix& A, index_t divider, const Matrix& tohpe, const SumEntry* ptr, int len);
+Matrix solve_and_build_solution_basis(Matrix& A, index_t divider, const Matrix& tohpe, const SumEntry* ptr,
+                                      index_t len);
 
 namespace detail {
 inline Row extract_right_for_solution(RowCView row, index_t divider, index_t nY) {
@@ -55,16 +55,16 @@ inline Row extract_right_for_solution(RowCView row, index_t divider, index_t nY)
     const index_t src_blocks = row.blocks();
 
     const index_t  sb = divider >> 6;
-    const unsigned sh = (unsigned)(divider & 63);
+    const unsigned sh = static_cast<unsigned>(divider & 63);
 
     if (sh == 0) {
         const index_t avail = (sb < src_blocks) ? (src_blocks - sb) : 0;
         const index_t take  = std::min(dst_blocks, avail);
 
         if (take)
-            std::memcpy(dst, src + sb, (std::size_t)take * sizeof(uint64_t));
+            std::memcpy(dst, src + sb, static_cast<std::size_t>(take) * sizeof(uint64_t));
         if (take < dst_blocks)
-            std::memset(dst + take, 0, (std::size_t)(dst_blocks - take) * sizeof(uint64_t));
+            std::memset(dst + take, 0, static_cast<std::size_t>(dst_blocks - take) * sizeof(uint64_t));
     } else {
         for (index_t k = 0; k < dst_blocks; ++k) {
             const index_t  i0 = sb + k;
@@ -81,10 +81,10 @@ inline Row extract_right_for_solution(RowCView row, index_t divider, index_t nY)
     return y;
 }
 
-inline void apply_solution_transform(Row& y, const SumEntry* ptr, int len) {
+inline void apply_solution_transform(Row& y, const SumEntry* ptr, index_t len) {
     bool odd = (y.count() & 1u) != 0;
 
-    for (int t = 0; t < len; ++t) {
+    for (index_t t = 0; t < len; ++t) {
         const SumEntry& e = ptr[t];
 
         if (e.is_pair()) {
@@ -106,14 +106,14 @@ inline bool insert_into_y_basis(Row& y, Matrix& basis, PivotMap& pivY) {
     auto q  = yv.find_first();
 
     while (q != RowView::npos) {
-        const int32_t brow = pivY.get((std::size_t)q);
+        const auto brow = pivY.get(static_cast<std::size_t>(q));
         if (brow < 0) {
-            pivY.set((std::size_t)q, (int32_t)basis.rows());
+            pivY.set(static_cast<std::size_t>(q), basis.rows());
             basis.push_back(y.cview());
             return true;
         }
 
-        yv ^= basis[(index_t)brow];
+        yv ^= basis[static_cast<index_t>(brow)];
         q = yv.find_first();
     }
 
@@ -123,7 +123,7 @@ inline bool insert_into_y_basis(Row& y, Matrix& basis, PivotMap& pivY) {
 
 template <class FillRow>
 Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, index_t divider, const Matrix& tohpe,
-                                                const SumEntry* ptr, int len, FillRow&& fill_row) {
+                                                const SumEntry* ptr, index_t len, FillRow&& fill_row) {
     if (divider > cols)
         throw std::invalid_argument("solve_and_build_solution_basis_generated: divider > cols");
     const index_t nY = cols - divider;
@@ -135,8 +135,8 @@ Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, inde
     static thread_local PivotMap pivA;
     static thread_local PivotMap pivY;
 
-    pivA.reset((std::size_t)divider);
-    pivY.reset((std::size_t)nY);
+    pivA.reset(static_cast<std::size_t>(divider));
+    pivY.reset(static_cast<std::size_t>(nY));
 
     Matrix basis(0, nY);
     Matrix pivot_rows(0, cols);
@@ -153,11 +153,11 @@ Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, inde
         auto rowv = row.view();
         auto p    = rowv.find_first();
         while (p != RowView::npos && p < divider) {
-            const int32_t prow = pivA.get((std::size_t)p);
+            const auto prow = pivA.get(static_cast<std::size_t>(p));
             if (prow < 0)
                 break;
 
-            rowv ^= pivot_rows[(index_t)prow];
+            rowv ^= pivot_rows[static_cast<index_t>(prow)];
             p = rowv.find_next(p);
         }
 
@@ -165,7 +165,7 @@ Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, inde
             continue;
 
         if (p < divider) {
-            pivA.set((std::size_t)p, (int32_t)pivot_rows.rows());
+            pivA.set(static_cast<std::size_t>(p), pivot_rows.rows());
             pivot_rows.push_back(row.cview());
             continue;
         }
@@ -194,10 +194,10 @@ struct HashKeyHash {
         x ^= x >> 33;
         return x;
     }
-    size_t operator()(HashKey k) const noexcept { return (size_t)mix(k); }
+    std::size_t operator()(HashKey k) const noexcept { return static_cast<std::size_t>(mix(k)); }
 };
 
-// keeps buckets for columns of given matrix.
+// Index row and row-pair sums by the resulting GF(2) vector.
 class ToddIndex {
   public:
     using SumKeySize = std::pair<RowCView, index_t>;
@@ -212,7 +212,7 @@ class ToddIndex {
     bool          sum_bucket(RowCView key, const SumEntry*& ptr, index_t& len) const noexcept;
     bool          sum_bucket(std::uint32_t id, const SumEntry*& ptr, index_t& len) const noexcept;
     index_t       bucket_size(std::uint32_t id) const noexcept {
-        return (id < bucket_len_.size()) ? (index_t)bucket_len_[(std::size_t)id] : 0;
+        return (id < bucket_len_.size()) ? bucket_len_[static_cast<std::size_t>(id)] : 0;
     }
 
     const std::vector<HashKey>&               row_hashes() const noexcept { return hP_; }
@@ -236,8 +236,8 @@ class ToddIndex {
     std::vector<HashKey>                                              hP_;
     std::vector<std::uint32_t>                                        single_id_;
     std::vector<std::uint32_t>                                        pair_id_;
-    std::vector<std::uint32_t>                                        bucket_off_;
-    std::vector<std::uint32_t>                                        bucket_len_;
+    std::vector<index_t>                                              bucket_off_;
+    std::vector<index_t>                                              bucket_len_;
     std::vector<std::uint32_t>                                        bucket_next_;
     std::vector<std::uint64_t>                                        bucket_key_blocks_;
     index_t                                                           bucket_key_blocks_per_row_{};
