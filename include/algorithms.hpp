@@ -2,19 +2,23 @@
 #include "matrix.hpp"
 #include "typedef.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <ostream>
+#include <stdexcept>
 #include <vector>
 
 namespace todd {
 struct PivotMap {
-    std::vector<int32_t>  row;
-    std::vector<uint32_t> tag;
-    std::size_t           len   = 0;
-    static const int      npos  = -1;
-    uint32_t              epoch = 1;
-    std::size_t           size() const { return len; }
-    void                  reset(std::size_t n) {
+    std::vector<std::int32_t>  row;
+    std::vector<std::uint32_t> tag;
+    std::size_t                len   = 0;
+    static constexpr auto      npos  = std::int32_t{-1};
+    std::uint32_t              epoch = 1;
+    std::size_t                size() const { return len; }
+    void                       reset(std::size_t n) {
         len = 0;
         if (row.size() < n) {
             row.resize(n);
@@ -27,9 +31,11 @@ struct PivotMap {
         }
     }
 
-    inline int32_t get(std::size_t col) const { return (tag[col] == epoch) ? row[col] : npos; }
-    inline void    set(std::size_t col, int32_t r) {
-        row[col] = r;
+    inline std::int32_t get(std::size_t col) const { return (tag[col] == epoch) ? row[col] : npos; }
+    inline void         set(std::size_t col, index_t r) {
+        if (r > static_cast<index_t>(std::numeric_limits<std::int32_t>::max()))
+            throw std::overflow_error("PivotMap row index exceeds int32 storage");
+        row[col] = static_cast<std::int32_t>(r);
         tag[col] = epoch;
         len++;
     }

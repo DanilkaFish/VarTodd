@@ -36,6 +36,7 @@ static Row bitvec_from_list(std::size_t n, const std::vector<bool>& bits) {
     return bv;
 }
 
+// Convert and canonicalize a C-style bool NumPy matrix into the compact core format.
 static Matrix matrix_from_numpy(py::array_t<bool, py::array::c_style | py::array::forcecast> A) {
     if (A.ndim() != 2)
         throw py::value_error("Matrix.from_numpy expects 2D array");
@@ -45,15 +46,18 @@ static Matrix matrix_from_numpy(py::array_t<bool, py::array::c_style | py::array
         std::size_t order;
     };
 
+    const auto n_rows = A.shape(0);
+    const auto n_cols = A.shape(1);
+
     std::vector<RowEntry> entries;
-    entries.reserve(static_cast<std::size_t>(A.shape(0)));
+    entries.reserve(static_cast<std::size_t>(n_rows));
     auto buf = A.unchecked<2>();
 
-    for (index_t i = 0; i < static_cast<index_t>(A.shape(0)); ++i) {
-        Row row(static_cast<index_t>(A.shape(1)));
-        for (index_t j = 0; j < static_cast<index_t>(A.shape(1)); ++j) {
+    for (py::ssize_t i = 0; i < n_rows; ++i) {
+        Row row(static_cast<index_t>(n_cols));
+        for (py::ssize_t j = 0; j < n_cols; ++j) {
             if (buf(i, j))
-                row.set(j);
+                row.set(static_cast<index_t>(j));
         }
         if (!row.none())
             entries.push_back({std::move(row), static_cast<std::size_t>(i)});
@@ -93,6 +97,10 @@ static Matrix matrix_from_numpy(py::array_t<bool, py::array::c_style | py::array
     Matrix M(0, active_cols);
     M.reserve_rows(static_cast<index_t>(kept.size()));
     for (const RowEntry& entry : kept) {
+        if (active_cols == entry.row.size()) {
+            M.push_back(entry.row.cview());
+            continue;
+        }
         Row cropped(active_cols);
         RowCView row = entry.row.cview();
         for (auto p = row.find_first(); p != RowCView::npos && static_cast<index_t>(p) < active_cols;
@@ -102,6 +110,34 @@ static Matrix matrix_from_numpy(py::array_t<bool, py::array::c_style | py::array
         M.push_back(cropped);
     }
     return M;
+}
+
+static py::array_t<bool> row_to_numpy(const Row& row) {
+    py::array_t<bool> out(row.size());
+    auto*             data = out.mutable_data();
+    if (out.size() != 0)
+        std::fill_n(data, static_cast<std::size_t>(out.size()), false);
+
+    RowCView view = row.cview();
+    for (auto p = view.find_first(); p != RowCView::npos && p < row.size(); p = view.find_next(p))
+        data[static_cast<std::size_t>(p)] = true;
+    return out;
+}
+
+static py::array_t<bool> matrix_to_numpy(const Matrix& M) {
+    py::array_t<bool> out({M.rows(), M.cols()});
+    auto*             data = out.mutable_data();
+    if (out.size() != 0)
+        std::fill_n(data, static_cast<std::size_t>(out.size()), false);
+
+    const auto cols = static_cast<std::size_t>(M.cols());
+    for (index_t i = 0; i < M.rows(); ++i) {
+        RowCView row = M[i];
+        const auto row_offset = static_cast<std::size_t>(i) * cols;
+        for (auto p = row.find_first(); p != RowCView::npos && p < M.cols(); p = row.find_next(p))
+            data[row_offset + static_cast<std::size_t>(p)] = true;
+    }
+    return out;
 }
 
 static Int parse_one_hot_budget(py::handle value) {
@@ -120,22 +156,24 @@ static py::object one_hot_budget_to_python(Int value) {
     return py::int_(value);
 }
 
+static std::string int_repr(Int value) { return std::to_string(static_cast<long long>(value)); }
+
 static std::string one_hot_budget_repr(Int value) {
     if (value < 0)
         return "'all'";
-    return std::to_string((long long)value);
+    return int_repr(value);
 }
 
 static std::string sampling_budget_repr(const SamplingBudget& s) {
     return "SamplingBudget(one_hot=" + one_hot_budget_repr(s.one_hot) +
-           ", sparse=" + std::to_string((long long)s.sparse) +
-           ", dense=" + std::to_string((long long)s.dense) +
-           ", sparse_max_weight=" + std::to_string((long long)s.sparse_max_weight) + ")";
+           ", sparse=" + int_repr(s.sparse) +
+           ", dense=" + int_repr(s.dense) +
+           ", sparse_max_weight=" + int_repr(s.sparse_max_weight) + ")";
 }
 
 static std::string source_pool_repr(const SourcePool& p) {
-    return "SourcePool(keep=" + std::to_string((long long)p.keep) +
-           ", reserve=" + std::to_string((long long)p.reserve) + ")";
+    return "SourcePool(keep=" + int_repr(p.keep) +
+           ", reserve=" + int_repr(p.reserve) + ")";
 }
 
 static py::tuple candidate_to_tuple(const CandidateExport& c) {
@@ -182,22 +220,16 @@ py::class_<Row>(m, "BitVec")
             if (a.ndim() != 1)
                 throw py::value_error("BitVec.from_numpy expects 1D array");
 
-            Row  bv(static_cast<std::size_t>(a.shape(0)));
-            auto r = a.unchecked<1>(); // safe element access
-            for (py::ssize_t i = 0; i < r.shape(0); ++i)
+            const auto n = a.shape(0);
+            Row        bv(static_cast<index_t>(n));
+            auto r = a.unchecked<1>();
+            for (py::ssize_t i = 0; i < n; ++i)
                 if (r(i))
                     bv.set(static_cast<std::size_t>(i));
             return bv;
         },
         py::arg("a"))
-    .def("to_numpy",
-            [](const Row& b) {
-                py::array_t<bool> out(b.size());
-                auto              buf = out.mutable_unchecked<1>();
-                for (std::size_t i = 0; i < b.size(); ++i)
-                    buf(i) = b.test(i);
-                return out;
-            })
+    .def("to_numpy", &row_to_numpy)
     .def("__len__", &Row::size)
     .def("size", &Row::size)
     .def("count", &Row::count)
@@ -238,8 +270,9 @@ py::class_<Row>(m, "BitVec")
     .def("to_list",
             [](const Row& b) {
                 std::vector<bool> out(b.size());
-                for (std::size_t i = 0; i < b.size(); ++i)
-                    out[i] = b.test(i);
+                RowCView view = b.cview();
+                for (auto p = view.find_first(); p != RowCView::npos && p < b.size(); p = view.find_next(p))
+                    out[static_cast<std::size_t>(p)] = true;
                 return out;
             })
     .def("__repr__", [](const Row& b) { return to_string_stream(b); });
@@ -251,14 +284,7 @@ py::class_<Matrix>(m, "Matrix")
     .def_static("from_rows", &Matrix::from_rows, py::arg("rows"))
     .def_static("from_numpy", &matrix_from_numpy)
     .def("to_numpy",
-            [](const Matrix& M) {
-                py::array_t<bool> out({M.rows(), M.cols()});
-                auto              buf = out.mutable_unchecked<2>();
-                for (index_t i = 0; i < M.rows(); ++i)
-                    for (index_t j = 0; j < M.cols(); ++j)
-                        buf(i, j) = M[i].test(j);
-                return out;
-            })
+            [](const Matrix& M) { return matrix_to_numpy(M); })
     .def_property_readonly("rows", &Matrix::rows)
     .def_property_readonly("cols", &Matrix::cols)
     .def("__len__", &Matrix::rows)
@@ -302,16 +328,7 @@ py::class_<Matrix>(m, "Matrix")
         py::arg("base_seed") = 0U, py::arg("add_seed") = 0U)
     .def("__repr__", [](const Matrix& M) { return to_string_stream(M); })
     .def(py::pickle(
-        [](const Matrix& M) {
-            py::array_t<bool> arr({M.rows(), M.cols()});
-            auto              buf = arr.mutable_unchecked<2>();
-            for (index_t i = 0; i < M.rows(); ++i) {
-                for (index_t j = 0; j < M.cols(); ++j) {
-                    buf(i, j) = M[i].test(j);
-                }
-            }
-            return arr;
-        },
+        [](const Matrix& M) { return matrix_to_numpy(M); },
         [](py::array_t<bool> arr) {
             py::array_t<bool, py::array::c_style | py::array::forcecast> compact(arr);
             return matrix_from_numpy(compact);
@@ -324,18 +341,30 @@ py::class_<Tensor3D>(m, "Tensor3D")
     .def("to_numpy",
             [](const Tensor3D& T) {
                 py::array_t<bool> out({T.n(), T.n(), T.n()});
-                auto              buf = out.mutable_unchecked<3>();
-                for (index_t k = 0; k < T.n(); ++k)
-                    for (index_t j = 0; j < T.n(); ++j)
-                        for (index_t i = 0; i < T.n(); ++i)
-                            buf(i, j, k) = T.get(i, j, k);
+                auto*             data = out.mutable_data();
+                if (out.size() != 0)
+                    std::fill_n(data, static_cast<std::size_t>(out.size()), false);
+
+                const auto n = static_cast<std::size_t>(T.n());
+                const auto n2 = n * n;
+                RowCView bits = T.data().cview();
+                for (auto p = bits.find_first(); p != RowCView::npos; p = bits.find_next(p)) {
+                    const auto lin = static_cast<std::size_t>(p);
+                    const auto i   = lin % n;
+                    const auto j   = (lin / n) % n;
+                    const auto k   = lin / n2;
+                    data[(i * n + j) * n + k] = true;
+                }
                 return out;
             })
     .def("__eq__", &Tensor3D::operator==, py::is_operator())
     .def("__ne__", &Tensor3D::operator!=, py::is_operator());
 
 py::class_<MatrixWithData, std::shared_ptr<MatrixWithData>>(m, "MatrixWithData")
-    .def(py::init([](Matrix P) { return std::make_shared<MatrixWithData>(std::move(P)); }), py::arg("P"))
+    .def(py::init([](Matrix P, bool build_full_todd) {
+             return std::make_shared<MatrixWithData>(std::move(P), build_full_todd);
+         }),
+         py::arg("P"), py::arg("build_full_todd") = true)
     .def_property_readonly("P", &MatrixWithData::P, py::return_value_policy::reference_internal)
     .def_property_readonly("tohpe_basis", &MatrixWithData::tohpe_basis, py::return_value_policy::reference_internal)
     .def("tohpe_dim", [](const MatrixWithData& M) { return M.tohpe_basis().rows(); });
@@ -392,13 +421,13 @@ py::class_<CandidateExport>(m, "CandidateExport")
     .def_readwrite("pool_todd_size", &CandidateExport::pool_todd_size)
     .def("__repr__", [](const CandidateExport& c) {
         return "CandidateExport(score=" + std::to_string(c.pool_score) +
-                ", reduction=" + std::to_string((long long)c.reduction) + ", k=" + std::to_string((long long)c.k) +
-                ", l=" + std::to_string((long long)c.l) + ", basis_dim=" + std::to_string((long long)c.basis_dim) +
-                ", tohpe_dim=" + std::to_string((long long)c.tohpe_dim) +
-                ", bucket_size=" + std::to_string((long long)c.bucket_size) +
-                ", pool_size=" + std::to_string((long long)c.pool_size) +
-                ", pool_tohpe_size=" + std::to_string((long long)c.pool_tohpe_size) +
-                ", pool_todd_size=" + std::to_string((long long)c.pool_todd_size) + ")";
+                ", reduction=" + int_repr(c.reduction) + ", k=" + int_repr(c.k) +
+                ", l=" + int_repr(c.l) + ", basis_dim=" + int_repr(c.basis_dim) +
+                ", tohpe_dim=" + int_repr(c.tohpe_dim) +
+                ", bucket_size=" + int_repr(c.bucket_size) +
+                ", pool_size=" + int_repr(c.pool_size) +
+                ", pool_tohpe_size=" + int_repr(c.pool_tohpe_size) +
+                ", pool_todd_size=" + int_repr(c.pool_todd_size) + ")";
     })
     .def(py::pickle(
         [](const CandidateExport& c) {
@@ -460,6 +489,7 @@ py::class_<Stats>(m, "Stats")
     .def_readwrite("mean_score", &Stats::mean_score)
     .def_readwrite("accepted", &Stats::accepted)
     .def_readwrite("accepted_tohpe", &Stats::accepted_tohpe)
+    .def_readwrite("accepted_todd", &Stats::accepted_todd)
     .def_readwrite("max_tohpe_dim", &Stats::max_final_tohpe_dim)
     .def_readwrite("mean_tohpe_dim", &Stats::mean_final_tohpe_dim)
     .def_readwrite("max_score", &Stats::max_pool_score)
@@ -467,12 +497,15 @@ py::class_<Stats>(m, "Stats")
     .def_readwrite("max_reduction", &Stats::max_reduction)
     .def_readwrite("max_bucket", &Stats::max_bucket)
     .def("__repr__", [](const Stats& s) {
-        return "Stats(total=" + std::to_string((unsigned long long)s.total) +
-                ", z_researched=" + std::to_string((unsigned long long)s.z_researched) +
-                ", nonzero=" + std::to_string((unsigned long long)s.nonzero) +
+        return "Stats(total=" + std::to_string(s.total) +
+                ", z_researched=" + std::to_string(s.z_researched) +
+                ", nonzero=" + std::to_string(s.nonzero) +
+                ", accepted=" + std::to_string(s.accepted) +
+                ", accepted_tohpe=" + std::to_string(s.accepted_tohpe) +
+                ", accepted_todd=" + std::to_string(s.accepted_todd) +
                 ", mean_score=" + std::to_string(s.mean_score) + ", max_score=" + std::to_string(s.max_pool_score) +
-                ", max_basis=" + std::to_string((long long)s.max_basis) +
-                ", max_reduction=" + std::to_string((long long)s.max_reduction) + ")";
+                ", max_basis=" + int_repr(s.max_basis) +
+                ", max_reduction=" + int_repr(s.max_reduction) + ")";
     })
     .def(py::pickle(
         [](const Stats& s) {
@@ -485,6 +518,7 @@ py::class_<Stats>(m, "Stats")
                 s.mean_reduction,
                 s.mean_score,
                 s.accepted,
+                s.accepted_todd,
                 s.accepted_tohpe,
                 s.max_final_tohpe_dim,
                 s.mean_final_tohpe_dim,
@@ -508,6 +542,7 @@ py::class_<Stats>(m, "Stats")
                 s.mean_reduction = t[5].cast<decltype(s.mean_reduction)>();
                 s.mean_score = t[6].cast<decltype(s.mean_score)>();
                 s.accepted = t[7].cast<decltype(s.accepted)>();
+                s.accepted_todd = t[8].cast<decltype(s.accepted_todd)>();
                 s.accepted_tohpe = t[9].cast<decltype(s.accepted_tohpe)>();
                 s.max_final_tohpe_dim = t[10].cast<decltype(s.max_final_tohpe_dim)>();
                 s.mean_final_tohpe_dim = t[11].cast<decltype(s.mean_final_tohpe_dim)>();
@@ -524,6 +559,12 @@ py::class_<Stats>(m, "Stats")
                 s.mean_score = t[6].cast<decltype(s.mean_score)>();
                 s.accepted = t[7].cast<decltype(s.accepted)>();
                 s.accepted_tohpe = t[8].cast<decltype(s.accepted_tohpe)>();
+                if (s.accepted + s.accepted_tohpe == s.nonzero) {
+                    s.accepted_todd = s.accepted;
+                    s.accepted = s.nonzero;
+                } else if (s.accepted >= s.accepted_tohpe) {
+                    s.accepted_todd = s.accepted - s.accepted_tohpe;
+                }
                 s.max_final_tohpe_dim = t[9].cast<decltype(s.max_final_tohpe_dim)>();
                 s.mean_final_tohpe_dim = t[10].cast<decltype(s.mean_final_tohpe_dim)>();
                 s.max_pool_score = t[11].cast<decltype(s.max_pool_score)>();
@@ -541,6 +582,12 @@ py::class_<Stats>(m, "Stats")
                 s.mean_score = t[5].cast<decltype(s.mean_score)>();
                 s.accepted = t[6].cast<decltype(s.accepted)>();
                 s.accepted_tohpe = t[7 + skip].cast<decltype(s.accepted_tohpe)>();
+                if (s.accepted + s.accepted_tohpe == s.nonzero) {
+                    s.accepted_todd = s.accepted;
+                    s.accepted = s.nonzero;
+                } else if (s.accepted >= s.accepted_tohpe) {
+                    s.accepted_todd = s.accepted - s.accepted_tohpe;
+                }
                 s.max_final_tohpe_dim = t[8 + skip].cast<decltype(s.max_final_tohpe_dim)>();
                 s.mean_final_tohpe_dim = t[9 + skip].cast<decltype(s.mean_final_tohpe_dim)>();
                 s.max_pool_score = t[10 + skip].cast<decltype(s.max_pool_score)>();
@@ -574,7 +621,7 @@ py::class_<Stats>(m, "Stats")
         .def_readwrite("pow", &ScoringFunction::pow)
 
         .def(py::pickle(
-            [](const ScoringFunction& sf) { return py::make_tuple(static_cast<int>(sf.type), sf.pow);; },
+            [](const ScoringFunction& sf) { return py::make_tuple(static_cast<int>(sf.type), sf.pow); },
             [](py::tuple t) { 
                 if (t.size() != 2) {
                     throw std::runtime_error("Invalid state!");
@@ -666,11 +713,11 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def(py::init<>())
         .def_readwrite("chosen", &Result::chosen)
         .def_readwrite("states", &Result::states)
-        .def_readwrite("stats", &Result::stats) // remove if Stats not bound
+        .def_readwrite("stats", &Result::stats)
         .def_readwrite("seed", &Result::seed)
         .def("__repr__", [](const Result& r) {
             return "Result(chosen=" + std::to_string(r.chosen.size()) + ", states=" + std::to_string(r.states.size()) +
-                   ", seed=" + std::to_string((unsigned long long)r.seed) + ")";
+                   ", seed=" + std::to_string(static_cast<unsigned long long>(r.seed)) + ")";
         });
 
     py::class_<PolicyScores>(m, "PolicyScores")
@@ -698,7 +745,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def_readwrite("mode", &ActionSelection::mode)
         .def_readwrite("temperature", &ActionSelection::temperature)
         .def("__repr__", [](const ActionSelection& s) {
-            return "ActionSelection(count=" + std::to_string((long long)s.count) + ", mode='" + s.mode +
+            return "ActionSelection(count=" + int_repr(s.count) + ", mode='" + s.mode +
                    "', temperature=" + std::to_string(s.temperature) + ")";
         })
         .def(py::pickle(
@@ -713,7 +760,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def(py::init([](Int final_size) { return ActionPool{final_size}; }), py::arg("final_size") = 16)
         .def_readwrite("final_size", &ActionPool::final_size)
         .def("__repr__", [](const ActionPool& p) {
-            return "ActionPool(final_size=" + std::to_string((long long)p.final_size) + ")";
+            return "ActionPool(final_size=" + int_repr(p.final_size) + ")";
         })
         .def(py::pickle(
             [](const ActionPool& p) { return py::make_tuple(p.final_size); },
@@ -770,7 +817,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def_readwrite("z_choices", &TohpeSearch::z_choices)
         .def("__repr__", [](const TohpeSearch& s) {
             return "TohpeSearch(sampling=" + sampling_budget_repr(s.sampling) + ", pool=" +
-                   source_pool_repr(s.pool) + ", z_choices=" + std::to_string((long long)s.z_choices) + ")";
+                   source_pool_repr(s.pool) + ", z_choices=" + int_repr(s.z_choices) + ")";
         })
         .def(py::pickle(
             [](const TohpeSearch& s) { return py::make_tuple(s.sampling, s.pool, s.z_choices); },
@@ -793,11 +840,11 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def_readwrite("random_fraction", &ZBucketSearch::random_fraction)
         .def_readwrite("limit_bucket", &ZBucketSearch::limit_bucket)
         .def("__repr__", [](const ZBucketSearch& b) {
-            return "ZBucketSearch(min_buckets=" + std::to_string((long long)b.min_buckets) +
-                   ", max_buckets=" + std::to_string((long long)b.max_buckets) +
+            return "ZBucketSearch(min_buckets=" + int_repr(b.min_buckets) +
+                   ", max_buckets=" + int_repr(b.max_buckets) +
                    ", temperature=" + std::to_string(b.temperature) +
                    ", random_fraction=" + std::to_string(b.random_fraction) +
-                   ", limit_bucket=" + std::to_string((long long)b.limit_bucket) + ")";
+                   ", limit_bucket=" + int_repr(b.limit_bucket) + ")";
         })
         .def(py::pickle(
             [](const ZBucketSearch& b) {
@@ -808,7 +855,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
                 if (t.size() != 4 && t.size() != 5)
                     throw std::runtime_error("Invalid state for ZBucketSearch");
                 return ZBucketSearch{t[0].cast<Int>(), t[1].cast<Int>(), t[2].cast<float>(), t[3].cast<float>(),
-                                     t.size() >= 5 ? t[4].cast<Int>() : (Int)-1};
+                                     t.size() >= 5 ? t[4].cast<Int>() : static_cast<Int>(-1)};
             }));
 
     py::class_<ToddSearch>(m, "ToddSearch")
@@ -824,7 +871,7 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def("__repr__", [](const ToddSearch& s) {
             return "ToddSearch(sampling=" + sampling_budget_repr(s.sampling) + ", pool=" +
                    source_pool_repr(s.pool) + ", actions_per_bucket=" +
-                   std::to_string((long long)s.actions_per_bucket) + ", buckets=ZBucketSearch(...))";
+                   int_repr(s.actions_per_bucket) + ", buckets=ZBucketSearch(...))";
         })
         .def(py::pickle(
             [](const ToddSearch& s) {
@@ -851,9 +898,9 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
         .def_readwrite("tohpe", &PolicyConfig::tohpe)
         .def_readwrite("todd", &PolicyConfig::todd)
         .def("__repr__", [](const PolicyConfig& c) {
-            return "PolicyConfig(selection=ActionSelection(count=" + std::to_string((long long)c.selection.count) +
+            return "PolicyConfig(selection=ActionSelection(count=" + int_repr(c.selection.count) +
                    ", mode='" + c.selection.mode + "'), pool=ActionPool(final_size=" +
-                   std::to_string((long long)c.pool.final_size) + "), tohpe=" + source_pool_repr(c.tohpe.pool) +
+                   int_repr(c.pool.final_size) + "), tohpe=" + source_pool_repr(c.tohpe.pool) +
                    ", todd=" + source_pool_repr(c.todd.pool) + ")";
         })
         .def(py::pickle(
@@ -871,9 +918,19 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
     m.def(
         "policy_iteration",
         [](Matrix cur_mat, PolicyConfig pcfg, index_t seed, index_t add_seed) {
-            auto data = std::make_shared<MatrixWithData>(std::move(cur_mat));
+            const bool build_full_todd =
+                std::max(pcfg.todd.pool.keep, static_cast<Int>(0)) > 0 ||
+                std::max(pcfg.todd.pool.reserve, static_cast<Int>(0)) > 0;
+            auto data = std::make_shared<MatrixWithData>(std::move(cur_mat), build_full_todd);
             return policy_iteration_impl(data, pcfg, seed, add_seed);
         },
         py::arg("cur_mat"), py::arg("policy_cfg") = PolicyConfig{}, py::arg("seed") = 21, py::arg("add_seed") = 0,
+        py::call_guard<py::gil_scoped_release>());
+    m.def(
+        "policy_iteration",
+        [](std::shared_ptr<MatrixWithData> data, PolicyConfig pcfg, index_t seed, index_t add_seed) {
+            return policy_iteration_impl(data, pcfg, seed, add_seed);
+        },
+        py::arg("data"), py::arg("policy_cfg") = PolicyConfig{}, py::arg("seed") = 21, py::arg("add_seed") = 0,
         py::call_guard<py::gil_scoped_release>());
 }

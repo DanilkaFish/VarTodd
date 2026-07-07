@@ -1,17 +1,47 @@
 #include "matrix.hpp"
 
 #include <algorithm>
-#include <boost/dynamic_bitset.hpp>
 #include <boost/functional/hash.hpp>
 
 #include <cnpy++.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
 namespace todd {
-constexpr auto __bl_size = 4;
+
+static std::size_t checked_mul_size(std::size_t a, std::size_t b, const char* what) {
+    if (b != 0 && a > std::numeric_limits<std::size_t>::max() / b)
+        throw std::overflow_error(what);
+    return a * b;
+}
+
+static std::size_t checked_add_size(std::size_t a, std::size_t b, const char* what) {
+    if (b > std::numeric_limits<std::size_t>::max() - a)
+        throw std::overflow_error(what);
+    return a + b;
+}
+
+static index_t checked_tensor_bits(index_t n) {
+    const auto N  = static_cast<std::size_t>(n);
+    const auto N2 = checked_mul_size(N, N, "Tensor3D allocation overflow");
+    const auto N3 = checked_mul_size(N2, N, "Tensor3D allocation overflow");
+    if (N3 > std::numeric_limits<index_t>::max())
+        throw std::overflow_error("Tensor3D allocation overflow");
+    return static_cast<index_t>(N3);
+}
+
+static bool points_into_storage(const std::vector<uint64_t>& storage, const uint64_t* p) noexcept {
+    if (p == nullptr || storage.empty())
+        return false;
+    const auto* begin = storage.data();
+    const auto* end   = begin + storage.size();
+    auto        less  = std::less<const uint64_t*>{};
+    return !less(p, begin) && less(p, end);
+}
 
 static Matrix canonicalize_rows(std::vector<Row>&& rows, index_t cols) {
     struct RowEntry {
@@ -58,8 +88,12 @@ static Matrix canonicalize_rows(std::vector<Row>&& rows, index_t cols) {
 
     active_cols = std::min(active_cols, cols);
     Matrix out(0, active_cols);
-    out.reserve_rows((index_t)kept.size());
+    out.reserve_rows(static_cast<index_t>(kept.size()));
     for (const RowEntry& entry : kept) {
+        if (active_cols == entry.row.size()) {
+            out.push_back(entry.row.cview());
+            continue;
+        }
         Row cropped(active_cols);
         RowCView row = entry.row.cview();
         for (auto p = row.find_first(); p != RowCView::npos && static_cast<index_t>(p) < active_cols;
@@ -80,42 +114,44 @@ static inline uint64_t mix64(uint64_t x) noexcept {
     return x;
 }
 
-static inline bool equal_row_blocks(const uint64_t* a, const uint64_t* b, index_t nblocks, index_t cols) noexcept {
+static inline bool equal_row_blocks(RowCView a, RowCView b) noexcept {
+    const index_t nblocks = ceil_div64(a.size());
     if (nblocks == 0)
         return true;
     const index_t last = nblocks - 1;
     for (index_t i = 0; i < last; ++i) {
-        if (a[i] != b[i])
+        if (read_word_or_zero(a, i) != read_word_or_zero(b, i))
             return false;
     }
-    const uint64_t mask = tail_mask_bits(cols);
-    return ((a[last] & mask) == (b[last] & mask));
+    const uint64_t mask = tail_mask_bits(a.size());
+    return (read_word_or_zero(a, last) & mask) == (read_word_or_zero(b, last) & mask);
 }
 
-size_t RowHash::operator()(const Row& r) const noexcept { return hash_view(r.cview()); }
-size_t RowHash::operator()(RowCView v) const noexcept { return hash_view(v); }
+std::size_t RowHash::operator()(const Row& r) const noexcept { return hash_view(r.cview()); }
+std::size_t RowHash::operator()(RowCView v) const noexcept { return hash_view(v); }
 
-size_t RowHash::hash_view(RowCView v) noexcept {
-    uint64_t        h  = mix64((uint64_t)v.size());
-    const uint64_t* p  = v.data();
-    const index_t   nb = v.blocks();
+std::size_t RowHash::hash_view(RowCView v) noexcept {
+    uint64_t      h  = mix64(static_cast<uint64_t>(v.size()));
+    const index_t nb = ceil_div64(v.size());
     if (nb) {
         const index_t last = nb - 1;
         for (index_t i = 0; i < last; ++i) {
-            h ^= mix64(p[i] + 0x9e3779b97f4a7c15ULL + h);
+            h ^= mix64(read_word_or_zero(v, i) + 0x9e3779b97f4a7c15ULL + h);
         }
-        h ^= mix64((p[last] & tail_mask_bits(v.size())) + 0x9e3779b97f4a7c15ULL + h);
+        h ^= mix64((read_word_or_zero(v, last) & tail_mask_bits(v.size())) + 0x9e3779b97f4a7c15ULL + h);
     }
-    return (size_t)h;
+    return static_cast<std::size_t>(h);
 }
 
 bool RowEq::operator()(RowCView a, RowCView b) const noexcept {
-    return a.size() == b.size() && a.blocks() == b.blocks() &&
-           equal_row_blocks(a.data(), b.data(), a.blocks(), a.size());
+    if (a.size() != b.size())
+        return false;
+    return equal_row_blocks(a, b);
 }
 
 std::uint32_t matrix_seed(const Matrix& mat, std::uint32_t base_seed, std::uint32_t step) noexcept {
-    std::size_t h = 0xcbf29ce484222325ULL; // some non-zero starting value
+    // FNV offset basis keeps empty matrices deterministic.
+    std::size_t h = 0xcbf29ce484222325ULL;
 
     boost::hash_combine(h, static_cast<std::size_t>(base_seed));
     boost::hash_combine(h, static_cast<std::size_t>(step));
@@ -132,7 +168,10 @@ std::uint32_t matrix_seed(const Matrix& mat, std::uint32_t base_seed, std::uint3
 // ---------------- Matrix ----------------
 
 Matrix::Matrix(index_t rows, index_t cols)
-    : rows_(rows), cols_(cols), blocks_per_row_(ceil_div64(cols)), data_(rows * blocks_per_row_, 0ULL) {}
+    : rows_(rows), cols_(cols), blocks_per_row_(ceil_div64(cols)),
+      data_(checked_mul_size(static_cast<std::size_t>(rows), static_cast<std::size_t>(blocks_per_row_),
+                             "Matrix allocation overflow"),
+            0ULL) {}
 
 Matrix Matrix::zeros(index_t rows, index_t cols) { return Matrix(rows, cols); }
 
@@ -152,18 +191,16 @@ Matrix Matrix::from_rows(const std::vector<Row>& rows) {
     for (index_t r = 0; r < M.rows_; ++r) {
         if (static_cast<index_t>(rows[r].size()) != cols)
             throw std::runtime_error("from_rows: inconsistent row width");
-        auto rr    = M[r];
-        auto newrr = rows[r].cview();
-        for (auto p = newrr.find_first(); p != RowCView::npos; p = newrr.find_next(p)) {
-            rr.set(static_cast<index_t>(p));
-        }
+        auto rr = M[r];
+        assign(rr, rows[r].cview());
+        if (rr.blocks() != 0)
+            rr.data()[rr.blocks() - 1] &= tail_mask_bits(cols);
     }
     return M;
 }
 
-// TODO : elimination of double columns
 Matrix Matrix::from_npy(const std::string& npy_path) {
-    // Load the .npy file
+    // Load, canonicalize, and compact a uint8 GF(2) matrix from NumPy storage.
     cnpypp::NpyArray arr = cnpypp::npy_load(npy_path);
 
     if (arr.word_sizes.back() != sizeof(std::uint8_t)) {
@@ -186,7 +223,12 @@ Matrix Matrix::from_npy(const std::string& npy_path) {
     for (std::size_t i = 0; i < n_rows; ++i) {
         Row row(static_cast<index_t>(n_cols));
         for (std::size_t j = 0; j < n_cols; ++j) {
-            const std::size_t offset = fortran_order ? (j * n_rows + i) : (i * n_cols + j);
+            const std::size_t offset =
+                fortran_order
+                    ? checked_add_size(checked_mul_size(j, n_rows, "Matrix::from_npy offset overflow"), i,
+                                       "Matrix::from_npy offset overflow")
+                    : checked_add_size(checked_mul_size(i, n_cols, "Matrix::from_npy offset overflow"), j,
+                                       "Matrix::from_npy offset overflow");
             std::uint8_t v = data[offset];
             if (v != 0) {
                 row.set(static_cast<index_t>(j));
@@ -201,21 +243,21 @@ Matrix Matrix::from_npy(const std::string& npy_path) {
 void Matrix::save_npy(const std::string& npy_path) const {
     const index_t n_rows = this->rows();
     const index_t n_cols = this->cols();
-    
-    std::vector<std::uint8_t> data(static_cast<std::size_t>(n_rows * n_cols), 0);
-    
+    const auto    total =
+        checked_mul_size(static_cast<std::size_t>(n_rows), static_cast<std::size_t>(n_cols),
+                         "Matrix::save_npy allocation overflow");
+
+    std::vector<std::uint8_t> data(total, 0);
+
     for (index_t i = 0; i < n_rows; ++i) {
-        const auto& row = (*this)[i];
-        for (index_t j = 0; j < n_cols; ++j) {
-            if (row.test(j)) {
-                data[static_cast<std::size_t>(i * n_cols + j)] = 1;
-            }
-        }
+        RowCView   row        = (*this)[i];
+        const auto row_offset = static_cast<std::size_t>(i) * static_cast<std::size_t>(n_cols);
+        for (auto p = row.find_first(); p != RowCView::npos && p < n_cols; p = row.find_next(p))
+            data[row_offset + static_cast<std::size_t>(p)] = 1;
     }
-    
-    std::vector<std::size_t> shape = {static_cast<std::size_t>(n_rows), 
-                                      static_cast<std::size_t>(n_cols)};
-    
+
+    std::vector<std::size_t> shape = {static_cast<std::size_t>(n_rows), static_cast<std::size_t>(n_cols)};
+
     cnpypp::npy_save(npy_path, data.data(), shape, "w");
 }
 
@@ -224,14 +266,19 @@ void Matrix::reset() { std::ranges::fill(data_, 0); }
 void Matrix::reserve_rows(index_t rows) {
     if (rows <= rows_ || cols_ == 0)
         return;
-    data_.reserve((std::size_t)rows * (std::size_t)blocks_per_row_);
+    data_.reserve(checked_mul_size(static_cast<std::size_t>(rows), static_cast<std::size_t>(blocks_per_row_),
+                                   "Matrix::reserve_rows overflow"));
 }
 
 RowCView Matrix::operator[](index_t i) const noexcept {
-    return RowCView(&data_[i * blocks_per_row_], cols_, blocks_per_row_);
+    const auto* ptr = blocks_per_row_ == 0 ? nullptr : data_.data() + i * blocks_per_row_;
+    return RowCView(ptr, cols_, blocks_per_row_);
 }
 
-RowView Matrix::operator[](index_t i) noexcept { return RowView(&data_[i * blocks_per_row_], cols_, blocks_per_row_); }
+RowView Matrix::operator[](index_t i) noexcept {
+    auto* ptr = blocks_per_row_ == 0 ? nullptr : data_.data() + i * blocks_per_row_;
+    return RowView(ptr, cols_, blocks_per_row_);
+}
 
 void Matrix::push_back(RowCView bv) {
     if (rows_ == 0 && cols_ == 0) {
@@ -240,26 +287,52 @@ void Matrix::push_back(RowCView bv) {
     }
     if (static_cast<index_t>(bv.size()) != cols_)
         throw std::runtime_error("push_back: wrong row width");
+    if (rows_ == std::numeric_limits<index_t>::max())
+        throw std::overflow_error("Matrix::push_back row count overflow");
 
-    data_.resize((rows_ + 1) * blocks_per_row_, 0ULL);
-    assign((*this)[rows_], bv);
+    const bool source_in_storage = points_into_storage(data_, bv.data());
+    Row        source_copy;
+    if (source_in_storage)
+        source_copy = Row(bv);
+
+    data_.resize(checked_mul_size(static_cast<std::size_t>(rows_ + 1), static_cast<std::size_t>(blocks_per_row_),
+                                  "Matrix::push_back overflow"),
+                 0ULL);
+    assign((*this)[rows_], source_in_storage ? source_copy.cview() : bv);
+    if (blocks_per_row_ != 0)
+        data_[static_cast<std::size_t>(rows_) * static_cast<std::size_t>(blocks_per_row_) +
+              static_cast<std::size_t>(blocks_per_row_ - 1)] &= tail_mask_bits(cols_);
     ++rows_;
 }
 
 Matrix& Matrix::append_down_inplace(const Matrix& rhs) {
     if (rhs.rows_ == 0)
         return *this;
+    if (this == &rhs) {
+        Matrix copy(rhs);
+        return append_down_inplace(copy);
+    }
     if (rows_ == 0) {
         *this = rhs;
         return *this;
     }
     if (cols_ != rhs.cols_)
         throw std::runtime_error("append_down_inplace: col mismatch");
+    if (rhs.rows_ > std::numeric_limits<index_t>::max() - rows_)
+        throw std::overflow_error("Matrix::append_down_inplace row count overflow");
 
     const index_t old_rows = rows_;
     rows_ += rhs.rows_;
-    data_.resize(rows_ * blocks_per_row_);
-    std::memcpy(&data_[old_rows * blocks_per_row_], rhs.data_.data(), rhs.rows_ * blocks_per_row_ * sizeof(uint64_t));
+    data_.resize(checked_mul_size(static_cast<std::size_t>(rows_), static_cast<std::size_t>(blocks_per_row_),
+                                  "Matrix::append_down_inplace overflow"));
+    const auto dst_word = checked_mul_size(static_cast<std::size_t>(old_rows), static_cast<std::size_t>(blocks_per_row_),
+                                           "Matrix::append_down_inplace offset overflow");
+    const auto copy_words =
+        checked_mul_size(static_cast<std::size_t>(rhs.rows_), static_cast<std::size_t>(blocks_per_row_),
+                         "Matrix::append_down_inplace copy overflow");
+    if (copy_words != 0)
+        std::memcpy(data_.data() + dst_word, rhs.data_.data(),
+                    checked_mul_size(copy_words, sizeof(uint64_t), "Matrix::append_down_inplace byte overflow"));
     return *this;
 }
 
@@ -272,6 +345,10 @@ Matrix& Matrix::append_right_inplace(const Matrix& rhs) {
     }
     if (rows_ != rhs.rows_)
         throw std::runtime_error("append_right_inplace: row mismatch");
+    if (rhs.cols_ == 0)
+        return *this;
+    if (rhs.cols_ > std::numeric_limits<index_t>::max() - cols_)
+        throw std::overflow_error("Matrix::append_right_inplace col count overflow");
 
     const index_t old_cols = cols_;
     const index_t new_cols = cols_ + rhs.cols_;
@@ -279,20 +356,22 @@ Matrix& Matrix::append_right_inplace(const Matrix& rhs) {
     const index_t rhs_bpr  = rhs.blocks_per_row_;
     const index_t new_bpr  = ceil_div64(new_cols);
 
-    std::vector<uint64_t> new_data(rows_ * new_bpr, 0ULL);
+    std::vector<uint64_t> new_data(
+        checked_mul_size(static_cast<std::size_t>(rows_), static_cast<std::size_t>(new_bpr),
+                         "Matrix::append_right_inplace allocation overflow"),
+        0ULL);
 
     const index_t dst_block0 = old_cols >> 6;
     const index_t shift      = old_cols & 63;
 
     for (index_t r = 0; r < rows_; ++r) {
-        const uint64_t* a = &data_[r * old_bpr];
-        const uint64_t* b = &rhs.data_[r * rhs_bpr];
+        const uint64_t* a = old_bpr == 0 ? nullptr : data_.data() + r * old_bpr;
+        const uint64_t* b = rhs_bpr == 0 ? nullptr : rhs.data_.data() + r * rhs_bpr;
         uint64_t*       d = &new_data[r * new_bpr];
 
-        // copy left part
-        std::memcpy(d, a, old_bpr * sizeof(uint64_t));
+        if (old_bpr != 0)
+            std::memcpy(d, a, old_bpr * sizeof(uint64_t));
 
-        // append right part at bit offset old_cols
         if (shift == 0) {
             std::memcpy(d + dst_block0, b, rhs_bpr * sizeof(uint64_t));
         } else {
@@ -305,7 +384,6 @@ Matrix& Matrix::append_right_inplace(const Matrix& rhs) {
             }
         }
 
-        // mask unused high bits in final block
         const index_t rem = new_cols & 63;
         if (rem != 0)
             d[new_bpr - 1] &= ((1ULL << rem) - 1ULL);
@@ -321,10 +399,8 @@ Matrix Matrix::transpose() const {
     Matrix T(cols_, rows_);
     for (index_t r = 0; r < rows_; ++r) {
         RowCView rr = (*this)[r];
-        for (index_t c = 0; c < cols_; ++c) {
-            if (rr.test(c))
-                T[c].set(r);
-        }
+        for (auto c = rr.find_first(); c != RowCView::npos && c < cols_; c = rr.find_next(c))
+            T[c].set(r);
     }
     return T;
 }
@@ -333,8 +409,9 @@ Matrix& Matrix::operator+=(const Matrix& rhs) {
     if (rows_ != rhs.rows_ || cols_ != rhs.cols_)
         throw std::runtime_error("operator+=: dim mismatch");
 
-    const index_t n = rows_ * blocks_per_row_;
-    for (index_t i = 0; i < n; ++i)
+    const auto n = checked_mul_size(static_cast<std::size_t>(rows_), static_cast<std::size_t>(blocks_per_row_),
+                                    "Matrix::operator+= overflow");
+    for (std::size_t i = 0; i < n; ++i)
         data_[i] ^= rhs.data_[i];
     return *this;
 }
@@ -348,12 +425,19 @@ Matrix Matrix::operator+(const Matrix& rhs) const {
 Row Matrix::operator*(RowCView v) const {
     if (static_cast<index_t>(v.size()) != cols_)
         throw std::runtime_error("A*v: dim mismatch");
+    if (blocks_per_row_ == 0)
+        return Row(rows_);
 
-    // convert v to blocks once
-    std::vector<uint64_t> vb(blocks_per_row_, 0ULL);
-    for (auto p = v.find_first(); p != RowCView::npos; p = v.find_next(p)) {
-        index_t ip = static_cast<index_t>(p);
-        vb[ip >> 6] |= (1ULL << (ip & 63));
+    std::vector<uint64_t> vb_storage;
+    const uint64_t*       vb = v.data();
+    if (v.blocks() != blocks_per_row_) {
+        vb_storage.assign(static_cast<std::size_t>(blocks_per_row_), 0ULL);
+        for (auto p = v.find_first(); p != RowCView::npos; p = v.find_next(p)) {
+            const index_t ip = static_cast<index_t>(p);
+            if (ip < cols_)
+                vb_storage[static_cast<std::size_t>(ip >> 6)] |= (1ULL << (ip & 63));
+        }
+        vb = vb_storage.data();
     }
 
     Row y(rows_);
@@ -373,8 +457,11 @@ Matrix Matrix::operator*(const Matrix& rhs) const {
     if (cols_ != rhs.rows_)
         throw std::runtime_error("A*B: dim mismatch");
 
-    Matrix Bt = rhs.transpose();
     Matrix C(rows_, rhs.cols_);
+    if (blocks_per_row_ == 0)
+        return C;
+
+    Matrix Bt = rhs.transpose();
 
     for (index_t i = 0; i < rows_; ++i) {
         const uint64_t* a = &data_[i * blocks_per_row_];
@@ -397,15 +484,16 @@ bool Matrix::operator==(const Matrix& rhs) const noexcept {
 }
 
 Tensor3D::Tensor3D(index_t n)
-    : n_{n}, t_(static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(n)) {}
+    : n_{n}, t_(checked_tensor_bits(n)) {}
 
 Tensor3D::Tensor3D(const Matrix& M) : Tensor3D(static_cast<index_t>(M.cols())) {
     const index_t rN = static_cast<index_t>(M.rows());
+    std::vector<index_t> idx;
     for (index_t r = 0; r < rN; ++r) {
-        auto                 z = M[r];
-        std::vector<index_t> idx;
+        auto z = M[r];
+        idx.clear();
         idx.reserve(z.count());
-        for (auto p = z.find_first(); p != RowView::npos; p = z.find_next(p))
+        for (auto p = z.find_first(); p != RowCView::npos; p = z.find_next(p))
             idx.push_back(static_cast<index_t>(p));
         for (index_t i : idx)
             for (index_t j : idx)

@@ -5,14 +5,36 @@
 #include "typedef.hpp"
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace todd {
 using Int = int;
+
+namespace detail {
+inline Int checked_int_from_index(index_t value, const char* what) {
+    if (value > static_cast<index_t>(std::numeric_limits<Int>::max()))
+        throw std::overflow_error(what);
+    return static_cast<Int>(value);
+}
+
+inline Int checked_int_sum(Int a, Int b, const char* what) {
+    if (b > std::numeric_limits<Int>::max() - a)
+        throw std::overflow_error(what);
+    return a + b;
+}
+
+inline Int checked_int_double(Int value, const char* what) {
+    if (value > std::numeric_limits<Int>::max() / 2 || value < std::numeric_limits<Int>::min() / 2)
+        throw std::overflow_error(what);
+    return value * 2;
+}
+} // namespace detail
 
 enum CandidateSource : Int {
     CandidateSourceUnknown = 0,
@@ -51,15 +73,19 @@ struct Candidate {
     Candidate(float s, Int r, Int kk, Int ll, Row v, Int basis_dim, Int bucket_size, Int z_weight, Int z_size,
               Int source = CandidateSourceUnknown)
         : vec(std::move(v)), pool_score(s), reduction(r), k(kk), l(ll), basis_dim(basis_dim), bucket_size(bucket_size),
-          possible_max_reduction(static_cast<Int>(bucket_size * 2)), vec_weight(static_cast<Int>(vec.count())),
+          possible_max_reduction(detail::checked_int_double(bucket_size, "Candidate possible reduction overflow")),
+          vec_weight(detail::checked_int_from_index(vec.count(), "Candidate vector weight overflow")),
           z_weight(z_weight), z_size(std::max<Int>(1, z_size)), source(source) {}
 
     Candidate(float s, Int r, Int kk, Int ll, Row&& v, Row&& zz, Int basis_dim, Int bucket_size,
               std::uint32_t bucket_id = no_bucket_id, Int source = CandidateSourceUnknown)
         : vec(std::move(v)), z(std::move(zz)), pool_score(s), reduction(r), k(kk), l(ll), basis_dim(basis_dim),
-          bucket_size(bucket_size), possible_max_reduction(static_cast<Int>(bucket_size * 2)),
-          vec_weight(static_cast<Int>(vec.count())), z_weight(static_cast<Int>(z.count())),
-          z_size(static_cast<Int>(std::max<index_t>(1, z.size()))), source(source), bucket_id(bucket_id) {}
+          bucket_size(bucket_size),
+          possible_max_reduction(detail::checked_int_double(bucket_size, "Candidate possible reduction overflow")),
+          vec_weight(detail::checked_int_from_index(vec.count(), "Candidate vector weight overflow")),
+          z_weight(detail::checked_int_from_index(z.count(), "Candidate z weight overflow")),
+          z_size(detail::checked_int_from_index(std::max<index_t>(1, z.size()), "Candidate z size overflow")),
+          source(source), bucket_id(bucket_id) {}
 
     bool at_least_single() const;
     bool is_tohpe() const;
@@ -93,6 +119,7 @@ struct Stats {
     index_t accepted               = 0;
     index_t rejected               = 0;
     index_t accepted_tohpe         = 0;
+    index_t accepted_todd          = 0;
     float   mean_mr                = 0.0f;
     float   mean_basis             = 0.0f;
     float   mean_reduction         = 0.0f;
@@ -153,48 +180,47 @@ static CandidateExport export_candidate(Candidate const& c) {
     };
 }
 
-// TODO Only ScpringFunction POLYNOm function is used
+// Small scoring wrapper used by exploration/finalization pools.
 struct ScoringFunction {
     enum Function { LINEAR, POLYNOM, DISTANCE, LOGARITHMIC, SIGMOID };
     Function type = LINEAR;
     float    pow  = 2.0;
     float    evaluate(std::span<const float> weights, std::span<const float> centers, std::span<const float> x) const {
         switch (type) {
-        case (ScoringFunction::LINEAR):
+        case ScoringFunction::LINEAR:
             return linear_scoring(weights, x);
-        case (ScoringFunction::POLYNOM):
+        case ScoringFunction::POLYNOM:
             return polynom_scoring(weights, centers, x);
-        case (ScoringFunction::DISTANCE):
+        case ScoringFunction::DISTANCE:
             return distance_scoring(weights, x);
-        case (ScoringFunction::SIGMOID):
+        case ScoringFunction::SIGMOID:
             return sigmoid_scoring(weights, x);
-        case (ScoringFunction::LOGARITHMIC):
+        case ScoringFunction::LOGARITHMIC:
             return logarithmic_scoring(weights, x);
         default:
             throw std::runtime_error("Wrong function type for evaluation");
         }
-        return 0;
     }
 
     float linear_scoring(std::span<const float> w, std::span<const float> x) const {
-        float  sum = 0.0;
-        size_t n   = std::min(w.size(), x.size());
-        for (size_t i = 0; i < n; ++i) {
+        float       sum = 0.0f;
+        std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i) {
             sum += w[i] * x[i];
         }
         return sum;
     }
 
     float polynom_scoring(std::span<const float> w, std::span<const float> c, std::span<const float> x) const {
-        float  sum = 0.0;
-        size_t n   = std::min({w.size(), c.size(), x.size()});
+        float       sum = 0.0f;
+        std::size_t n   = std::min({w.size(), c.size(), x.size()});
         if (pow >= 0) {
-            for (size_t i = 0; i < n; ++i) {
+            for (std::size_t i = 0; i < n; ++i) {
                 const float d = std::abs(x[i] - c[i]);
                 sum += w[i] * ((pow == 2.0f) ? d * d : std::pow(d, pow));
             }
         } else {
-            for (size_t i = 0; i < n; ++i) {
+            for (std::size_t i = 0; i < n; ++i) {
                 sum += w[i] * std::pow(1 / std::max(std::abs(x[i] - c[i]), 0.001f), -pow);
             }
         }
@@ -202,18 +228,18 @@ struct ScoringFunction {
     }
 
     float distance_scoring(std::span<const float> w, std::span<const float> x) const {
-        float  sum = 0.0;
-        size_t n   = std::min(w.size(), x.size());
-        for (size_t i = 0; i < n; ++i) {
+        float       sum = 0.0f;
+        std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i) {
             sum -= (x[i] - w[i]) * (x[i] - w[i]);
         }
         return sum;
     }
 
     float sigmoid_scoring(std::span<const float> w, std::span<const float> x) const {
-        float  sum = 0.0;
-        size_t n   = std::min(w.size(), x.size());
-        for (size_t i = 0; i < n; ++i) {
+        float       sum = 0.0f;
+        std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i) {
             sum += w[i] * ((pow == 2.0f) ? x[i] * x[i] : std::pow(x[i], pow));
         }
         float z = sum;
@@ -221,9 +247,9 @@ struct ScoringFunction {
     }
 
     float logarithmic_scoring(std::span<const float> w, std::span<const float> x) const {
-        float  sum = 0.0;
-        size_t n   = std::min(w.size(), x.size());
-        for (size_t i = 0; i < n; ++i) {
+        float       sum = 0.0f;
+        std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i) {
             sum += w[i] * std::log(std::max(1e-6f, x[i]));
         }
         return sum;

@@ -563,10 +563,13 @@ class Path:
                 value = self._safe_float_attr(cand, attr_name)
                 if value is not None:
                     group[attr_name].append(value)
-            accepted = float(stats.accepted)
-            accepted_tohpe = float(stats.accepted_tohpe)
+            accepted = self._safe_float_attr(stats, "accepted") or 0.0
+            accepted_tohpe = self._safe_float_attr(stats, "accepted_tohpe") or 0.0
+            accepted_todd = self._safe_float_attr(stats, "accepted_todd")
+            if accepted_todd is None:
+                accepted_todd = max(0.0, accepted - accepted_tohpe)
             group["accepted_tohpe"].append(accepted_tohpe)
-            group["accepted_todd"].append(max(0.0, accepted - accepted_tohpe))
+            group["accepted_todd"].append(accepted_todd)
             researched_z = getattr(node.incoming, "total", None)
             if researched_z is None:
                 researched_z = getattr(stats, "z_researched", None)

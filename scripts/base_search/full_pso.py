@@ -202,7 +202,7 @@ def run_opt(fun: Evaluator, num_eval: int=10, label: str = "pso") -> np.ndarray:
     return validated_position
         
 def entrypoint(mat: Matrix):
-    fun = Evaluator(mat=mat, fin_rank=170, max_depth=100)
+    fun = Evaluator(mat=mat, fin_rank=170, max_depth=500)
     num_eval = 50
     x0 = run_opt(fun, num_eval, label="initial pso")
     print(f"{fun.best_paths[0].final_node.state.rows=}")
