@@ -206,6 +206,12 @@ static auto build_matrix_with_data_precompute(const Matrix& P)
                                 static_cast<std::uint64_t>(checked_index_add(b, 1, "FullToddData offset overflow")),
                                 "FullToddData offset overflow");
         }
+        const auto max_extra = static_cast<std::uint64_t>(n - 1);
+        const auto max_index = static_cast<std::uint64_t>(std::numeric_limits<index_t>::max());
+        for (const auto off : out.offset) {
+            if (off > max_index - max_extra)
+                throw std::overflow_error("FullToddData offset overflow");
+        }
     }
 
     out.nonpivot_index.assign(static_cast<std::size_t>(full_cols), MatrixWithData::FullToddData::npos);
@@ -680,10 +686,7 @@ Matrix FullToddGenerator::full_todd_kernel(RowCView z, const SumEntry* ptr, inde
                 if (s == gamma)
                     continue;
                 const index_t col =
-                    checked_index_from_u64(s > gamma ? checked_u64_add(ft.offset[static_cast<std::size_t>(s)], gamma,
-                                                                        "full_todd_kernel column overflow")
-                                                     : checked_u64_add(offg, s, "full_todd_kernel column overflow"),
-                                           "full_todd_kernel column overflow");
+                    static_cast<index_t>(s > gamma ? ft.offset[static_cast<std::size_t>(s)] + gamma : offg + s);
                 add_col(row, col);
             }
         } else {
@@ -692,8 +695,7 @@ Matrix FullToddGenerator::full_todd_kernel(RowCView z, const SumEntry* ptr, inde
                 const std::uint64_t offb = ft.offset[static_cast<std::size_t>(b)];
                 for (std::size_t ai = 0; ai <= bi; ++ai) {
                     const index_t a = S[ai];
-                    add_col(row, checked_index_from_u64(checked_u64_add(offb, a, "full_todd_kernel column overflow"),
-                                                        "full_todd_kernel column overflow"));
+                    add_col(row, static_cast<index_t>(offb + a));
                 }
             }
         }
