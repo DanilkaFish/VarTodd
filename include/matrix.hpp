@@ -195,7 +195,7 @@ template <WritableRow L, ReadableRow R> inline L&& operator^=(L&& lhs, const R& 
     const index_t xor_blocks = std::min(lhs.blocks(), rhs.blocks());
     xor_rows(lhs.data(), rhs.data(), xor_blocks);
     mask_tail_inplace(lhs);
-    return lhs;
+    return static_cast<L&&>(lhs);
 }
 
 template <ReadableRow L, ReadableRow R> inline bool operator==(const L& lhs, const R& rhs) noexcept {

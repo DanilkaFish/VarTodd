@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+endif()
+
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_ARCHITECTURES)
+    if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+        set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Target macOS architecture")
+    endif()
+endif()
+
 project(vartodd
     VERSION 1.0.0
     LANGUAGES CXX
@@ -16,28 +26,27 @@ option(BUILD_DEMONSTRATION "Build benchmarks" ON)
 option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
 option(BUILD_EXAMPLES "Build examples" ON)
 
+include(CTest)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 include(CheckIPOSupported)
 
-# if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-#   find_program(GCC_AR gcc-ar REQUIRED)
-#   find_program(GCC_RANLIB gcc-ranlib REQUIRED)
+if(APPLE)
+    set(Python3_FIND_FRAMEWORK LAST)
+endif()
 
-#   set(CMAKE_C_COMPILER_AR "${GCC_AR}")
-#   set(CMAKE_C_COMPILER_RANLIB "${GCC_RANLIB}")
-#   set(CMAKE_CXX_COMPILER_AR "${GCC_AR}")
-#   set(CMAKE_CXX_COMPILER_RANLIB "${GCC_RANLIB}")
-# endif()
-check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
-
-if(ipo_supported)
-  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
-else()
-  message(WARNING "IPO/LTO not supported: ${ipo_error}")
+option(VARTODD_ENABLE_IPO "Enable IPO/LTO in Release builds when supported" ON)
+if(VARTODD_ENABLE_IPO)
+    check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
+    if(ipo_supported)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    else()
+        message(WARNING "IPO/LTO not supported: ${ipo_error}")
+    endif()
 endif()
 
 # Output directories
@@ -54,6 +63,9 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/src/external/cmake)
 add_subdirectory(src/external)      # Dependencies first
 add_subdirectory(src)           # Main library
 
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 if(BUILD_DEMONSTRATION)
     add_subdirectory(demos)

@@ -44,15 +44,25 @@ if (WITH_PY_STUBS)
     if (NOT DEFINED Python3_EXECUTABLE)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
     endif()
-    add_custom_command(
-        TARGET pyvartodd
-        POST_BUILD
-        COMMAND ${Python3_EXECUTABLE} -m pybind11_stubgen
-                --ignore-invalid-expressions ".*"
-                --enum-class-locations "Function:pyvartodd.Function"
-                -o . pyvartodd
-        WORKING_DIRECTORY $<TARGET_FILE_DIR:pyvartodd>
-        COMMENT "Generating .pyi file next to pyvartodd module"
-        VERBATIM
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c "import pybind11_stubgen"
+        RESULT_VARIABLE PYBIND11_STUBGEN_IMPORT_RESULT
+        OUTPUT_QUIET
+        ERROR_QUIET
     )
+    if (PYBIND11_STUBGEN_IMPORT_RESULT EQUAL 0)
+        add_custom_command(
+            TARGET pyvartodd
+            POST_BUILD
+            COMMAND ${Python3_EXECUTABLE} -m pybind11_stubgen
+                    --ignore-invalid-expressions ".*"
+                    --enum-class-locations "Function:pyvartodd.Function"
+                    -o . pyvartodd
+            WORKING_DIRECTORY $<TARGET_FILE_DIR:pyvartodd>
+            COMMENT "Generating .pyi file next to pyvartodd module"
+            VERBATIM
+        )
+    else()
+        message(WARNING "WITH_PY_STUBS=ON but pybind11-stubgen is not importable; skipping stub generation")
+    endif()
 endif()
