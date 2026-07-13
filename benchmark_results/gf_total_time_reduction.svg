@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1226" height="900" viewBox="0 0 1226 900">
+<style>
+text{font-family:Arial,Helvetica,sans-serif;fill:#1f2933} .tick{fill:#52616b;font-size:12px} .label{font-size:13px} .bar-note{font-size:10px;fill:#334e68;font-weight:700} .panel-title{font-size:16px;font-weight:700} .title{font-size:24px;font-weight:700} .subtitle{font-size:14px;fill:#52616b}
+</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="96" y="34" class="title">GF total runtime and final T-count reduction</text>
+<text x="96" y="58" class="subtitle">Total time uses wall_seconds; time-bar labels show rounded wall time</text>
+<text x="96" y="82" class="panel-title">Total runtime</text>
+<text x="96" y="451" class="panel-title">Final T-count reduction</text>
+<line x1="96" y1="349.19" x2="1192" y2="349.19" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="353.19" text-anchor="end" class="tick">10 ms</text>
+<line x1="96" y1="301.91" x2="1192" y2="301.91" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="305.91" text-anchor="end" class="tick">100 ms</text>
+<line x1="96" y1="254.63" x2="1192" y2="254.63" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="258.63" text-anchor="end" class="tick">1 s</text>
+<line x1="96" y1="207.35" x2="1192" y2="207.35" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="211.35" text-anchor="end" class="tick">10 s</text>
+<line x1="96" y1="160.07" x2="1192" y2="160.07" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="164.07" text-anchor="end" class="tick">100 s</text>
+<line x1="96" y1="112.80" x2="1192" y2="112.80" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="116.80" text-anchor="end" class="tick">1000 s</text>
+<line x1="96" y1="754.00" x2="1192" y2="754.00" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="758.00" text-anchor="end" class="tick">0</text>
+<line x1="96" y1="697.00" x2="1192" y2="697.00" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="701.00" text-anchor="end" class="tick">100</text>
+<line x1="96" y1="640.00" x2="1192" y2="640.00" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="644.00" text-anchor="end" class="tick">200</text>
+<line x1="96" y1="583.00" x2="1192" y2="583.00" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="587.00" text-anchor="end" class="tick">300</text>
+<line x1="96" y1="526.00" x2="1192" y2="526.00" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="530.00" text-anchor="end" class="tick">400</text>
+<line x1="96" y1="469.00" x2="1192" y2="469.00" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="473.00" text-anchor="end" class="tick">500</text>
+<line x1="96" y1="100" x2="96" y2="385.00" stroke="#9aa5b1" stroke-width="1"/>
+<line x1="96" y1="385.00" x2="1192" y2="385.00" stroke="#9aa5b1" stroke-width="1"/>
+<line x1="96" y1="469" x2="96" y2="754.00" stroke="#9aa5b1" stroke-width="1"/>
+<line x1="96" y1="754.00" x2="1192" y2="754.00" stroke="#9aa5b1" stroke-width="1"/>
+<rect x="121.18" y="379.09" width="21.92" height="5.91" fill="#2f7bbd" rx="2"><title>VarTODD gf2^4_410: 0.002331 wall seconds</title></rect>
+<text x="132.14" y="374.09" text-anchor="middle" class="bar-note">2.3ms</text>
+<rect x="121.18" y="745.45" width="21.92" height="8.55" fill="#2f7bbd" rx="2"><title>VarTODD gf2^4_410: reduction 15; T-count 56 -> 41</title></rect>
+<text x="132.14" y="740.45" text-anchor="middle" class="bar-note">15</text>
+<rect x="149.10" y="362.46" width="21.92" height="22.54" fill="#d46a3a" rx="2"><title>FastTODD gf2^4_410: 0.00523906 wall seconds</title></rect>
+<text x="160.06" y="357.46" text-anchor="middle" class="bar-note">5.2ms</text>
+<rect x="149.10" y="745.45" width="21.92" height="8.55" fill="#d46a3a" rx="2"><title>FastTODD gf2^4_410: reduction 15; T-count 56 -> 41</title></rect>
+<text x="160.06" y="740.45" text-anchor="middle" class="bar-note">15</text>
+<text x="135.14" y="778.00" text-anchor="end" transform="rotate(-45 135.14 778.00)" class="tick">gf2^4_410</text>
+<rect x="199.47" y="360.93" width="21.92" height="24.07" fill="#2f7bbd" rx="2"><title>VarTODD gf2^5_520: 0.00564469 wall seconds</title></rect>
+<text x="210.43" y="355.93" text-anchor="middle" class="bar-note">5.6ms</text>
+<rect x="199.47" y="738.61" width="21.92" height="15.39" fill="#2f7bbd" rx="2"><title>VarTODD gf2^5_520: reduction 27; T-count 98 -> 71</title></rect>
+<text x="210.43" y="733.61" text-anchor="middle" class="bar-note">27</text>
+<rect x="227.39" y="323.37" width="21.92" height="61.63" fill="#d46a3a" rx="2"><title>FastTODD gf2^5_520: 0.0351729 wall seconds</title></rect>
+<text x="238.35" y="318.37" text-anchor="middle" class="bar-note">35.2ms</text>
+<rect x="227.39" y="740.89" width="21.92" height="13.11" fill="#d46a3a" rx="2"><title>FastTODD gf2^5_520: reduction 23; T-count 98 -> 75</title></rect>
+<text x="238.35" y="735.89" text-anchor="middle" class="bar-note">23</text>
+<text x="213.43" y="778.00" text-anchor="end" transform="rotate(-45 213.43 778.00)" class="tick">gf2^5_520</text>
+<rect x="277.75" y="321.04" width="21.92" height="63.96" fill="#2f7bbd" rx="2"><title>VarTODD gf2^6_610: 0.0394013 wall seconds</title></rect>
+<text x="288.71" y="316.04" text-anchor="middle" class="bar-note">39.4ms</text>
+<rect x="277.75" y="737.47" width="21.92" height="16.53" fill="#2f7bbd" rx="2"><title>VarTODD gf2^6_610: reduction 29; T-count 132 -> 103</title></rect>
+<text x="288.71" y="732.47" text-anchor="middle" class="bar-note">29</text>
+<rect x="305.67" y="307.98" width="21.92" height="77.02" fill="#d46a3a" rx="2"><title>FastTODD gf2^6_610: 0.0744292 wall seconds</title></rect>
+<text x="316.63" y="302.98" text-anchor="middle" class="bar-note">74.4ms</text>
+<rect x="305.67" y="731.77" width="21.92" height="22.23" fill="#d46a3a" rx="2"><title>FastTODD gf2^6_610: reduction 39; T-count 132 -> 93</title></rect>
+<text x="316.63" y="726.77" text-anchor="middle" class="bar-note">39</text>
+<text x="291.71" y="778.00" text-anchor="end" transform="rotate(-45 291.71 778.00)" class="tick">gf2^6_610</text>
+<rect x="356.04" y="295.18" width="21.92" height="89.82" fill="#2f7bbd" rx="2"><title>VarTODD gf2^7_710: 0.138788 wall seconds</title></rect>
+<text x="367.00" y="290.18" text-anchor="middle" class="bar-note">138.8ms</text>
+<rect x="356.04" y="727.21" width="21.92" height="26.79" fill="#2f7bbd" rx="2"><title>VarTODD gf2^7_710: reduction 47; T-count 164 -> 117</title></rect>
+<text x="367.00" y="722.21" text-anchor="middle" class="bar-note">47</text>
+<rect x="383.96" y="272.83" width="21.92" height="112.17" fill="#d46a3a" rx="2"><title>FastTODD gf2^7_710: 0.412162 wall seconds</title></rect>
+<text x="394.92" y="267.83" text-anchor="middle" class="bar-note">412.2ms</text>
+<rect x="383.96" y="727.21" width="21.92" height="26.79" fill="#d46a3a" rx="2"><title>FastTODD gf2^7_710: reduction 47; T-count 164 -> 117</title></rect>
+<text x="394.92" y="722.21" text-anchor="middle" class="bar-note">47</text>
+<text x="370.00" y="778.00" text-anchor="end" transform="rotate(-45 370.00 778.00)" class="tick">gf2^7_710</text>
+<rect x="434.33" y="310.85" width="21.92" height="74.15" fill="#2f7bbd" rx="2"><title>VarTODD gf2^8_84320: 0.0647137 wall seconds</title></rect>
+<text x="445.29" y="305.85" text-anchor="middle" class="bar-note">64.7ms</text>
+<rect x="434.33" y="725.50" width="21.92" height="28.50" fill="#2f7bbd" rx="2"><title>VarTODD gf2^8_84320: reduction 50; T-count 189 -> 139</title></rect>
+<text x="445.29" y="720.50" text-anchor="middle" class="bar-note">50</text>
+<rect x="462.25" y="299.13" width="21.92" height="85.87" fill="#d46a3a" rx="2"><title>FastTODD gf2^8_84320: 0.1145 wall seconds</title></rect>
+<text x="473.21" y="294.13" text-anchor="middle" class="bar-note">114.5ms</text>
+<rect x="462.25" y="726.64" width="21.92" height="27.36" fill="#d46a3a" rx="2"><title>FastTODD gf2^8_84320: reduction 48; T-count 189 -> 141</title></rect>
+<text x="473.21" y="721.64" text-anchor="middle" class="bar-note">48</text>
+<text x="448.29" y="778.00" text-anchor="end" transform="rotate(-45 448.29 778.00)" class="tick">gf2^8_84320</text>
+<rect x="512.61" y="273.75" width="21.92" height="111.25" fill="#2f7bbd" rx="2"><title>VarTODD gf2^9_940: 0.394227 wall seconds</title></rect>
+<text x="523.57" y="268.75" text-anchor="middle" class="bar-note">394.2ms</text>
+<rect x="512.61" y="702.13" width="21.92" height="51.87" fill="#2f7bbd" rx="2"><title>VarTODD gf2^9_940: reduction 91; T-count 320 -> 229</title></rect>
+<text x="523.57" y="697.13" text-anchor="middle" class="bar-note">91</text>
+<rect x="540.53" y="234.37" width="21.92" height="150.63" fill="#d46a3a" rx="2"><title>FastTODD gf2^9_940: 2.68304 wall seconds</title></rect>
+<text x="551.49" y="229.37" text-anchor="middle" class="bar-note">2.7s</text>
+<rect x="540.53" y="682.75" width="21.92" height="71.25" fill="#d46a3a" rx="2"><title>FastTODD gf2^9_940: reduction 125; T-count 320 -> 195</title></rect>
+<text x="551.49" y="677.75" text-anchor="middle" class="bar-note">125</text>
+<text x="526.57" y="778.00" text-anchor="end" transform="rotate(-45 526.57 778.00)" class="tick">gf2^9_940</text>
+<rect x="590.90" y="257.03" width="21.92" height="127.97" fill="#2f7bbd" rx="2"><title>VarTODD gf2^10_1030: 0.889958 wall seconds</title></rect>
+<text x="601.86" y="252.03" text-anchor="middle" class="bar-note">890.0ms</text>
+<rect x="590.90" y="708.97" width="21.92" height="45.03" fill="#2f7bbd" rx="2"><title>VarTODD gf2^10_1030: reduction 79; T-count 334 -> 255</title></rect>
+<text x="601.86" y="703.97" text-anchor="middle" class="bar-note">79</text>
+<rect x="618.82" y="243.97" width="21.92" height="141.03" fill="#d46a3a" rx="2"><title>FastTODD gf2^10_1030: 1.68069 wall seconds</title></rect>
+<text x="629.78" y="238.97" text-anchor="middle" class="bar-note">1.7s</text>
+<rect x="618.82" y="693.01" width="21.92" height="60.99" fill="#d46a3a" rx="2"><title>FastTODD gf2^10_1030: reduction 107; T-count 334 -> 227</title></rect>
+<text x="629.78" y="688.01" text-anchor="middle" class="bar-note">107</text>
+<text x="604.86" y="778.00" text-anchor="end" transform="rotate(-45 604.86 778.00)" class="tick">gf2^10_1030</text>
+<rect x="669.18" y="243.82" width="21.92" height="141.18" fill="#2f7bbd" rx="2"><title>VarTODD gf2^11_1120: 1.69333 wall seconds</title></rect>
+<text x="680.14" y="238.82" text-anchor="middle" class="bar-note">1.7s</text>
+<rect x="669.18" y="700.99" width="21.92" height="53.01" fill="#2f7bbd" rx="2"><title>VarTODD gf2^11_1120: reduction 93; T-count 376 -> 283</title></rect>
+<text x="680.14" y="695.99" text-anchor="middle" class="bar-note">93</text>
+<rect x="697.10" y="223.28" width="21.92" height="161.72" fill="#d46a3a" rx="2"><title>FastTODD gf2^11_1120: 4.60464 wall seconds</title></rect>
+<text x="708.06" y="218.28" text-anchor="middle" class="bar-note">4.6s</text>
+<rect x="697.10" y="685.03" width="21.92" height="68.97" fill="#d46a3a" rx="2"><title>FastTODD gf2^11_1120: reduction 121; T-count 376 -> 255</title></rect>
+<text x="708.06" y="680.03" text-anchor="middle" class="bar-note">121</text>
+<text x="683.14" y="778.00" text-anchor="end" transform="rotate(-45 683.14 778.00)" class="tick">gf2^11_1120</text>
+<rect x="747.47" y="253.74" width="21.92" height="131.26" fill="#2f7bbd" rx="2"><title>VarTODD gf2^12_126410: 1.04466 wall seconds</title></rect>
+<text x="758.43" y="248.74" text-anchor="middle" class="bar-note">1.0s</text>
+<rect x="747.47" y="689.59" width="21.92" height="64.41" fill="#2f7bbd" rx="2"><title>VarTODD gf2^12_126410: reduction 113; T-count 396 -> 283</title></rect>
+<text x="758.43" y="684.59" text-anchor="middle" class="bar-note">113</text>
+<rect x="775.39" y="207.49" width="21.92" height="177.51" fill="#d46a3a" rx="2"><title>FastTODD gf2^12_126410: 9.93371 wall seconds</title></rect>
+<text x="786.35" y="202.49" text-anchor="middle" class="bar-note">9.9s</text>
+<rect x="775.39" y="688.45" width="21.92" height="65.55" fill="#d46a3a" rx="2"><title>FastTODD gf2^12_126410: reduction 115; T-count 396 -> 281</title></rect>
+<text x="786.35" y="683.45" text-anchor="middle" class="bar-note">115</text>
+<text x="761.43" y="778.00" text-anchor="end" transform="rotate(-45 761.43 778.00)" class="tick">gf2^12_126410</text>
+<rect x="825.75" y="240.09" width="21.92" height="144.91" fill="#2f7bbd" rx="2"><title>VarTODD gf2^13_134310: 2.03053 wall seconds</title></rect>
+<text x="836.71" y="235.09" text-anchor="middle" class="bar-note">2.0s</text>
+<rect x="825.75" y="677.05" width="21.92" height="76.95" fill="#2f7bbd" rx="2"><title>VarTODD gf2^13_134310: reduction 135; T-count 460 -> 325</title></rect>
+<text x="836.71" y="672.05" text-anchor="middle" class="bar-note">135</text>
+<rect x="853.67" y="194.32" width="21.92" height="190.68" fill="#d46a3a" rx="2"><title>FastTODD gf2^13_134310: 18.8697 wall seconds</title></rect>
+<text x="864.63" y="189.32" text-anchor="middle" class="bar-note">19s</text>
+<rect x="853.67" y="678.19" width="21.92" height="75.81" fill="#d46a3a" rx="2"><title>FastTODD gf2^13_134310: reduction 133; T-count 460 -> 327</title></rect>
+<text x="864.63" y="673.19" text-anchor="middle" class="bar-note">133</text>
+<text x="839.71" y="778.00" text-anchor="end" transform="rotate(-45 839.71 778.00)" class="tick">gf2^13_134310</text>
+<rect x="904.04" y="239.55" width="21.92" height="145.45" fill="#2f7bbd" rx="2"><title>VarTODD gf2^14_148610: 2.08417 wall seconds</title></rect>
+<text x="915.00" y="234.55" text-anchor="middle" class="bar-note">2.1s</text>
+<rect x="904.04" y="673.63" width="21.92" height="80.37" fill="#2f7bbd" rx="2"><title>VarTODD gf2^14_148610: reduction 141; T-count 492 -> 351</title></rect>
+<text x="915.00" y="668.63" text-anchor="middle" class="bar-note">141</text>
+<rect x="931.96" y="200.74" width="21.92" height="184.26" fill="#d46a3a" rx="2"><title>FastTODD gf2^14_148610: 13.8011 wall seconds</title></rect>
+<text x="942.92" y="195.74" text-anchor="middle" class="bar-note">14s</text>
+<rect x="931.96" y="679.33" width="21.92" height="74.67" fill="#d46a3a" rx="2"><title>FastTODD gf2^14_148610: reduction 131; T-count 492 -> 361</title></rect>
+<text x="942.92" y="674.33" text-anchor="middle" class="bar-note">131</text>
+<text x="918.00" y="778.00" text-anchor="end" transform="rotate(-45 918.00 778.00)" class="tick">gf2^14_148610</text>
+<rect x="982.33" y="225.91" width="21.92" height="159.09" fill="#2f7bbd" rx="2"><title>VarTODD gf2^15_1510: 4.05022 wall seconds</title></rect>
+<text x="993.29" y="220.91" text-anchor="middle" class="bar-note">4.1s</text>
+<rect x="982.33" y="667.93" width="21.92" height="86.07" fill="#2f7bbd" rx="2"><title>VarTODD gf2^15_1510: reduction 151; T-count 536 -> 385</title></rect>
+<text x="993.29" y="662.93" text-anchor="middle" class="bar-note">151</text>
+<rect x="1010.25" y="179.87" width="21.92" height="205.13" fill="#d46a3a" rx="2"><title>FastTODD gf2^15_1510: 38.1284 wall seconds</title></rect>
+<text x="1021.21" y="174.87" text-anchor="middle" class="bar-note">38s</text>
+<rect x="1010.25" y="671.35" width="21.92" height="82.65" fill="#d46a3a" rx="2"><title>FastTODD gf2^15_1510: reduction 145; T-count 536 -> 391</title></rect>
+<text x="1021.21" y="666.35" text-anchor="middle" class="bar-note">145</text>
+<text x="996.29" y="778.00" text-anchor="end" transform="rotate(-45 996.29 778.00)" class="tick">gf2^15_1510</text>
+<rect x="1060.61" y="221.48" width="21.92" height="163.52" fill="#2f7bbd" rx="2"><title>VarTODD gf2^16_1612310: 5.02616 wall seconds</title></rect>
+<text x="1071.57" y="216.48" text-anchor="middle" class="bar-note">5.0s</text>
+<rect x="1060.61" y="663.94" width="21.92" height="90.06" fill="#2f7bbd" rx="2"><title>VarTODD gf2^16_1612310: reduction 158; T-count 567 -> 409</title></rect>
+<text x="1071.57" y="658.94" text-anchor="middle" class="bar-note">158</text>
+<rect x="1088.53" y="187.45" width="21.92" height="197.55" fill="#d46a3a" rx="2"><title>FastTODD gf2^16_1612310: 26.3614 wall seconds</title></rect>
+<text x="1099.49" y="182.45" text-anchor="middle" class="bar-note">26s</text>
+<rect x="1088.53" y="671.92" width="21.92" height="82.08" fill="#d46a3a" rx="2"><title>FastTODD gf2^16_1612310: reduction 144; T-count 567 -> 423</title></rect>
+<text x="1099.49" y="666.92" text-anchor="middle" class="bar-note">144</text>
+<text x="1074.57" y="778.00" text-anchor="end" transform="rotate(-45 1074.57 778.00)" class="tick">gf2^16_1612310</text>
+<rect x="1138.90" y="138.18" width="21.92" height="246.82" fill="#2f7bbd" rx="2"><title>VarTODD gf2^32_3228320: 290.53 wall seconds</title></rect>
+<text x="1149.86" y="133.18" text-anchor="middle" class="bar-note">4.8m</text>
+<rect x="1138.90" y="486.10" width="21.92" height="267.90" fill="#2f7bbd" rx="2"><title>VarTODD gf2^32_3228320: reduction 470; T-count 1701 -> 1231</title></rect>
+<text x="1149.86" y="482.00" text-anchor="middle" class="bar-note">470</text>
+<rect x="1166.82" y="104.58" width="21.92" height="280.42" fill="#d46a3a" rx="2"><title>FastTODD gf2^32_3228320: 1491.86 wall seconds</title></rect>
+<text x="1177.78" y="113.00" text-anchor="middle" class="bar-note">24.9m</text>
+<rect x="1166.82" y="511.18" width="21.92" height="242.82" fill="#d46a3a" rx="2"><title>FastTODD gf2^32_3228320: reduction 426; T-count 1701 -> 1275</title></rect>
+<text x="1177.78" y="506.18" text-anchor="middle" class="bar-note">426</text>
+<text x="1152.86" y="778.00" text-anchor="end" transform="rotate(-45 1152.86 778.00)" class="tick">gf2^32_3228320</text>
+<rect x="942" y="18" width="16" height="16" fill="#2f7bbd" rx="2"/>
+<text x="966" y="31" class="label">VarTODD</text>
+<rect x="942" y="42" width="16" height="16" fill="#d46a3a" rx="2"/>
+<text x="966" y="55" class="label">FastTODD</text>
+<text x="22" y="242.50" transform="rotate(-90 22 242.50)" text-anchor="middle" class="label">wall seconds</text>
+<text x="22" y="611.50" transform="rotate(-90 22 611.50)" text-anchor="middle" class="label">T-count reduction</text>
+<text x="644.00" y="880" text-anchor="middle" class="label">GF circuit</text>
+</svg>

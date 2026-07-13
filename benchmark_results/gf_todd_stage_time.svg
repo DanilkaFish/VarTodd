@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1226" height="900" viewBox="0 0 1226 900">
+<style>
+text{font-family:Arial,Helvetica,sans-serif;fill:#1f2933} .tick{fill:#52616b;font-size:12px} .label{font-size:13px} .bar-note{font-size:10px;fill:#334e68;font-weight:700} .panel-title{font-size:16px;font-weight:700} .title{font-size:24px;font-weight:700} .subtitle{font-size:14px;fill:#52616b}
+</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="96" y="34" class="title">TODD stage and TOHPE action time by GF circuit</text>
+<text x="96" y="58" class="subtitle">TODD uses todd_seconds / todd_stages; TOHPE uses tohpe_seconds / tohpe_actions</text>
+<text x="96" y="82" class="panel-title">Time per TODD stage</text>
+<text x="96" y="451" class="panel-title">Time per TOHPE action</text>
+<line x1="96" y1="335.06" x2="1192" y2="335.06" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="339.06" text-anchor="end" class="tick">10 ms</text>
+<line x1="96" y1="284.71" x2="1192" y2="284.71" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="288.71" text-anchor="end" class="tick">100 ms</text>
+<line x1="96" y1="234.36" x2="1192" y2="234.36" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="238.36" text-anchor="end" class="tick">1 s</text>
+<line x1="96" y1="184.01" x2="1192" y2="184.01" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="188.01" text-anchor="end" class="tick">10 s</text>
+<line x1="96" y1="133.66" x2="1192" y2="133.66" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="137.66" text-anchor="end" class="tick">100 s</text>
+<line x1="96" y1="736.49" x2="1192" y2="736.49" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="740.49" text-anchor="end" class="tick">100 us</text>
+<line x1="96" y1="708.09" x2="1192" y2="708.09" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="712.09" text-anchor="end" class="tick">200 us</text>
+<line x1="96" y1="670.54" x2="1192" y2="670.54" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="674.54" text-anchor="end" class="tick">500 us</text>
+<line x1="96" y1="642.14" x2="1192" y2="642.14" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="646.14" text-anchor="end" class="tick">1 ms</text>
+<line x1="96" y1="613.74" x2="1192" y2="613.74" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="617.74" text-anchor="end" class="tick">2 ms</text>
+<line x1="96" y1="576.19" x2="1192" y2="576.19" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="580.19" text-anchor="end" class="tick">5 ms</text>
+<line x1="96" y1="547.79" x2="1192" y2="547.79" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="551.79" text-anchor="end" class="tick">10 ms</text>
+<line x1="96" y1="519.39" x2="1192" y2="519.39" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="523.39" text-anchor="end" class="tick">20 ms</text>
+<line x1="96" y1="481.84" x2="1192" y2="481.84" stroke="#e4e7eb" stroke-width="1"/>
+<text x="86" y="485.84" text-anchor="end" class="tick">50 ms</text>
+<line x1="96" y1="100" x2="96" y2="385.00" stroke="#9aa5b1" stroke-width="1"/>
+<line x1="96" y1="385.00" x2="1192" y2="385.00" stroke="#9aa5b1" stroke-width="1"/>
+<line x1="96" y1="469" x2="96" y2="754.00" stroke="#9aa5b1" stroke-width="1"/>
+<line x1="96" y1="754.00" x2="1192" y2="754.00" stroke="#9aa5b1" stroke-width="1"/>
+<rect x="121.18" y="378.71" width="21.92" height="6.29" fill="#2f7bbd" rx="2"><title>VarTODD gf2^4_410: 0.00135835 s/TODD stage; iterations 1; TODD stages 1</title></rect>
+<text x="132.14" y="373.71" text-anchor="middle" class="bar-note">1.4ms</text>
+<rect x="121.18" y="742.21" width="21.92" height="11.79" fill="#2f7bbd" rx="2"><title>VarTODD gf2^4_410: 8.69658e-05 s/TOHPE action; iterations 1; TOHPE stages 1; TOHPE actions 5</title></rect>
+<text x="132.14" y="737.21" text-anchor="middle" class="bar-note">87us</text>
+<rect x="149.10" y="351.33" width="21.92" height="33.67" fill="#d46a3a" rx="2"><title>FastTODD gf2^4_410: 0.0047507 s/TODD stage; iterations 1; TODD stages 1</title></rect>
+<text x="160.06" y="346.33" text-anchor="middle" class="bar-note">4.8ms</text>
+<rect x="149.10" y="739.61" width="21.92" height="14.39" fill="#d46a3a" rx="2"><title>FastTODD gf2^4_410: 9.26764e-05 s/TOHPE action; iterations 1; TOHPE stages 1; TOHPE actions 5</title></rect>
+<text x="160.06" y="734.61" text-anchor="middle" class="bar-note">93us</text>
+<text x="135.14" y="778.00" text-anchor="end" transform="rotate(-45 135.14 778.00)" class="tick">gf2^4_410</text>
+<rect x="199.47" y="354.23" width="21.92" height="30.77" fill="#2f7bbd" rx="2"><title>VarTODD gf2^5_520: 0.00416052 s/TODD stage; iterations 1; TODD stages 1</title></rect>
+<text x="210.43" y="349.23" text-anchor="middle" class="bar-note">4.2ms</text>
+<rect x="199.47" y="710.81" width="21.92" height="43.19" fill="#2f7bbd" rx="2"><title>VarTODD gf2^5_520: 0.000187145 s/TOHPE action; iterations 1; TOHPE stages 1; TOHPE actions 5</title></rect>
+<text x="210.43" y="705.81" text-anchor="middle" class="bar-note">187us</text>
+<rect x="227.39" y="323.54" width="21.92" height="61.46" fill="#d46a3a" rx="2"><title>FastTODD gf2^5_520: 0.0169306 s/TODD stage; iterations 2; TODD stages 2</title></rect>
+<text x="238.35" y="318.54" text-anchor="middle" class="bar-note">16.9ms</text>
+<rect x="227.39" y="715.07" width="21.92" height="38.93" fill="#d46a3a" rx="2"><title>FastTODD gf2^5_520: 0.000168676 s/TOHPE action; iterations 2; TOHPE stages 2; TOHPE actions 7</title></rect>
+<text x="238.35" y="710.07" text-anchor="middle" class="bar-note">169us</text>
+<text x="213.43" y="778.00" text-anchor="end" transform="rotate(-45 213.43 778.00)" class="tick">gf2^5_520</text>
+<rect x="277.75" y="331.08" width="21.92" height="53.92" fill="#2f7bbd" rx="2"><title>VarTODD gf2^6_610: 0.0119921 s/TODD stage; iterations 3; TODD stages 3</title></rect>
+<text x="288.71" y="326.08" text-anchor="middle" class="bar-note">12.0ms</text>
+<rect x="277.75" y="670.82" width="21.92" height="83.18" fill="#2f7bbd" rx="2"><title>VarTODD gf2^6_610: 0.000496628 s/TOHPE action; iterations 3; TOHPE stages 3; TOHPE actions 6</title></rect>
+<text x="288.71" y="665.82" text-anchor="middle" class="bar-note">497us</text>
+<rect x="305.67" y="306.76" width="21.92" height="78.24" fill="#d46a3a" rx="2"><title>FastTODD gf2^6_610: 0.0364675 s/TODD stage; iterations 2; TODD stages 2</title></rect>
+<text x="316.63" y="301.76" text-anchor="middle" class="bar-note">36.5ms</text>
+<rect x="305.67" y="724.51" width="21.92" height="29.49" fill="#d46a3a" rx="2"><title>FastTODD gf2^6_610: 0.000133963 s/TOHPE action; iterations 2; TOHPE stages 2; TOHPE actions 10</title></rect>
+<text x="316.63" y="719.51" text-anchor="middle" class="bar-note">134us</text>
+<text x="291.71" y="778.00" text-anchor="end" transform="rotate(-45 291.71 778.00)" class="tick">gf2^6_610</text>
+<rect x="356.04" y="321.68" width="21.92" height="63.32" fill="#2f7bbd" rx="2"><title>VarTODD gf2^7_710: 0.0184391 s/TODD stage; iterations 7; TODD stages 7</title></rect>
+<text x="367.00" y="316.68" text-anchor="middle" class="bar-note">18.4ms</text>
+<rect x="356.04" y="652.84" width="21.92" height="101.16" fill="#2f7bbd" rx="2"><title>VarTODD gf2^7_710: 0.000770189 s/TOHPE action; iterations 7; TOHPE stages 7; TOHPE actions 12</title></rect>
+<text x="367.00" y="647.84" text-anchor="middle" class="bar-note">770us</text>
+<rect x="383.96" y="293.16" width="21.92" height="91.84" fill="#d46a3a" rx="2"><title>FastTODD gf2^7_710: 0.067931 s/TODD stage; iterations 6; TODD stages 6</title></rect>
+<text x="394.92" y="288.16" text-anchor="middle" class="bar-note">67.9ms</text>
+<rect x="383.96" y="695.61" width="21.92" height="58.39" fill="#d46a3a" rx="2"><title>FastTODD gf2^7_710: 0.000271194 s/TOHPE action; iterations 6; TOHPE stages 6; TOHPE actions 14</title></rect>
+<text x="394.92" y="690.61" text-anchor="middle" class="bar-note">271us</text>
+<text x="370.00" y="778.00" text-anchor="end" transform="rotate(-45 370.00 778.00)" class="tick">gf2^7_710</text>
+<rect x="434.33" y="313.59" width="21.92" height="71.41" fill="#2f7bbd" rx="2"><title>VarTODD gf2^8_84320: 0.0266886 s/TODD stage; iterations 2; TODD stages 2</title></rect>
+<text x="445.29" y="308.59" text-anchor="middle" class="bar-note">26.7ms</text>
+<rect x="434.33" y="652.61" width="21.92" height="101.39" fill="#2f7bbd" rx="2"><title>VarTODD gf2^8_84320: 0.000774569 s/TOHPE action; iterations 2; TOHPE stages 2; TOHPE actions 14</title></rect>
+<text x="445.29" y="647.61" text-anchor="middle" class="bar-note">775us</text>
+<rect x="462.25" y="282.24" width="21.92" height="102.76" fill="#d46a3a" rx="2"><title>FastTODD gf2^8_84320: 0.111933 s/TODD stage; iterations 1; TODD stages 1</title></rect>
+<text x="473.21" y="277.24" text-anchor="middle" class="bar-note">111.9ms</text>
+<rect x="462.25" y="715.02" width="21.92" height="38.98" fill="#d46a3a" rx="2"><title>FastTODD gf2^8_84320: 0.000168883 s/TOHPE action; iterations 1; TOHPE stages 1; TOHPE actions 15</title></rect>
+<text x="473.21" y="710.02" text-anchor="middle" class="bar-note">169us</text>
+<text x="448.29" y="778.00" text-anchor="end" transform="rotate(-45 448.29 778.00)" class="tick">gf2^8_84320</text>
+<rect x="512.61" y="286.73" width="21.92" height="98.27" fill="#2f7bbd" rx="2"><title>VarTODD gf2^9_940: 0.0911622 s/TODD stage; iterations 4; TODD stages 4</title></rect>
+<text x="523.57" y="281.73" text-anchor="middle" class="bar-note">91.2ms</text>
+<rect x="512.61" y="594.40" width="21.92" height="159.60" fill="#2f7bbd" rx="2"><title>VarTODD gf2^9_940: 0.0032063 s/TOHPE action; iterations 4; TOHPE stages 4; TOHPE actions 9</title></rect>
+<text x="523.57" y="589.40" text-anchor="middle" class="bar-note">3.2ms</text>
+<rect x="540.53" y="258.33" width="21.92" height="126.67" fill="#d46a3a" rx="2"><title>FastTODD gf2^9_940: 0.334064 s/TODD stage; iterations 8; TODD stages 8</title></rect>
+<text x="551.49" y="253.33" text-anchor="middle" class="bar-note">334.1ms</text>
+<rect x="540.53" y="680.52" width="21.92" height="73.48" fill="#d46a3a" rx="2"><title>FastTODD gf2^9_940: 0.000391945 s/TOHPE action; iterations 8; TOHPE stages 8; TOHPE actions 23</title></rect>
+<text x="551.49" y="675.52" text-anchor="middle" class="bar-note">392us</text>
+<text x="526.57" y="778.00" text-anchor="end" transform="rotate(-45 526.57 778.00)" class="tick">gf2^9_940</text>
+<rect x="590.90" y="277.08" width="21.92" height="107.92" fill="#2f7bbd" rx="2"><title>VarTODD gf2^10_1030: 0.141709 s/TODD stage; iterations 6; TODD stages 6</title></rect>
+<text x="601.86" y="272.08" text-anchor="middle" class="bar-note">141.7ms</text>
+<rect x="590.90" y="586.19" width="21.92" height="167.81" fill="#2f7bbd" rx="2"><title>VarTODD gf2^10_1030: 0.00391755 s/TOHPE action; iterations 6; TOHPE stages 6; TOHPE actions 10</title></rect>
+<text x="601.86" y="581.19" text-anchor="middle" class="bar-note">3.9ms</text>
+<rect x="618.82" y="247.15" width="21.92" height="137.85" fill="#d46a3a" rx="2"><title>FastTODD gf2^10_1030: 0.557006 s/TODD stage; iterations 3; TODD stages 3</title></rect>
+<text x="629.78" y="242.15" text-anchor="middle" class="bar-note">557.0ms</text>
+<rect x="618.82" y="685.45" width="21.92" height="68.55" fill="#d46a3a" rx="2"><title>FastTODD gf2^10_1030: 0.000347543 s/TOHPE action; iterations 3; TOHPE stages 3; TOHPE actions 26</title></rect>
+<text x="629.78" y="680.45" text-anchor="middle" class="bar-note">348us</text>
+<text x="604.86" y="778.00" text-anchor="end" transform="rotate(-45 604.86 778.00)" class="tick">gf2^10_1030</text>
+<rect x="669.18" y="269.18" width="21.92" height="115.82" fill="#2f7bbd" rx="2"><title>VarTODD gf2^11_1120: 0.203376 s/TODD stage; iterations 8; TODD stages 8</title></rect>
+<text x="680.14" y="264.18" text-anchor="middle" class="bar-note">203.4ms</text>
+<rect x="669.18" y="584.22" width="21.92" height="169.78" fill="#2f7bbd" rx="2"><title>VarTODD gf2^11_1120: 0.00411041 s/TOHPE action; iterations 8; TOHPE stages 8; TOHPE actions 16</title></rect>
+<text x="680.14" y="579.22" text-anchor="middle" class="bar-note">4.1ms</text>
+<rect x="697.10" y="236.23" width="21.92" height="148.77" fill="#d46a3a" rx="2"><title>FastTODD gf2^11_1120: 0.917746 s/TODD stage; iterations 5; TODD stages 5</title></rect>
+<text x="708.06" y="231.23" text-anchor="middle" class="bar-note">917.7ms</text>
+<rect x="697.10" y="672.99" width="21.92" height="81.01" fill="#d46a3a" rx="2"><title>FastTODD gf2^11_1120: 0.000470983 s/TOHPE action; iterations 5; TOHPE stages 5; TOHPE actions 31</title></rect>
+<text x="708.06" y="667.99" text-anchor="middle" class="bar-note">471us</text>
+<text x="683.14" y="778.00" text-anchor="end" transform="rotate(-45 683.14 778.00)" class="tick">gf2^11_1120</text>
+<rect x="747.47" y="270.48" width="21.92" height="114.52" fill="#2f7bbd" rx="2"><title>VarTODD gf2^12_126410: 0.191631 s/TODD stage; iterations 5; TODD stages 5</title></rect>
+<text x="758.43" y="265.48" text-anchor="middle" class="bar-note">191.6ms</text>
+<rect x="747.47" y="596.69" width="21.92" height="157.31" fill="#2f7bbd" rx="2"><title>VarTODD gf2^12_126410: 0.00303177 s/TOHPE action; iterations 5; TOHPE stages 5; TOHPE actions 28</title></rect>
+<text x="758.43" y="591.69" text-anchor="middle" class="bar-note">3.0ms</text>
+<rect x="775.39" y="226.76" width="21.92" height="158.24" fill="#d46a3a" rx="2"><title>FastTODD gf2^12_126410: 1.41566 s/TODD stage; iterations 7; TODD stages 7</title></rect>
+<text x="786.35" y="221.76" text-anchor="middle" class="bar-note">1.4s</text>
+<rect x="775.39" y="654.75" width="21.92" height="99.25" fill="#d46a3a" rx="2"><title>FastTODD gf2^12_126410: 0.000735039 s/TOHPE action; iterations 7; TOHPE stages 7; TOHPE actions 30</title></rect>
+<text x="786.35" y="649.75" text-anchor="middle" class="bar-note">735us</text>
+<text x="761.43" y="778.00" text-anchor="end" transform="rotate(-45 761.43 778.00)" class="tick">gf2^12_126410</text>
+<rect x="825.75" y="259.68" width="21.92" height="125.32" fill="#2f7bbd" rx="2"><title>VarTODD gf2^13_134310: 0.314095 s/TODD stage; iterations 6; TODD stages 6</title></rect>
+<text x="836.71" y="254.68" text-anchor="middle" class="bar-note">314.1ms</text>
+<rect x="825.75" y="584.09" width="21.92" height="169.91" fill="#2f7bbd" rx="2"><title>VarTODD gf2^13_134310: 0.00412326 s/TOHPE action; iterations 6; TOHPE stages 6; TOHPE actions 35</title></rect>
+<text x="836.71" y="579.09" text-anchor="middle" class="bar-note">4.1ms</text>
+<rect x="853.67" y="215.62" width="21.92" height="169.38" fill="#d46a3a" rx="2"><title>FastTODD gf2^13_134310: 2.35554 s/TODD stage; iterations 8; TODD stages 8</title></rect>
+<text x="864.63" y="210.62" text-anchor="middle" class="bar-note">2.4s</text>
+<rect x="853.67" y="660.76" width="21.92" height="93.24" fill="#d46a3a" rx="2"><title>FastTODD gf2^13_134310: 0.000634736 s/TOHPE action; iterations 8; TOHPE stages 8; TOHPE actions 36</title></rect>
+<text x="864.63" y="655.76" text-anchor="middle" class="bar-note">635us</text>
+<text x="839.71" y="778.00" text-anchor="end" transform="rotate(-45 839.71 778.00)" class="tick">gf2^13_134310</text>
+<rect x="904.04" y="255.36" width="21.92" height="129.64" fill="#2f7bbd" rx="2"><title>VarTODD gf2^14_148610: 0.382787 s/TODD stage; iterations 5; TODD stages 5</title></rect>
+<text x="915.00" y="250.36" text-anchor="middle" class="bar-note">382.8ms</text>
+<rect x="904.04" y="579.98" width="21.92" height="174.02" fill="#2f7bbd" rx="2"><title>VarTODD gf2^14_148610: 0.0045588 s/TOHPE action; iterations 5; TOHPE stages 5; TOHPE actions 37</title></rect>
+<text x="915.00" y="574.98" text-anchor="middle" class="bar-note">4.6ms</text>
+<rect x="931.96" y="207.32" width="21.92" height="177.68" fill="#d46a3a" rx="2"><title>FastTODD gf2^14_148610: 3.44393 s/TODD stage; iterations 4; TODD stages 4</title></rect>
+<text x="942.92" y="202.32" text-anchor="middle" class="bar-note">3.4s</text>
+<rect x="931.96" y="660.63" width="21.92" height="93.37" fill="#d46a3a" rx="2"><title>FastTODD gf2^14_148610: 0.000636798 s/TOHPE action; iterations 4; TOHPE stages 4; TOHPE actions 38</title></rect>
+<text x="942.92" y="655.63" text-anchor="middle" class="bar-note">637us</text>
+<text x="918.00" y="778.00" text-anchor="end" transform="rotate(-45 918.00 778.00)" class="tick">gf2^14_148610</text>
+<rect x="982.33" y="247.52" width="21.92" height="137.48" fill="#2f7bbd" rx="2"><title>VarTODD gf2^15_1510: 0.547688 s/TODD stage; iterations 7; TODD stages 7</title></rect>
+<text x="993.29" y="242.52" text-anchor="middle" class="bar-note">547.7ms</text>
+<rect x="982.33" y="575.39" width="21.92" height="178.61" fill="#2f7bbd" rx="2"><title>VarTODD gf2^15_1510: 0.00509822 s/TOHPE action; iterations 7; TOHPE stages 7; TOHPE actions 42</title></rect>
+<text x="993.29" y="570.39" text-anchor="middle" class="bar-note">5.1ms</text>
+<rect x="1010.25" y="200.23" width="21.92" height="184.77" fill="#d46a3a" rx="2"><title>FastTODD gf2^15_1510: 4.76141 s/TODD stage; iterations 8; TODD stages 8</title></rect>
+<text x="1021.21" y="195.23" text-anchor="middle" class="bar-note">4.8s</text>
+<rect x="1010.25" y="649.55" width="21.92" height="104.45" fill="#d46a3a" rx="2"><title>FastTODD gf2^15_1510: 0.000834549 s/TOHPE action; iterations 8; TOHPE stages 8; TOHPE actions 41</title></rect>
+<text x="1021.21" y="644.55" text-anchor="middle" class="bar-note">835us</text>
+<text x="996.29" y="778.00" text-anchor="end" transform="rotate(-45 996.29 778.00)" class="tick">gf2^15_1510</text>
+<rect x="1060.61" y="242.90" width="21.92" height="142.10" fill="#2f7bbd" rx="2"><title>VarTODD gf2^16_1612310: 0.676731 s/TODD stage; iterations 7; TODD stages 7</title></rect>
+<text x="1071.57" y="237.90" text-anchor="middle" class="bar-note">676.7ms</text>
+<rect x="1060.61" y="564.21" width="21.92" height="189.79" fill="#2f7bbd" rx="2"><title>VarTODD gf2^16_1612310: 0.00669786 s/TOHPE action; iterations 7; TOHPE stages 7; TOHPE actions 43</title></rect>
+<text x="1071.57" y="559.21" text-anchor="middle" class="bar-note">6.7ms</text>
+<rect x="1088.53" y="193.16" width="21.92" height="191.84" fill="#d46a3a" rx="2"><title>FastTODD gf2^16_1612310: 6.58103 s/TODD stage; iterations 4; TODD stages 4</title></rect>
+<text x="1099.49" y="188.16" text-anchor="middle" class="bar-note">6.6s</text>
+<rect x="1088.53" y="649.51" width="21.92" height="104.49" fill="#d46a3a" rx="2"><title>FastTODD gf2^16_1612310: 0.000835406 s/TOHPE action; iterations 4; TOHPE stages 4; TOHPE actions 43</title></rect>
+<text x="1099.49" y="644.51" text-anchor="middle" class="bar-note">835us</text>
+<text x="1074.57" y="778.00" text-anchor="end" transform="rotate(-45 1074.57 778.00)" class="tick">gf2^16_1612310</text>
+<rect x="1138.90" y="158.95" width="21.92" height="226.05" fill="#2f7bbd" rx="2"><title>VarTODD gf2^32_3228320: 31.4531 s/TODD stage; iterations 9; TODD stages 9</title></rect>
+<text x="1149.86" y="153.95" text-anchor="middle" class="bar-note">31s</text>
+<rect x="1138.90" y="478.14" width="21.92" height="275.86" fill="#2f7bbd" rx="2"><title>VarTODD gf2^32_3228320: 0.0547218 s/TOHPE action; iterations 9; TOHPE stages 9; TOHPE actions 136</title></rect>
+<text x="1149.86" y="482.00" text-anchor="middle" class="bar-note">54.7ms</text>
+<rect x="1166.82" y="104.88" width="21.92" height="280.12" fill="#d46a3a" rx="2"><title>FastTODD gf2^32_3228320: 372.881 s/TODD stage; iterations 4; TODD stages 4</title></rect>
+<text x="1177.78" y="113.00" text-anchor="middle" class="bar-note">6.2m</text>
+<rect x="1166.82" y="602.81" width="21.92" height="151.19" fill="#d46a3a" rx="2"><title>FastTODD gf2^32_3228320: 0.00261122 s/TOHPE action; iterations 4; TOHPE stages 4; TOHPE actions 127</title></rect>
+<text x="1177.78" y="597.81" text-anchor="middle" class="bar-note">2.6ms</text>
+<text x="1152.86" y="778.00" text-anchor="end" transform="rotate(-45 1152.86 778.00)" class="tick">gf2^32_3228320</text>
+<rect x="942" y="18" width="16" height="16" fill="#2f7bbd" rx="2"/>
+<text x="966" y="31" class="label">VarTODD</text>
+<rect x="942" y="42" width="16" height="16" fill="#d46a3a" rx="2"/>
+<text x="966" y="55" class="label">FastTODD</text>
+<text x="22" y="242.50" transform="rotate(-90 22 242.50)" text-anchor="middle" class="label">seconds per TODD stage</text>
+<text x="22" y="611.50" transform="rotate(-90 22 611.50)" text-anchor="middle" class="label">seconds per TOHPE action</text>
+<text x="644.00" y="880" text-anchor="middle" class="label">GF circuit</text>
+</svg>

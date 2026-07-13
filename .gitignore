@@ -10,7 +10,7 @@ outcmaes*
 .agents
 
 # Generated artifacts
-benchmark_results/
+# benchmark_results/
 data/path_backups/
 # data/baseline_npy/**/*.npy
 # data/baseline_npy/**/*.npz
