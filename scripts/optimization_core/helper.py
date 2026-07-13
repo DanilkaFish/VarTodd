@@ -7,53 +7,36 @@ from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-try:
-    from .mcts_dao import Dao, Path, RankSchedule
-    from .node import (
-        ActionPool,
-        ActionSelection,
-        ExplorationScore,
-        FinalizationScore,
-        Matrix,
-        Node,
-        PolicyScores,
-        SamplingBudget,
-        SourcePool,
-        Tensor3D,
-        ToddSearch,
-        TohpeSearch,
-        ZBucketSearch,
-    )
-    from .path_store import PathStore, X0_LENGTH
-    from .todd import Todd
-except ImportError:  # kept for generated scripts that import helper as a flat module
-    from mcts_dao import Dao, Path, RankSchedule
-    from node import (
-        ActionPool,
-        ActionSelection,
-        ExplorationScore,
-        FinalizationScore,
-        Matrix,
-        Node,
-        PolicyScores,
-        SamplingBudget,
-        SourcePool,
-        Tensor3D,
-        ToddSearch,
-        TohpeSearch,
-        ZBucketSearch,
-    )
-    from path_store import PathStore, X0_LENGTH
-    from todd import Todd
+from .mcts_dao import RANK_SCHEDULE_SENTINEL, Dao, Path, RankSchedule
+from .node import (
+    ActionPool,
+    ActionSelection,
+    ExplorationScore,
+    FinalizationScore,
+    Matrix,
+    Node,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    Tensor3D,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
+from .path_store import PathStore, X0_LENGTH
+from .todd import Todd
 
-MIN_SAVED_PATH_MARGIN = 5
-DEFAULT_MATRIX_PATH = "npy/gf2^32_3228310.npy"
+MIN_SAVED_PATH_MARGIN = 1
+DEFAULT_MATRIX_PATH = os.getenv(
+    "VARTODD_DEFAULT_MATRIX",
+    "data/init_npy/gf_mult_Vandaele_wo_ancilla/gf2^16_1612310.npy",
+)
 EXECUTOR_KIND = os.getenv("EVO_SEED_EXECUTOR_KIND", "thread")
 PROGRAM_ID: Optional[str] = os.getenv("GIGAEVO_PROGRAM_ID")
 ACTIVE_EVALUATOR: Optional["BaseEvaluator"] = None
-DEFAULT_SEED_WORKERS = 1
+DEFAULT_SEED_WORKERS = min(2, os.cpu_count() or 1)
 DEFAULT_MAX_DEPTH = 10_000
-TARGET_FINAL_RANK = int(os.getenv("VARTODD_TARGET_FINAL_RANK", "1211"))
+TARGET_FINAL_RANK = int(os.getenv("VARTODD_TARGET_FINAL_RANK", "380"))
 
 
 class GracefulEvaluationTimeout(RuntimeError):
@@ -114,12 +97,10 @@ def _worker_run_one_from_template(
     seed: int,
     path: Path,
     todd: Todd,
-    bs_width: RankSchedule = RankSchedule.constant(1),
-    todd_width: RankSchedule = RankSchedule.constant(1),
 ):
     # Todd.run only reads the incoming path and creates new child nodes.
     # Deep-copying a GF(2^64) path can recurse through ~1000 Node.parent links.
-    node, counters = todd.run(path, bs_width, todd_width, True, seed)
+    node, counters = todd.run(path, True, seed)
     return seed, node, counters
 
 
@@ -128,8 +109,8 @@ def _copy_path_header(path: Path) -> Path:
     new_path.final_node = path.final_node
     new_path.ranks_thr = list(path.ranks_thr)
     new_path.daos = deepcopy(path.daos)
-    new_path.bs_widths = deepcopy(path.bs_widths)
-    new_path.todd_widths = deepcopy(path.todd_widths)
+    new_path.bs_widths = deepcopy(getattr(path, "bs_widths", []))
+    new_path.todd_widths = deepcopy(getattr(path, "todd_widths", []))
     new_path.active_params = deepcopy(path.active_params)
     new_path.x0s = deepcopy(path.x0s)
     return new_path
@@ -173,6 +154,13 @@ def _rank_args(x: Any = None, vals=None, *, ranks=None, values=None):
     def paired(rank_values, scheduled_values):
         rank_values = list(rank_values)
         scheduled_values = list(scheduled_values)
+        if len(rank_values) == len(scheduled_values) - 1:
+            # Common mistake: N-1 thresholds given as "boundaries" for N
+            # values, forgetting the leading value's own threshold. Prepend
+            # the sentinel rank so values[0] pairs with ranks[0] and stays
+            # active from the start — RankSchedule.__post_init__ would force
+            # the highest-rank point to this same sentinel anyway.
+            rank_values = [RANK_SCHEDULE_SENTINEL] + rank_values
         if len(rank_values) != len(scheduled_values):
             raise ValueError(
                 "rank schedule requires the same number of ranks and values "
@@ -194,6 +182,24 @@ def _rank_args(x: Any = None, vals=None, *, ranks=None, values=None):
         raise TypeError("missing schedule value")
     return x
 
+def _to_sample_caps(x: Any) -> List[int]:
+    if isinstance(x, bool) or isinstance(x, (int, float)):
+        return [max(0, int(x)), 0, 0]
+    values = list(x)
+    if len(values) != 3:
+        raise ValueError(f"sample caps must have exactly 3 values: [one_hot, sparse, dense], got {x!r}")
+    return [max(0, int(v)) for v in values]
+
+def _to_caps_rank_schedule(x: Any) -> "RankSchedule":
+    """Accept RankSchedule | [(rank, [one_hot, sparse, dense]), ...] | caps."""
+    if isinstance(x, RankSchedule):
+        return x
+    if isinstance(x, zip):
+        x = [obj for obj in x]
+    if _is_rank_list(x):
+        return RankSchedule.from_any([(rank, _to_sample_caps(value)) for (rank, value) in x])
+    return RankSchedule.constant(_to_sample_caps(x))
+
 def _converted_rank_schedule(x: Any, convert):
     if isinstance(x, RankSchedule):
         return RankSchedule.from_any([(rank, convert(value)) for rank, value in x.points])
@@ -202,6 +208,26 @@ def _converted_rank_schedule(x: Any, convert):
     if _is_rank_list(x):
         return RankSchedule.from_any([(rank, convert(value)) for rank, value in x])
     return RankSchedule.constant(convert(x))
+
+def _to_erank_schedule(x: Any) -> "RankSchedule":
+    """Accept RankSchedule | [(rank, value), ...] | scalar and return RankSchedule."""
+    if isinstance(x, RankSchedule):
+        return x
+    if isinstance(x, zip):
+        x = [obj for obj in x]
+    if _is_rank_list(x):
+        return RankSchedule.from_any([(rank, _to_exploration_score(el)) for (rank, el) in x])
+    return RankSchedule.constant(_to_exploration_score(x))
+
+def _to_frank_schedule(x: Any) -> "RankSchedule":
+    """Accept RankSchedule | [(rank, value), ...] | scalar and return RankSchedule."""
+    if isinstance(x, RankSchedule):
+        return x
+    if isinstance(x, zip):
+        x = [obj for obj in x]
+    if _is_rank_list(x):
+        return RankSchedule.from_any([(rank, _to_finalization_score(el)) for (rank, el) in x])
+    return RankSchedule.constant(_to_finalization_score(x))
 
 def _to_exploration_score(x: Any) -> "ExplorationScore":
     """Accept ExplorationScore | (wred, wdim, wpossible_red) and return ExplorationScore."""
@@ -337,10 +363,90 @@ def _to_todd_search(x: Any) -> "ToddSearch":
 def _to_todd_search_schedule(x: Any) -> "RankSchedule":
     return _converted_rank_schedule(x, _to_todd_search)
 
-def _action_counts_schedule(selection: "RankSchedule") -> "RankSchedule":
-    return RankSchedule.from_any([(rank, int(value.count)) for rank, value in selection.points])
+def float_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
+    output_r = []
+    output_v = []
+    for i, ds in enumerate(dss):
+        down = ranks[i]
+        up = ranks[i-1] if i > 0 else 1000000
+        for r, v in ds.points:
+            if r < up and r >= down:
+                output_r.append(r)
+                output_v.append(float(f"{float(v):.3f}"))
+            elif r < down:
+                output_r.append(down)
+                output_v.append(float(f"{float(v):.3f}"))
+                break
+    return [tuple(output_r), tuple(output_v)]
 
-def _rank_schedule_report(dss: List[RankSchedule], ranks: List[int], convert):
+def int_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
+    output_r = []
+    output_v = []
+    for i, ds in enumerate(dss):
+        down = ranks[i]
+        up = ranks[i-1] if i > 0 else 1000000
+        for r, v in ds.points:
+            if r < up and r >= down:
+                output_r.append(r)
+                output_v.append(int(v))
+            elif r < down:
+                output_r.append(down)
+                output_v.append(int(v))
+                break
+    return [tuple(output_r), tuple(output_v)]
+
+def caps_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
+    output_r = []
+    output_v = []
+    for i, ds in enumerate(dss):
+        down = ranks[i]
+        up = ranks[i-1] if i > 0 else 1000000
+        for r, v in ds.points:
+            if r < up and r >= down:
+                output_r.append(r)
+                output_v.append(tuple(_to_sample_caps(v)))
+            elif r < down:
+                output_r.append(down)
+                output_v.append(tuple(_to_sample_caps(v)))
+                break
+    return [tuple(output_r), tuple(output_v)]
+
+def score_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int]):
+    output_r = []
+    output_v = []
+    for i, ds in enumerate(dss):
+        down = ranks[i]
+        up = ranks[i-1] if i > 0 else 1000000
+        for r, v in ds.points:
+            if r < up and r >= down:
+                output_r.append(r)
+                weights = [float(f"{v[i]:.3f}") for i in range(len(v))]
+                centers = [float(f"{v[i+len(v)]:.3f}") for i in range(len(v))]
+                power = float(f"{v.pow():.3f}")
+                output = "("
+                if any(weights):
+                    output = output + f"{weights=},"
+                if any(centers):
+                    output = output + f"{centers=},"
+                output = output + f"{power=})"
+                output_v.append(output)
+                # output_v.append(f"{weights=}, {centers=}, {pow=}")
+            elif r < down:
+                output_r.append(down)
+                weights = [float(f"{v[i]:.3f}") for i in range(len(v))]
+                centers = [float(f"{v[i+len(v)]:.3f}") for i in range(len(v))]
+                power = float(f"{v.pow():.3f}")
+                output = "("
+                if any(weights):
+                    output = output + f"{weights=},"
+                if any(centers):
+                    output = output + f"{centers=},"
+                output = output + f"{power=})"
+                output_v.append(output)
+                break
+    return [tuple(output_r), tuple(output_v)]
+
+def object_rank_shedule_to_str(dss: List[RankSchedule], ranks: List[int], convert):
     output_r = []
     output_v = []
     for i, ds in enumerate(dss):
@@ -358,32 +464,32 @@ def _rank_schedule_report(dss: List[RankSchedule], ranks: List[int], convert):
     
 def dao_rank_to_str(daos: List[Dao], ranks: List[int]):
     out = {}
-    out["action_selection"] = _rank_schedule_report(
+    out["action_selection"] = object_rank_shedule_to_str(
         [dao.mode.selection for dao in daos],
         ranks,
-        lambda s: f"count:{int(s.count)}/mode:{s.mode}/temp:{float(s.temperature):.3f}",
+        lambda s: f"beamwidth:{int(s.count)}/mode:{s.mode}/temp:{float(s.temperature):.3f}",
     )
-    out["action_pool"] = _rank_schedule_report(
+    out["action_pool"] = object_rank_shedule_to_str(
         [dao.mode.pool for dao in daos],
         ranks,
         lambda p: f"final:{int(p.final_size)}",
     )
-    out["tohpe"] = _rank_schedule_report(
+    out["tohpe"] = object_rank_shedule_to_str(
         [dao.mode.tohpe for dao in daos],
         ranks,
         lambda t: f"pool:{int(t.pool.keep)}/{int(t.pool.reserve)} z:{int(t.z_choices)} sampling:{t.sampling}",
     )
-    out["todd"] = _rank_schedule_report(
+    out["todd"] = object_rank_shedule_to_str(
         [dao.mode.todd for dao in daos],
         ranks,
         lambda t: (
             f"pool:{int(t.pool.keep)}/{int(t.pool.reserve)} "
             f"per_bucket:{int(t.actions_per_bucket)} "
-            f"z:min:{int(t.buckets.min_buckets)}/reserve_cap:{int(t.buckets.max_buckets)}"
-            f"/hard_cap:{int(t.buckets.limit_bucket)} sampling:{t.sampling}"
+            f"z:min_buckets:{int(t.buckets.min_buckets)}/max_buckets:{int(t.buckets.max_buckets)}"
+            f"/limit_bucket:{int(t.buckets.limit_bucket)} sampling:{t.sampling}"
         ),
     )
-    out["scores"] = _rank_schedule_report(
+    out["scores"] = object_rank_shedule_to_str(
         [dao.mode.scores for dao in daos],
         ranks,
         lambda s: f"pool:{s.exploration} final:{s.final}",
@@ -436,33 +542,88 @@ def _selected_rank_steps(best_ranks, max_lines=10):
     return selected_steps
 
 
+def _format_eval_rank(eval_step, rank) -> str:
+    return f"{int(eval_step)}/{int(rank)}"
+
+
+def _format_segment_improvements(segment_improvements, selected_steps: set[int]) -> str:
+    if not segment_improvements:
+        return "no improvements"
+
+    tokens = []
+    omitted = False
+    emitted_any = False
+    for local_idx, (step_idx, eval_step, rank) in enumerate(segment_improvements):
+        if step_idx not in selected_steps:
+            omitted = True
+            continue
+        if omitted or (not emitted_any and local_idx > 0):
+            tokens.append("...")
+            omitted = False
+        tokens.append(_format_eval_rank(eval_step, rank))
+        emitted_any = True
+    if omitted:
+        tokens.append("...")
+    if not emitted_any:
+        return "..."
+    return " -> ".join(tokens)
+
+
 def print_uniform_by_rank(best_ranks, best_evals, max_lines=10, init_events=None):
     """
-    Print rank improvements with init-rank timeline events.
+    Print rank improvements grouped by init-rank timeline segments.
     """
-    selected_steps = _selected_rank_steps(best_ranks, max_lines=max_lines)
+    improvements = [
+        (idx, int(eval_step), int(rank))
+        for idx, (rank, eval_step) in enumerate(zip(best_ranks, best_evals))
+    ]
     init_events = sorted(
         {
             (max(1, int(eval_step)), int(init_rank))
             for eval_step, init_rank in (init_events or [])
         }
     )
+    if not init_events and improvements:
+        init_events = [(1, improvements[0][2])]
 
-    s = ""
-    next_init = 0
-    for step in selected_steps:
-        rank = best_ranks[step]
-        eval_step = best_evals[step]
-        while next_init < len(init_events) and init_events[next_init][0] <= eval_step:
-            init_eval, init_rank = init_events[next_init]
-            s += f"init={init_rank} since eval={init_eval}\n"
-            next_init += 1
-        s += f"Rank={rank} at eval={eval_step}\n"
-    while next_init < len(init_events):
-        init_eval, init_rank = init_events[next_init]
-        s += f"init={init_rank} since eval={init_eval}\n"
-        next_init += 1
-    return s
+    selected_steps = set(_selected_rank_steps(best_ranks, max_lines=max_lines))
+    for seg_idx, (init_eval, _) in enumerate(init_events):
+        next_eval = init_events[seg_idx + 1][0] if seg_idx + 1 < len(init_events) else None
+        segment_improvements = [
+            item
+            for item in improvements
+            if item[1] >= init_eval and (next_eval is None or item[1] < next_eval)
+        ]
+        if segment_improvements:
+            selected_steps.add(segment_improvements[0][0])
+            selected_steps.add(segment_improvements[-1][0])
+
+    lines = []
+    for seg_idx, (init_eval, init_rank) in enumerate(init_events):
+        next_eval = init_events[seg_idx + 1][0] if seg_idx + 1 < len(init_events) else None
+        segment_improvements = [
+            item
+            for item in improvements
+            if item[1] >= init_eval and (next_eval is None or item[1] < next_eval)
+        ]
+        body = _format_segment_improvements(segment_improvements, selected_steps)
+        display_init_eval = 0 if seg_idx == 0 and init_eval == 1 else init_eval
+        lines.append(f"init={_format_eval_rank(display_init_eval, init_rank)}: {body}")
+    if not lines and improvements:
+        body = _format_segment_improvements(improvements, selected_steps)
+        lines.append(f"improvements: {body}")
+    return "".join(f"{line}\n" for line in lines)
+
+
+def optimizer_landscape_summary(best_ranks, best_evals, total_evals, best_seen) -> str:
+    if len(best_ranks) and len(best_evals):
+        last = _format_eval_rank(best_evals[-1], best_ranks[-1])
+    else:
+        last = "none"
+    return (
+        f"last_improvement={last} total_evals={int(total_evals)} "
+        f"best_seen_times={int(best_seen)}\n"
+    )
 
 
 def summarize_path_backups(root_dir: str = "data/path_backups", top_k: int = 10, init_word: str = "init") -> str:
@@ -479,25 +640,14 @@ class BaseEvaluator:
     total_eval: int
     best_seen: int
     shedule: str
-    bs_width: RankSchedule
-    todd_width: RankSchedule
     current_path: Path
     best_ranks: List[int]
     best_evals: List[int]
     init_events: List[Tuple[int, int]]
 
-    # Backward-compatible alias for typo "best_pathes"
-    @property
-    def best_pathes(self) -> List[Path]:
-        return self.best_paths
-
     @property
     def buckets_space(self) -> int:
         return self.loaded_rank ** 2 + self.loaded_rank
-
-    @best_pathes.setter
-    def best_pathes(self, value: List[Path]) -> None:
-        self.best_paths = value
 
     @staticmethod
     def _path_rank_range(path: Path) -> Tuple[Optional[int], Optional[int]]:
@@ -571,13 +721,7 @@ class BaseEvaluator:
         fill_tcounts: bool = False,
         path_root_dir: str = "data/path_backups",
         margin: int = MIN_SAVED_PATH_MARGIN,
-        **legacy_kwargs: Any,
     ):
-        if "shedule" in legacy_kwargs:
-            schedule = legacy_kwargs.pop("shedule")
-        if legacy_kwargs:
-            unknown = ", ".join(sorted(legacy_kwargs))
-            raise TypeError(f"unknown BaseEvaluator arguments: {unknown}")
         _ = fill_tcounts
         self.with_report = False
         self.current_path = Path()
@@ -586,6 +730,7 @@ class BaseEvaluator:
         self.loaded_rank = None
         self.loaded_path_rank = None
         self.loaded_path_name = None
+        self.loaded_path_limit_bucket = None
         self.loaded_path_root_dir = path_root_dir
         self.init_rank_thr = init_rank_thr
         self.margin = int(margin)
@@ -659,6 +804,7 @@ class BaseEvaluator:
         self.load_path(path_name, root_dir=root_dir)
         loaded_path = self.best_paths[0]
         self.loaded_path_rank = int(loaded_path.final_node.state.rows)
+        self.loaded_path_limit_bucket = PathStore._path_limit_buckets({}, loaded_path.daos)
         self.init_rank_thr = int(rank_thr)
         self._validate_saved_path_threshold(loaded_path, path_name, int(rank_thr))
         PathStore(root_dir=root_dir).record_load(path_name, init_rank_thr=int(rank_thr))
@@ -752,11 +898,11 @@ class BaseEvaluator:
         if _soft_deadline_reached():
             raise GracefulEvaluationTimeout("executor soft deadline reached")
 
-    def _get_executor(self, executor_cls, executor_kind: str, max_workers: int):
-        key = (executor_kind, max_workers)
+    def _get_executor(self, executor_cls, executor_kind: str, worker_count: int):
+        key = (executor_kind, worker_count)
         if self._executor_key != key:
             self.close_workers()
-            self._executor = executor_cls(max_workers=max_workers)
+            self._executor = executor_cls(worker_count)
             self._executor_key = key
         return self._executor
 
@@ -822,8 +968,6 @@ class BaseEvaluator:
                     node,
                     self.dao,
                     self.x0,
-                    self.bs_width,
-                    self.todd_width,
                 )
             ]
         if rank == self._best_rank:
@@ -832,8 +976,6 @@ class BaseEvaluator:
                     node,
                     self.dao,
                     self.x0,
-                    self.bs_width,
-                    self.todd_width,
                 )
             )
             self.best_seen += counters[1]
@@ -847,10 +989,10 @@ class BaseEvaluator:
         self.reinit()
         if max_workers is None:
             max_workers = DEFAULT_SEED_WORKERS
-        max_workers = max(1, min(int(max_workers), len(seeds)))
+        worker_count = max(1, min(int(max_workers), len(seeds)))
         results = []
         timed_out = False
-        if max_workers == 1:
+        if worker_count == 1:
             for seed in seeds:
                 if _soft_deadline_reached():
                     timed_out = True
@@ -860,8 +1002,6 @@ class BaseEvaluator:
                         seed,
                         self.current_path,
                         self.todd,
-                        self.bs_width,
-                        self.todd_width,
                     )
                 )
         else:
@@ -873,9 +1013,9 @@ class BaseEvaluator:
             else:
                 raise ValueError("EXECUTOR_KIND must be 'thread' or 'process'")
 
-            ex = self._get_executor(executor_cls, executor_kind, max_workers)
+            ex = self._get_executor(executor_cls, executor_kind, worker_count)
             futures = [
-                ex.submit(_worker_run_one_from_template, seed, self.current_path, self.todd, self.bs_width, self.todd_width)
+                ex.submit(_worker_run_one_from_template, seed, self.current_path, self.todd)
                 for seed in seeds
             ]
             pending = set(futures)
@@ -923,6 +1063,10 @@ class BaseEvaluator:
             load_note += f"\nloaded_path_rank: {self.loaded_path_rank}"
         if self.loaded_path_name is not None:
             load_note += f"\nloaded_path_name: {self.loaded_path_name}"
+            if self.loaded_path_limit_bucket is not None:
+                load_note += (
+                    f" limit_bucket={PathStore._format_limit_buckets(self.loaded_path_limit_bucket)}"
+                )
         if self.loaded_path_name is not None and self.init_rank_thr is not None:
             load_note += f"\ninit_rank_thr: {self.init_rank_thr}"
         if not self.is_init:
@@ -966,6 +1110,7 @@ class BaseEvaluator:
             f"rank 0.9q={np.quantile(self.tcount, 0.9) if self.tcount else 'n/a'} \n" +
             f"rank 0.1q={np.quantile(self.tcount, 0.1) if self.tcount else 'n/a'} \n" +
             print_uniform_by_rank(self.best_ranks, self.best_evals, 8, self.init_events) +
+            optimizer_landscape_summary(self.best_ranks, self.best_evals, self.total_eval, self.best_seen) +
             f"total_evals: {self.total_eval}" +
             f"\nbest_seen_times: {self.best_seen}" + 
             (f"\ntimeout_salvaged: 1" if timeout_salvage else "") +
@@ -1094,7 +1239,6 @@ class BaseEvaluator:
         x = _rank_args(x, vals, ranks=ranks, values=values)
         schedule = _to_action_selection_schedule(x)
         self.dao.mode.selection = schedule
-        self.todd_width = _action_counts_schedule(schedule)
 
     def set_action_pool(self, x: Any = None, vals=None, *, ranks=None, values=None):
         x = _rank_args(x, vals, ranks=ranks, values=values)
@@ -1107,17 +1251,3 @@ class BaseEvaluator:
     def set_todd_search(self, x: Any = None, vals=None, *, ranks=None, values=None):
         x = _rank_args(x, vals, ranks=ranks, values=values)
         self.dao.mode.todd = _to_todd_search_schedule(x)
-
-    def set_widths(self, *, beam: Any = None, actions: Any = None):
-        if beam is not None:
-            self.bs_width = _to_rank_schedule(beam)
-        if actions is not None:
-            self.todd_width = _to_rank_schedule(actions)
-
-    def set_beamsearch_width(self, x: Any = None, vals=None, *, ranks=None, values=None):
-        x = _rank_args(x, vals, ranks=ranks, values=values)
-        self.bs_width = _to_rank_schedule(x)
-        
-    def set_todd_width(self, x: Any = None, vals=None, *, ranks=None, values=None):
-        x = _rank_args(x, vals, ranks=ranks, values=values)
-        self.todd_width = _to_rank_schedule(x)

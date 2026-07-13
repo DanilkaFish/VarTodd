@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path as FsPath
-from typing import Any, Iterator, List, Optional, Sequence
+from typing import Any, Callable, Iterator, List, Optional, Sequence
 import json
 import os
 import pickle
@@ -16,16 +16,40 @@ except ImportError:  # pragma: no cover - Linux in production, fallback for port
 
 import numpy as np
 
-try:
-    from .mcts_dao import Path as MctsPath, Dao
-    from .node import ActionInfo, Matrix, Node
-except ImportError:  # kept for generated scripts that import helper as a flat module
-    from mcts_dao import Path as MctsPath, Dao
-    from node import ActionInfo, Matrix, Node
+from .mcts_dao import Dao, Path as MctsPath
+from .node import ActionInfo, Matrix, Node
 
 X0_LENGTH = 200
 USAGE_INDEX_NAME = "_usage_index.json"
 USAGE_LOCK_NAME = "_usage_index.lock"
+
+
+class _PathStoreUnpickler(pickle.Unpickler):
+    _MODULE_ALIASES = {
+        "mcts_dao": "scripts.optimization_core.mcts_dao",
+        "node": "scripts.optimization_core.node",
+    }
+
+    def find_class(self, module: str, name: str):
+        return super().find_class(self._MODULE_ALIASES.get(module, module), name)
+
+
+def _load_pickle(path: FsPath) -> Any:
+    with open(path, "rb") as f:
+        return _PathStoreUnpickler(f).load()
+
+
+def _path_widths_from_payload(payload: Any, idx: int) -> tuple[List[Any], List[Any]]:
+    if not isinstance(payload, list) or idx >= len(payload):
+        return [], []
+
+    item = payload[idx]
+    if not isinstance(item, dict):
+        return [], []
+
+    bs_widths = item.get("bs_widths") or []
+    todd_widths = item.get("todd_widths") or []
+    return list(bs_widths), list(todd_widths)
 
 
 def _utc_now() -> str:
@@ -171,6 +195,7 @@ class PathStore:
         if parent_info:
             meta["parent"] = dict(parent_info)
         incoming_payload: List[List[Optional[tuple]]] = []
+        widths_payload: List[dict[str, Any]] = []
 
         for p_idx, path in enumerate(paths):
             if path.final_node is None:
@@ -194,6 +219,7 @@ class PathStore:
                 else:
                     incoming_info.append((node.incoming.cand, node.incoming.global_info, node.incoming.source))
             x0s = [list(x0) for x0 in path.x0s]
+            #TODO
             for x0 in x0s:
                 while x0 and x0[-1] == 0:
                     x0.pop()
@@ -207,6 +233,12 @@ class PathStore:
                 }
             )
             incoming_payload.append(incoming_info)
+            widths_payload.append(
+                {
+                    "bs_widths": list(getattr(path, "bs_widths", []) or []),
+                    "todd_widths": list(getattr(path, "todd_widths", []) or []),
+                }
+            )
 
         np.savez_compressed(matrices_path, **matrices)
         with open(meta_path, "w", encoding="utf-8") as f:
@@ -216,17 +248,10 @@ class PathStore:
             daos_payload = [path.daos for path in paths]
             with open(daos_path, "wb") as f:
                 pickle.dump(daos_payload, f)
-            widths_payload = [
-                {
-                    "bs_widths": path.bs_widths,
-                    "todd_widths": path.todd_widths,
-                }
-                for path in paths
-            ]
-            with open(widths_path, "wb") as f:
-                pickle.dump(widths_payload, f)
         with open(incoming_path, "wb") as f:
             pickle.dump(incoming_payload, f)
+        with open(widths_path, "wb") as f:
+            pickle.dump(widths_payload, f)
 
         return base
 
@@ -287,23 +312,22 @@ class PathStore:
     @staticmethod
     def _path_limit_buckets(path_meta: dict[str, Any], daos: Optional[Sequence[Dao]]) -> Optional[int]:
         stored = path_meta.get("limit_buckets")
+        if daos:
+            limits: list[int] = []
+            for dao in daos:
+                try:
+                    for _rank, todd in dao.mode.todd.points:
+                        keep = int(todd.pool.keep)
+                        limits.append(0 if keep == 0 else int(todd.buckets.limit_bucket))
+                except Exception:
+                    continue
+            if limits:
+                if any(limit < 0 for limit in limits):
+                    return -1
+                return max(limits)
         if stored is not None:
             return int(stored)
-        if not daos:
-            return None
-
-        limits: list[int] = []
-        for dao in daos:
-            try:
-                for _rank, todd in dao.mode.todd.points:
-                    limits.append(int(todd.buckets.limit_bucket))
-            except Exception:
-                continue
-        if not limits:
-            return None
-        if any(limit < 0 for limit in limits):
-            return -1
-        return max(limits)
+        return None
 
     def iter_path_records(self) -> list[dict[str, Any]]:
         import re
@@ -356,20 +380,18 @@ class PathStore:
                     else {}
                 )
                 daos_for_best: Optional[Sequence[Dao]] = None
-                if self._path_limit_buckets(best_path_meta, None) is None:
-                    daos_path = backup_dir / "daos.pkl"
-                    if daos_path.exists():
-                        try:
-                            with open(daos_path, "rb") as f:
-                                daos_payload = pickle.load(f)
-                            if (
-                                isinstance(daos_payload, list)
-                                and best_path_idx is not None
-                                and best_path_idx < len(daos_payload)
-                            ):
-                                daos_for_best = daos_payload[best_path_idx]
-                        except Exception:
-                            daos_for_best = None
+                daos_path = backup_dir / "daos.pkl"
+                if daos_path.exists():
+                    try:
+                        daos_payload = _load_pickle(daos_path)
+                        if (
+                            isinstance(daos_payload, list)
+                            and best_path_idx is not None
+                            and best_path_idx < len(daos_payload)
+                        ):
+                            daos_for_best = daos_payload[best_path_idx]
+                    except Exception:
+                        daos_for_best = None
                 limit_buckets = self._path_limit_buckets(best_path_meta, daos_for_best)
 
                 init_rank = None
@@ -443,6 +465,25 @@ class PathStore:
             int(record.get("used_count") or 0) - int(record.get("improved_count") or 0),
         )
 
+    @staticmethod
+    def _saturated_reuse_count(record: dict[str, Any]) -> int:
+        """Reuses where the best child equalled the loaded rank (path mined out).
+
+        A saturated reuse means the path was reopened and searched but produced
+        no rank below where it started: the path's tail is exhausted. This is
+        the signal that should retire a path, unlike a path simply never tried
+        (used=0) or one that regressed once by seed noise.
+        """
+        used = int(record.get("used_count") or 0)
+        improved = int(record.get("improved_count") or 0)
+        best_child = record.get("best_child_rank")
+        rank = int(record["rank"])
+        # Only count as saturated when we have evidence the child matched (not
+        # beat) the path rank; otherwise fall back to plain non-improving reuse.
+        if best_child is not None and int(best_child) >= rank:
+            return max(0, used - improved)
+        return 0
+
     @classmethod
     def _is_live_record(
         cls,
@@ -454,7 +495,127 @@ class PathStore:
             return False
         if record.get("is_stale_improved_child"):
             return False
+        # Symmetric retirement: apply the reuse cutoff to capped paths too, not
+        # only full-search ones. A capped scout reopened many times without
+        # improving is as mined-out as a full-search path. Retire on saturated
+        # reuse (child matched the rank) rather than on raw non-improving reuse,
+        # so a path that is merely untried or regressed once stays live.
+        saturated = cls._saturated_reuse_count(record)
+        if saturated > int(max_nonimproved_reuse):
+            return False
+        if not cls._is_full_limit_record(record):
+            return True
         return cls._nonimproved_reuse_count(record) <= int(max_nonimproved_reuse)
+
+    @classmethod
+    def _promote_children_over_parents(
+        cls,
+        live_records: list[dict[str, Any]],
+        *,
+        child_qualifies: Optional[Callable[[dict[str, Any]], bool]] = None,
+    ) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+        """Hide a parent when a live child improved over it, migrating counters.
+
+        An improved child's node chain contains the parent's full prefix (same
+        higher-parity matrices; see mcts_dao.Path.branch_path), so the child can
+        be reopened at any rank the parent could and also carries the improved
+        tail. Keeping the parent as a separate selectable entry is redundant.
+
+        `child_qualifies`, if given, restricts which improving children may
+        supersede their parent in the returned view. Used to keep a capped
+        near-tail parent visible even when a full-search child improved it —
+        that child isn't near-tail material itself, so it shouldn't hide the
+        capped path in a near-tail-only view.
+
+        Returns the filtered live records plus (parent, child) name pairs for the
+        footer. Usage counters stay attached to their own path records so the
+        rendered u/i values match `_usage_index.json` exactly.
+        """
+        by_name = {r["name"]: r for r in live_records}
+        # child that improved over its loaded parent, best improver per parent
+        best_child_for_parent: dict[str, dict[str, Any]] = {}
+        for child in live_records:
+            parent = child.get("parent_path_name")
+            loaded = child.get("parent_loaded_rank")
+            if not parent or parent not in by_name or loaded is None:
+                continue
+            if int(child["rank"]) >= int(loaded):
+                continue  # child did not improve the parent's loaded rank
+            if child_qualifies is not None and not child_qualifies(child):
+                continue
+            cur = best_child_for_parent.get(parent)
+            if cur is None or int(child["rank"]) < int(cur["rank"]):
+                best_child_for_parent[parent] = child
+
+        # Process a lineage chain A->B->C parent-first so hidden parents do not
+        # reappear through intermediate children. Counters are not propagated:
+        # rendered u/i is always the record's own usage.
+        def parent_depth(name: str, _seen: Optional[set[str]] = None) -> int:
+            seen = _seen or set()
+            if name in seen or name not in best_child_for_parent:
+                return 0
+            seen.add(name)
+            parent_of = by_name.get(name, {}).get("parent_path_name")
+            return 1 + parent_depth(parent_of, seen) if parent_of in best_child_for_parent else 0
+
+        promoted: list[tuple[str, str]] = []
+        hidden: set[str] = set()
+        for parent_name in sorted(best_child_for_parent, key=parent_depth):
+            child = best_child_for_parent[parent_name]
+            hidden.add(parent_name)
+            promoted.append((parent_name, child["name"]))
+
+        filtered = [r for r in live_records if r["name"] not in hidden]
+        return filtered, promoted
+
+    @staticmethod
+    def _is_full_limit_record(record: dict[str, Any]) -> bool:
+        value = record.get("limit_buckets")
+        return value is not None and int(value) < 0
+
+    @staticmethod
+    def _children_full_search_count(records: Sequence[dict[str, Any]]) -> dict[str, int]:
+        """How many children of each path already used a full (-1) search.
+
+        Historical fact over all recorded children, live or not: it answers
+        "has a full search already been tried from here", which shouldn't
+        reset just because that child was later retired or superseded.
+        """
+        counts: dict[str, int] = {}
+        for record in records:
+            parent = record.get("parent_path_name")
+            if parent and PathStore._is_full_limit_record(record):
+                counts[parent] = counts.get(parent, 0) + 1
+        return counts
+
+    @staticmethod
+    def _is_near_tail_eligible(
+        record: dict[str, Any],
+        *,
+        limit_cutoff: int,
+        full_children: dict[str, int],
+        max_full_children: int,
+    ) -> bool:
+        """Capped path, not yet proven exhausted by repeated full search.
+
+        Near-tail exhaustion is signalled by full-search children (someone
+        already spent the expensive unrestricted search on this branch), not
+        by raw reopen count — a capped scout can be reopened cheaply many
+        times and still be worth another near-tail pass.
+        """
+        value = record.get("limit_buckets")
+        if value is None or int(value) < 0 or int(value) >= int(limit_cutoff):
+            return False
+        return full_children.get(record["name"], 0) < int(max_full_children)
+
+    @staticmethod
+    def _select_top(records: Sequence[dict[str, Any]], *, top_k: int) -> list[dict[str, Any]]:
+        return sorted(records, key=PathStore._record_sort_key)[: max(0, int(top_k))]
+
+    @staticmethod
+    def _has_better_child(record: dict[str, Any]) -> bool:
+        best_child = record.get("best_child_rank")
+        return best_child is not None and int(best_child) < int(record["rank"])
 
     @staticmethod
     def _format_summary_record(record: dict[str, Any]) -> str:
@@ -483,28 +644,55 @@ class PathStore:
         self,
         *,
         top_k: int = 6,
-        per_rank_cap: int = 1,
-        max_nonimproved_reuse: int = 4,
-        dead_end_after: Optional[int] = None,
+        near_tail_top_k: int = 4,
+        near_tail_limit_cutoff: int = 100_000,
+        near_tail_max_full_children: int = 2,
+        wide_margin_top_k: int = 4,
+        wide_margin_max_used: int = 7,
+        max_nonimproved_reuse: int = 10,
+        dead_end_after: Optional[int] = 4,
         dead_end_top_k: int = 2,
         nonimproved_child_top_k: int = 2,
-        improved_dead_end_top_k: int = 1,
     ) -> str:
+        """Render the two selectable groups the mutation prompt loads from.
+
+        near_tail_paths: best paths with limit_buckets < near_tail_limit_cutoff
+        that have fewer than near_tail_max_full_children children which used a
+        full (-1) search — i.e. not yet proven exhausted by an expensive full
+        search, so more near-tail refinement is still the natural next step.
+        A full-search child that improves such a path does NOT hide it here
+        (that child isn't near-tail material itself); only a better-ranked
+        near-tail-qualifying child replaces it.
+
+        wide_margin_paths: best remaining paths that were not selected in
+        near_tail_paths, have no recorded better child, and have own
+        used_count < wide_margin_max_used.
+
+        `top_k` is ignored; the two groups are sized independently via
+        near_tail_top_k / wide_margin_top_k.
+        """
+        del top_k
         records = self.iter_path_records()
         if not records:
             return (
                 "best_paths:\n"
+                "near_tail_paths:\n"
                 "- none\n"
-                "rule=use_only_names_under_best_paths\n"
+                "wide_margin_paths:\n"
+                "- none\n"
+                "rule=load_only_names_under_best_paths.near_tail_paths,"
+                "wide_margin_paths\n"
                 "balance=from_init:0,first_half:0,near_final:0,unknown:0; "
                 "full:0,partial:0; live:0,total:0,best_rank_count:0"
             )
 
-        top_k = min(6, max(1, int(top_k)))
-        per_rank_cap = max(1, int(per_rank_cap))
-        if dead_end_after is not None:
-            max_nonimproved_reuse = dead_end_after
+        near_tail_top_k = max(1, int(near_tail_top_k))
+        wide_margin_top_k = max(1, int(wide_margin_top_k))
         max_nonimproved_reuse = max(0, int(max_nonimproved_reuse))
+        dead_end_cutoff = (
+            max_nonimproved_reuse if dead_end_after is None else max(0, int(dead_end_after))
+        )
+
         count_full = sum(1 for r in records if r["kind"] == "full")
         count_partial = sum(1 for r in records if r["kind"] == "partial")
         best_rank = min(r["rank"] for r in records)
@@ -512,56 +700,63 @@ class PathStore:
         nonimproved_child_count = sum(1 for r in records if r.get("child_improved_loaded") is False)
         stale_improved_child_count = sum(1 for r in records if r.get("is_stale_improved_child"))
         over_failed_reuse_count = sum(
-            1 for r in records if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
+            1
+            for r in records
+            if self._is_full_limit_record(r)
+            and self._nonimproved_reuse_count(r) > dead_end_cutoff
         )
-        live_records = [
+
+        live_records_raw = [
             r
             for r in records
             if self._is_live_record(r, max_nonimproved_reuse=max_nonimproved_reuse)
         ]
-        improved_dead_end_records = [
-            r
-            for r in records
-            if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
-            and int(r.get("improved_count") or 0) > 0
-            and r.get("child_improved_loaded") is not False
-            and not r.get("is_stale_improved_child")
-        ]
-        revived_records = improved_dead_end_records[: max(0, int(improved_dead_end_top_k))]
+        live_records, promoted_pairs = self._promote_children_over_parents(live_records_raw)
+
+        full_children = self._children_full_search_count(records)
+
+        def near_tail_ok(record: dict[str, Any]) -> bool:
+            return self._is_near_tail_eligible(
+                record,
+                limit_cutoff=near_tail_limit_cutoff,
+                full_children=full_children,
+                max_full_children=near_tail_max_full_children,
+            )
+
+        near_tail_source, _ = self._promote_children_over_parents(
+            live_records_raw,
+            child_qualifies=near_tail_ok,
+        )
+        near_tail_records = self._select_top(
+            [r for r in near_tail_source if near_tail_ok(r)],
+            top_k=near_tail_top_k,
+        )
+        near_tail_names = {r["name"] for r in near_tail_records}
+
+        wide_margin_records = self._select_top(
+            [
+                r
+                for r in live_records
+                if r["name"] not in near_tail_names
+                and not self._has_better_child(r)
+                and int(r.get("used_count") or 0) < int(wide_margin_max_used)
+            ],
+            top_k=wide_margin_top_k,
+        )
 
         live_band_counts = {"from_init": 0, "first_half": 0, "near_final": 0, "unknown": 0}
-        for record in live_records + revived_records:
+        for record in live_records:
             band = str(record.get("restart_band") or "unknown")
             live_band_counts[band] = live_band_counts.get(band, 0) + 1
 
-        selected = []
-        rank_counts: dict[int, int] = {}
-        for record in live_records:
-            if len(selected) >= top_k:
-                break
-            rank = int(record["rank"])
-            if rank_counts.get(rank, 0) >= per_rank_cap:
-                continue
-            rank_counts[rank] = rank_counts.get(rank, 0) + 1
-            selected.append(self._format_summary_record(record))
-
-        selected_names = {line.split(" ", 1)[0] for line in selected if line and line != "none"}
-        for record in revived_records:
-            if record["name"] in selected_names:
-                continue
-            selected.append(
-                f"{self._format_summary_record(record)} "
-                f"revived=1 failed_reuse={self._nonimproved_reuse_count(record)}"
-            )
-            selected_names.add(record["name"])
-
-        if not selected:
-            selected.append("none")
+        near_tail_lines = [self._format_summary_record(r) for r in near_tail_records]
+        wide_margin_lines = [self._format_summary_record(r) for r in wide_margin_records]
 
         dead_end_records = [
             r
             for r in records
-            if self._nonimproved_reuse_count(r) > max_nonimproved_reuse
+            if self._is_full_limit_record(r)
+            and self._nonimproved_reuse_count(r) > dead_end_cutoff
             and not r.get("is_stale_improved_child")
         ][: max(0, int(dead_end_top_k))]
         nonimproved_child_records = [
@@ -577,7 +772,13 @@ class PathStore:
             for record in nonimproved_child_records
         ]
 
-        lines = ["best_paths:", *[f"- {line}" for line in selected]]
+        lines = [
+            "best_paths:",
+            "near_tail_paths:",
+            *[f"- {line}" for line in (near_tail_lines or ["none"])],
+            "wide_margin_paths:",
+            *[f"- {line}" for line in (wide_margin_lines or ["none"])],
+        ]
         if dead_end_lines:
             lines += ["dead_end_paths:", *[f"- {line}" for line in dead_end_lines]]
         if nonimproved_child_lines:
@@ -585,32 +786,73 @@ class PathStore:
                 "best_nonimproved_child_paths:",
                 *[f"- {line}" for line in nonimproved_child_lines],
             ]
+        band_from_init = live_band_counts.get("from_init", 0)
+        band_near_final = live_band_counts.get("near_final", 0)
+        underrep = self._underrepresented_hint(
+            from_init=band_from_init,
+            near_final=band_near_final,
+            count_full=count_full,
+            count_partial=count_partial,
+            near_tail_live=len(near_tail_records),
+        )
         lines += [
-            "rule=use_only_names_under_best_paths",
+            "rule=load_only_names_under_best_paths.near_tail_paths,wide_margin_paths; "
+            "wide_margin_paths are the best remaining paths not chosen in "
+            "near_tail_paths, with no better child and own used_count<"
+            f"{int(wide_margin_max_used)}; dead_end_paths and "
+            "best_nonimproved_child_paths are evidence only",
             (
-                "balance="
-                f"from_init:{live_band_counts.get('from_init', 0)},"
-                f"first_half:{live_band_counts.get('first_half', 0)},"
-                f"near_final:{live_band_counts.get('near_final', 0)},"
-                f"unknown:{live_band_counts.get('unknown', 0)}; "
-                f"full:{count_full},partial:{count_partial}; "
-                f"live:{len(live_records)},total:{len(records)},best_rank_count:{best_rank_count}"
+                "population: "
+                f"live={len(live_records)}/total={len(records)}  "
+                f"bands from_init={band_from_init}/near_final={band_near_final}  "
+                f"modes full={count_full}/partial={count_partial}  "
+                f"near_tail_live={len(near_tail_records)}/{near_tail_top_k}  "
+                f"wide_margin_live={len(wide_margin_records)}/{wide_margin_top_k}"
             ),
         ]
-        if (
-            nonimproved_child_count
-            or stale_improved_child_count
-            or over_failed_reuse_count
-            or improved_dead_end_records
-        ):
+        if underrep:
+            lines.append(f"suggest: {underrep}")
+        if promoted_pairs:
             lines.append(
-                "omitted="
-                f"nonimproved_child:{nonimproved_child_count},"
-                f"stale_improved_child:{stale_improved_child_count},"
-                f"over_failed_reuse:{over_failed_reuse_count},"
-                f"improved_dead_end:{len(improved_dead_end_records)}"
+                "promoted(child replaces parent, shares prefix): "
+                + ", ".join(f"{parent}->{child}" for parent, child in promoted_pairs)
+            )
+        if nonimproved_child_count or stale_improved_child_count or over_failed_reuse_count:
+            lines.append(
+                "hidden(not selectable): "
+                f"nonimproved_child={nonimproved_child_count}, "
+                f"stale_improved_child={stale_improved_child_count}, "
+                f"over_failed_reuse={over_failed_reuse_count}"
             )
         return "\n".join(lines)
+
+    @staticmethod
+    def _underrepresented_hint(
+        *,
+        from_init: int,
+        near_final: int,
+        count_full: int,
+        count_partial: int,
+        near_tail_live: int,
+    ) -> str:
+        """One actionable line: which regime the population is short on.
+
+        The task wants roughly balanced coverage of ab-initio builders and
+        saved-path refiners, plus a few live near-tail paths to exploit.
+        Surface the gap so the mutation operator can restore balance instead of
+        eyeballing counts.
+        """
+        if near_final == 0 and from_init > 0:
+            return "no near-final refiners live; add a saved-path reopening"
+        if from_init == 0 and near_final > 0:
+            return "no ab-initio builders live; add a path_name='init' child"
+        if near_tail_live == 0:
+            return "no near-tail paths live; a cheap capped near-tail scout can seed new paths"
+        if from_init >= 4 * max(near_final, 1):
+            return "ab-initio dominates; prefer a saved-path refiner this round"
+        if near_final >= 4 * max(from_init, 1):
+            return "refiners dominate; prefer an ab-initio builder this round"
+        return ""
 
     def load(self, name: str, *, dao_fallback: Optional[Dao] = None) -> List[MctsPath]:
         base = self._resolve_dir(name)
@@ -631,26 +873,23 @@ class PathStore:
         daos_payload: Optional[List[List[Dao]]] = None
         if daos_path.exists():
             try:
-                with open(daos_path, "rb") as f:
-                    daos_payload = pickle.load(f)
+                daos_payload = _load_pickle(daos_path)
             except Exception:
                 daos_payload = None
-
-        widths_payload: Optional[List[dict[str, Any]]] = None
-        if widths_path.exists():
-            try:
-                with open(widths_path, "rb") as f:
-                    widths_payload = pickle.load(f)
-            except Exception:
-                widths_payload = None
 
         incoming_payload: Optional[List[List[Optional[tuple]]]] = None
         if incoming_path.exists():
             try:
-                with open(incoming_path, "rb") as f:
-                    incoming_payload = pickle.load(f)
+                incoming_payload = _load_pickle(incoming_path)
             except Exception:
                 incoming_payload = None
+
+        widths_payload: Optional[List[dict[str, Any]]] = None
+        if widths_path.exists():
+            try:
+                widths_payload = _load_pickle(widths_path)
+            except Exception:
+                widths_payload = None
 
         out: List[MctsPath] = []
         with np.load(matrices_path) as data:
@@ -682,12 +921,13 @@ class PathStore:
                     nodes.append(node)
                     prev = node
 
+                bs_widths, todd_widths = _path_widths_from_payload(widths_payload, idx)
                 path = MctsPath(
                     final_node=nodes[-1],
                     ranks_thr=list(p.get("ranks_thr", [])),
                     daos=[],
-                    bs_widths=[],
-                    todd_widths=[],
+                    bs_widths=bs_widths,
+                    todd_widths=todd_widths,
                     x0s=[list(x0) + [0]*(X0_LENGTH - len(x0)) for x0 in p.get("x0s", [])],
                 )
 
@@ -698,16 +938,8 @@ class PathStore:
                 elif dao_fallback is not None:
                     path.daos = [deepcopy(dao_fallback)]
 
-                if isinstance(widths_payload, list) and idx < len(widths_payload):
-                    width_info = widths_payload[idx]
-                    if isinstance(width_info, dict):
-                        path.bs_widths = list(width_info.get("bs_widths") or [])
-                        path.todd_widths = list(width_info.get("todd_widths") or [])
-
                 if not path.daos:
-                    raise ValueError(
-                        "loaded path has no dao snapshots; pass dao_fallback or save with store_daos=True"
-                    )
+                    path.daos = [Dao()]
 
                 out.append(path)
 

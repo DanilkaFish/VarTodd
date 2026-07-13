@@ -60,12 +60,6 @@ class Node:
     parent: Optional["Node"] = None
     incoming: Optional[ActionInfo] = None
     depth: int = 0
-    visits: int = 0
-    value_sum: float = 0.0
-
-    @property
-    def value_mean(self) -> float:
-        return 0.0 if self.visits == 0 else self.value_sum / self.visits
 
     def add_child(
         self,

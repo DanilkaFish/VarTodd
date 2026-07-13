@@ -4,36 +4,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Generic, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
-try:
-    from .node import (
-        ActionPool,
-        ActionSelection,
-        ExplorationScore,
-        FinalizationScore,
-        Node,
-        PolicyConfig,
-        PolicyScores,
-        SamplingBudget,
-        SourcePool,
-        ToddSearch,
-        TohpeSearch,
-        ZBucketSearch,
-    )
-except ImportError:  # kept for generated scripts that import helper as a flat module
-    from node import (
-        ActionPool,
-        ActionSelection,
-        ExplorationScore,
-        FinalizationScore,
-        Node,
-        PolicyConfig,
-        PolicyScores,
-        SamplingBudget,
-        SourcePool,
-        ToddSearch,
-        TohpeSearch,
-        ZBucketSearch,
-    )
+from .node import (
+    ActionPool,
+    ActionSelection,
+    ExplorationScore,
+    FinalizationScore,
+    Node,
+    PolicyConfig,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
 from copy import deepcopy
 
 RANK_SCHEDULE_SENTINEL = 10**9
@@ -62,8 +46,12 @@ class Path:
         new_path = Path()
         new_path.final_node = node
         new_path.daos = self.daos + [deepcopy(dao)]
-        new_path.bs_widths = self.bs_widths + ([deepcopy(bs_width)] if bs_width is not None else [])
-        new_path.todd_widths = self.todd_widths + ([deepcopy(todd_width)] if todd_width is not None else [])
+        new_path.bs_widths = self.bs_widths + (
+            [] if bs_width is None else [deepcopy(bs_width)]
+        )
+        new_path.todd_widths = self.todd_widths + (
+            [] if todd_width is None else [deepcopy(todd_width)]
+        )
         new_path.x0s = self.x0s + [deepcopy(x0)]
         new_path.ranks_thr = deepcopy(self.ranks_thr)
         return new_path
@@ -122,14 +110,6 @@ class Path:
     def _dao_for_step(self, parent_rank: int) -> Optional["Dao"]:
         return self._segment_value_for_step(self.daos, parent_rank)
 
-    def _schedule_value_at(self, schedules: List[Any], parent_rank: int, default: Any) -> Any:
-        schedule = self._segment_value_for_step(schedules, parent_rank)
-        if schedule is None:
-            return default
-        if hasattr(schedule, "at"):
-            return schedule.at(parent_rank)
-        return schedule
-
     @staticmethod
     def _format_signed(value: float) -> str:
         value = float(value)
@@ -165,37 +145,19 @@ class Path:
         if len(labels) < len(weights):
             labels.extend(f"w{i}" for i in range(len(labels), len(weights)))
 
-        nonzero_weights = [
-            (label, weight)
-            for label, weight in zip(labels, weights)
-            if abs(float(weight)) >= 1e-12
-        ]
-        if not nonzero_weights and weights:
-            nonzero_weights = list(zip(labels, weights))
+        centers = centers[: len(weights)]
+        if len(centers) < len(weights):
+            centers.extend(0.0 for _ in range(len(weights) - len(centers)))
 
         weight_text = ",".join(
             f"{label}:{Path._format_signed(weight)}"
-            for label, weight in nonzero_weights
+            for label, weight in zip(labels, weights)
         )
-        if not weight_text:
-            weight_text = "none"
-
-        parts = [weight_text]
-        nonzero_centers = [
-            (label, center)
+        center_text = ",".join(
+            f"{label}:{Path._format_signed(center)}"
             for label, center in zip(labels, centers)
-            if abs(float(center)) >= 1e-12
-        ]
-        if nonzero_centers:
-            parts.append(
-                "centers="
-                + ",".join(
-                    f"{label}:{Path._format_signed(center)}"
-                    for label, center in nonzero_centers
-                )
-            )
-        parts.append(f"p={_fmt_float(power, 3)}")
-        return "(" + ";".join(parts) + ")"
+        )
+        return f"=w[{weight_text}];c[{center_text}];p={_fmt_float(power, 3)}"
 
     @staticmethod
     def _format_policy_value(value: Any) -> str:
@@ -209,8 +171,7 @@ class Path:
         dao = self._dao_for_step(parent_rank)
         if dao is None:
             return (
-                ("beam_width", "1"),
-                ("action_count", "1"),
+                ("beamwidth", "1"),
                 ("tohpe_pool", "2/0"),
                 ("todd_pool", "16/0"),
             )
@@ -236,7 +197,7 @@ class Path:
             return f"{_as_int(pool.keep)}/{_as_int(pool.reserve)}"
 
         selection = _as_action_selection(value("selection", _default_action_selection()))
-        action_count = _as_int(self._schedule_value_at(self.todd_widths, parent_rank, selection.count))
+        beamwidth = _as_int(selection.count)
         action_pool = _as_action_pool(value("pool", _default_action_pool()))
         tohpe = _as_tohpe_search(value("tohpe", _default_tohpe_search()))
         todd = _as_todd_search(value("todd", _default_todd_search()))
@@ -244,8 +205,7 @@ class Path:
         scores = _as_policy_scores(value("scores", _default_policy_scores()))
 
         fields = [
-            ("beam_width", _as_int(self._schedule_value_at(self.bs_widths, parent_rank, 1))),
-            ("action_count", action_count),
+            ("beamwidth", beamwidth),
             ("selection_mode", selection.mode),
             ("selection_temperature", _as_float(selection.temperature)),
             ("action_pool_final_size", _as_int(action_pool.final_size)),
@@ -258,8 +218,8 @@ class Path:
             ("z_min_buckets", _as_int(buckets.min_buckets)),
             ("z_max_buckets", _as_int(buckets.max_buckets)),
             ("z_limit_bucket", _as_int(buckets.limit_bucket)),
-            ("pool_scores", self._format_score(scores.exploration, ["red", "dim", "bucket", "vw", "z"])),
-            ("final_scores", self._format_score(scores.final, ["red", "dim", "bucket", "vw", "z", "tohpe"])),
+            ("pool_scores", self._format_score(scores.exploration, ["red", "dim", "bucket", "yw", "zw"])),
+            ("final_scores", self._format_score(scores.final, ["red", "dim", "bucket", "yw", "zw", "tohpe"])),
         ]
         return tuple((key, self._format_policy_value(value)) for key, value in fields)
 
@@ -281,15 +241,22 @@ class Path:
         return f"{group['start_rank']}->{group['end_rank']}"
 
     @staticmethod
+    def _profile_scores_str(snapshot: Tuple[Tuple[str, str], ...]) -> str:
+        values = dict(snapshot)
+        pool_scores = values.get("pool_scores", "(none;p=1)")
+        final_scores = values.get("final_scores", "(none;p=1)")
+        return f"pool{pool_scores} final{final_scores}"
+
+    @staticmethod
     def _format_policy_profile(
         profile_id: str,
         snapshot: Tuple[Tuple[str, str], ...],
         profile_groups: List[Dict[str, Any]],
         all_groups: List[Dict[str, Any]],
+        include_scores: bool = True,
     ) -> str:
         values = dict(snapshot)
-        beam = values.get("beam_width", "1")
-        action_count = values.get("action_count", "1")
+        beamwidth = values.get("beamwidth", "1")
         selection_mode = values.get("selection_mode", "best")
         selection_temp = values.get("selection_temperature", "0")
         final_pool = values.get("action_pool_final_size", "16")
@@ -302,23 +269,23 @@ class Path:
         max_z = values.get("z_max_buckets", "0")
         limit_z = values.get("z_limit_bucket", "-1")
         actions_per_bucket = values.get("todd_actions_per_bucket", "4")
-        pool_scores = values.get("pool_scores", "(none;p=1)")
-        final_scores = values.get("final_scores", "(none;p=1)")
 
         diversity_parts = [
             f"actions_per_bucket:{actions_per_bucket}",
         ]
 
-        return (
+        line = (
             f"  {profile_id} "
             f"rank_region={Path._profile_region(profile_groups, all_groups)} "
-            f"search_shape=beam:{beam}/actions:{action_count}/selection:{selection_mode}@{selection_temp} "
+            f"search_shape=beamwidth:{beamwidth}/selection:{selection_mode}@{selection_temp} "
             f"pool=final:{final_pool}/tohpe:{tohpe_pool}/todd:{todd_pool} "
             f"samples=tohpe:{tohpe_sampling_label}/todd:{todd_samples}/tohpe_z:{tohpe_z_choices} "
-            f"z_buckets=min:{min_z}/reserve_cap:{max_z}/hard_cap:{limit_z} "
-            f"diversity={'/'.join(diversity_parts)} "
-            f"scores=pool{pool_scores} final{final_scores}"
+            f"z_buckets=min_buckets:{min_z}/max_buckets:{max_z}/limit_bucket:{limit_z} "
+            f"diversity={'/'.join(diversity_parts)}"
         )
+        if include_scores:
+            line += f" scores={Path._profile_scores_str(snapshot)}"
+        return line
 
     @staticmethod
     def _evidence_notes(
@@ -391,9 +358,11 @@ class Path:
             if researched_z[idx] > 0
         ]
 
+        group_reduction = int(group["start_rank"]) - int(group["end_rank"])
         parts = [
             f"  group={group_num}",
             f"ranks={group['start_rank']}->{group['end_rank']}",
+            f"reduction={group_reduction}",
             f"profile={group.get('profile_id', '?')}",
         ]
         if group.get("split_reasons"):
@@ -403,7 +372,8 @@ class Path:
             red_mean = Path._mean(group["red"])
             red_max_mean = Path._mean(group["red_max"])
             basis_mean = Path._mean(group["basis_dim"])
-            basis_max_values = group.get("basis_max") or group["basis_dim"]
+            basis_min = int(min(group["basis_dim"]))
+            basis_max = int(max(group["basis_dim"]))
             bucket_mean = Path._mean(group["bucket"])
             parts.extend(
                 [
@@ -411,8 +381,9 @@ class Path:
                         "outcome="
                         f"red_mean:{_fmt_float(red_mean)}/"
                         f"red_max_mean:{_fmt_float(red_max_mean)} "
+                        f"dim_min:{basis_min}/"
                         f"dim_mean:{_fmt_float(basis_mean)}/"
-                        f"dim_max:{int(max(basis_max_values))} "
+                        f"dim_max:{basis_max} "
                         f"bucket_mean:{_fmt_float(bucket_mean)}/"
                         f"bucket_max:{int(max(group['bucket']))}"
                     ),
@@ -476,6 +447,146 @@ class Path:
 
         if group["missing_stats"]:
             parts.append(f"missing_stats={group['missing_stats']}")
+        return " ".join(parts)
+
+    # ------------------------------------------------------------------ #
+    # Compact rendering: same numbers, fewer bytes.                       #
+    # ------------------------------------------------------------------ #
+
+    _NOTE_ABBR = {
+        "tohpe_only": "H_only",
+        "todd_dominant": "T_dom",
+        "high_acceptance_low_z": "hi_acc",
+        "hard_refinement_high_z": "hard_hiZ",
+        "low_acceptance_per_z": "lo_acc",
+        "high_dim_early_region": "hi_dim",
+    }
+
+    @staticmethod
+    def _num(value: float, digits: int = 1) -> str:
+        # digits=0 means "render as integer"; _fmt_float(10, 0) wrongly strips
+        # the trailing zero to "1", so handle the integer case directly.
+        if digits <= 0:
+            return str(int(round(float(value))))
+        return _fmt_float(value, digits)
+
+    @classmethod
+    def _pair(cls, mean: float, mx: float, digits: int = 1) -> str:
+        """`v` when mean==max, else `mean(max<mx>)`. Collapses equal pairs."""
+        m = cls._num(mean, digits)
+        if abs(float(mean) - float(mx)) < 0.05:
+            return m
+        return f"{m}(mx{cls._num(mx, digits)})"
+
+    @classmethod
+    def _is_easy_group(cls, group: Dict[str, Any]) -> bool:
+        """Early, cheap, TOHPE-driven region that is not the frontier.
+
+        Easy = source is TOHPE-dominant with high acceptance-per-z and no hard
+        high-z refinement flag. These consecutive same-profile groups carry
+        little frontier signal individually and can be shown as one band.
+        """
+        if not group.get("steps") or not group.get("red"):
+            return False
+        notes = set(
+            Path._evidence_notes(
+                start_rank=int(group["start_rank"]),
+                accepted_tohpe=group["accepted_tohpe"],
+                accepted_todd=group["accepted_todd"],
+                researched_z=group["researched_z"],
+                accepted_per_z=[
+                    Path._safe_div(t + d, z)
+                    for t, d, z in zip(
+                        group["accepted_tohpe"], group["accepted_todd"], group["researched_z"]
+                    )
+                    if z > 0
+                ],
+                basis_dim=group["basis_dim"],
+            )
+        )
+        if "hard_refinement_high_z" in notes or "low_acceptance_per_z" in notes:
+            return False
+        # TODD taking over (todd_dominant) marks the frontier transition; keep
+        # those groups separate even if acceptance is still high.
+        if "todd_dominant" in notes:
+            return False
+        return "tohpe_only" in notes or "high_acceptance_low_z" in notes
+
+    @classmethod
+    def _merge_easy_bands(cls, groups: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """Group consecutive easy groups into one band.
+
+        Returns a list of bands; a band is a list of one or more groups. A
+        multi-group band is formed from adjacent easy groups (TOHPE-driven, high
+        acceptance, not the frontier), even across distinct easy profiles: the
+        band line lists the profile range (e.g. P1-3) so the policy changes are
+        still visible, but the cheap early region collapses to one line. Any
+        hard/todd-dominant/low-acceptance frontier group always stays as its own
+        single-group band shown in full.
+        """
+        bands: List[List[Dict[str, Any]]] = []
+        for group in groups:
+            if bands and cls._is_easy_group(group) and cls._is_easy_group(bands[-1][-1]):
+                bands[-1].append(group)
+            else:
+                bands.append([group])
+        return bands
+
+    @classmethod
+    def _format_band(cls, band: List[Dict[str, Any]], band_num: int) -> str:
+        """Compact one-line band. Single group -> compact group; else summary."""
+        first, last = band[0], band[-1]
+        steps = sum(int(g["steps"]) for g in band)
+        pids = list(dict.fromkeys(g.get("profile_id", "?") for g in band))
+        profile = pids[0] if len(pids) == 1 else f"{pids[0]}-{pids[-1]}"
+        head = (
+            f"  g{band_num} {first['start_rank']}->{last['end_rank']} "
+            f"red={first['start_rank'] - last['end_rank']} {profile} s{steps}"
+        )
+        # aggregate across the band
+        red = [v for g in band for v in g["red"]]
+        red_max = [v for g in band for v in g["red_max"]]
+        dim = [v for g in band for v in g["basis_dim"]]
+        tohpe = [v for g in band for v in g["accepted_tohpe"]]
+        todd = [v for g in band for v in g["accepted_todd"]]
+        zr = [v for g in band for v in g["researched_z"]]
+        pool = [v for g in band for v in g["pool_size"]]
+        pool_h = [v for g in band for v in g["pool_tohpe_size"]]
+        pool_t = [v for g in band for v in g["pool_todd_size"]]
+        apz = [Path._safe_div(t + d, z) for t, d, z in zip(tohpe, todd, zr) if z > 0]
+        if not red:
+            return head + " action_stats=unavailable"
+        parts = [head]
+        parts.append(f"red:{cls._pair(Path._mean(red), max(red_max) if red_max else max(red))}")
+        # dim as min..max with the mean; collapses to a single value when flat
+        if dim:
+            dmin, dmax = int(min(dim)), int(max(dim))
+            if dmin == dmax:
+                parts.append(f"dim:{dmin}")
+            else:
+                parts.append(f"dim:{dmin}..{dmax}(m:{cls._num(Path._mean(dim))})")
+        parts.append(f"src=H:{cls._num(Path._mean(tohpe))}/T:{cls._num(Path._mean(todd))}")
+        if pool:
+            parts.append(
+                f"pool:{cls._num(Path._mean(pool))}"
+                f"(H{cls._num(Path._mean(pool_h)) if pool_h else '0'}"
+                f"/T{cls._num(Path._mean(pool_t)) if pool_t else '0'})"
+            )
+        parts.append(f"z:{cls._pair(Path._mean(zr), max(zr) if zr else 0, 0)}")
+        notes = Path._evidence_notes(
+            start_rank=int(first["start_rank"]),
+            accepted_tohpe=tohpe,
+            accepted_todd=todd,
+            researched_z=zr,
+            accepted_per_z=apz,
+            basis_dim=dim,
+        )
+        if notes:
+            abbr = ",".join(cls._NOTE_ABBR.get(n, n) for n in notes)
+            parts.append(f"[{abbr}]")
+        split = [s for g in band for s in (g.get("split_reasons") or [])]
+        if split:
+            parts.append(f"split={','.join(dict.fromkeys(split))}")
         return " ".join(parts)
 
     def _path_policy_groups(self, path: List[Node], ranks: List[int]) -> List[Dict[str, Any]]:
@@ -563,11 +674,8 @@ class Path:
                 value = self._safe_float_attr(cand, attr_name)
                 if value is not None:
                     group[attr_name].append(value)
-            accepted = self._safe_float_attr(stats, "accepted") or 0.0
-            accepted_tohpe = self._safe_float_attr(stats, "accepted_tohpe") or 0.0
-            accepted_todd = self._safe_float_attr(stats, "accepted_todd")
-            if accepted_todd is None:
-                accepted_todd = max(0.0, accepted - accepted_tohpe)
+            accepted_tohpe = float(stats.accepted_tohpe)
+            accepted_todd = float(stats.accepted_todd)
             group["accepted_tohpe"].append(accepted_tohpe)
             group["accepted_todd"].append(accepted_todd)
             researched_z = getattr(node.incoming, "total", None)
@@ -579,7 +687,7 @@ class Path:
 
         return groups
 
-    def format_path_stats(self, max_lines: int = 14, start_rank: Optional[int] = None) -> str:
+    def format_path_stats(self, max_lines: int = 24, start_rank: Optional[int] = None) -> str:
         path = self._nodes()
         if not path:
             return "path unavailable"
@@ -628,19 +736,36 @@ class Path:
             profile_id = profile_ids[snapshot]
             group["profile_id"] = profile_id
             profile_groups.setdefault(profile_id, []).append(group)
-        lines = [self._format_group(group, idx + 1) for idx, group in enumerate(groups)]
+        if max_lines <= 0 or len(groups) <= max_lines:
+            bands = [[group] for group in groups]
+        else:
+            bands = self._merge_easy_bands(groups)
+        lines = [self._format_band(band, idx + 1) for idx, band in enumerate(bands)]
         if groups and all(group["missing_stats"] == group["steps"] for group in groups):
             lines.append("  note=loaded paths may lack incoming action stats if saved by an older version")
         lines.append("converged_policy_profiles:")
+        # Dedup identical score blocks: emit profile lines without inline scores,
+        # then list each distinct scores block once with the profiles using it.
+        # Scores are the longest field and often repeat across profiles.
+        scores_to_profiles: Dict[str, List[str]] = {}
+        for profile_id in profile_snapshots:
+            scores = self._profile_scores_str(profile_snapshots[profile_id])
+            scores_to_profiles.setdefault(scores, []).append(profile_id)
+        dedup_scores = len(scores_to_profiles) < len(profile_snapshots)
         lines.extend(
             self._format_policy_profile(
                 profile_id,
                 profile_snapshots[profile_id],
                 profile_groups[profile_id],
                 groups,
+                include_scores=not dedup_scores,
             )
             for profile_id in profile_snapshots
         )
+        if dedup_scores:
+            lines.append("scores:")
+            for scores, pids in scores_to_profiles.items():
+                lines.append(f"  {','.join(pids)}: {scores}")
 
         return "\n".join(header + lines)
 T = TypeVar("T")
@@ -740,7 +865,7 @@ def _as_action_selection(x: Any) -> ActionSelection:
         return x
     if isinstance(x, Mapping):
         return ActionSelection(
-            count=_as_int(x.get("count", 1)),
+            count=_as_int(x.get("beamwidth", x.get("count", 1))),
             mode=str(x.get("mode", "best")),
             temperature=_as_float(x.get("temperature", 0.0)),
         )
@@ -754,47 +879,6 @@ def _as_action_pool(x: Any) -> ActionPool:
         return ActionPool(final_size=_as_int(x.get("final_size", 16)))
     raise TypeError(f"expected ActionPool or mapping, got {type(x).__name__}")
 
-
-def _as_bool(x: Any) -> bool:
-    if isinstance(x, str):
-        lx = x.strip().lower()
-        if lx in {"1", "true", "yes", "y", "on"}:
-            return True
-        if lx in {"0", "false", "no", "n", "off"}:
-            return False
-    return bool(x)
-
-
-@dataclass(slots=True)
-class DepthSchedule(Generic[T]):
-    points: List[Tuple[int, T]] = field(default_factory=list)
-
-    @staticmethod
-    def constant(value: T) -> "DepthSchedule[T]":
-        return DepthSchedule(points=[(0, value)])
-
-    @staticmethod
-    def from_any(value: Union["DepthSchedule[T]", Sequence[Tuple[int, T]], T]) -> "DepthSchedule[T]":
-        if isinstance(value, DepthSchedule):
-            return value
-        if isinstance(value, (list, tuple)):
-            if value and isinstance(value[0], tuple) and len(value[0]) == 2:
-                pts = [(int(d), v) for d, v in value]  # type: ignore[misc]
-                pts.sort(key=lambda x: x[0])
-                return DepthSchedule(points=pts)
-        return DepthSchedule.constant(value)  # type: ignore[arg-type]
-
-    def at(self, depth: int) -> T:
-        if not self.points:
-            raise ValueError("empty schedule")
-        d = int(depth)
-        cur = self.points[0][1]
-        for dd, vv in self.points:
-            if dd <= d:
-                cur = vv
-            else:
-                break
-        return cur
 
 @dataclass(slots=True)
 class RankSchedule(Generic[T]):
@@ -849,6 +933,25 @@ def _converted_rank_schedule(value: Any, convert: Callable[[Any], T]) -> RankSch
     return RankSchedule.constant(convert(value))
 
 
+@dataclass(slots=True)
+class DepthSchedule(Generic[T]):
+    points: List[Tuple[int, T]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class UctDao:
+    name: str = "puct"
+    c: DepthSchedule[float] = field(default_factory=DepthSchedule)
+    fn: Optional[Callable[..., float]] = None
+
+
+@dataclass(slots=True)
+class TreeDao:
+    rollout_add: bool = True
+    rollout_active: bool = False
+    rollout_frozen_until: int = 0
+
+
 def _default_policy_scores() -> PolicyScores:
     return PolicyScores(
         exploration=ExplorationScore([0.5, 0.5, 0.0, 0.0, 0.0]),
@@ -888,51 +991,6 @@ def _default_todd_search() -> ToddSearch:
 
 
 @dataclass(slots=True)
-class UctDao:
-    """Compatibility payload for old path backups.
-
-    The current Python runner calls pyvartodd through PolicyConfig only; UCT is
-    not read by Todd.run.
-    """
-
-    name: str = "puct"
-    c: DepthSchedule[float] = field(default_factory=lambda: DepthSchedule.constant(2.5))
-    fn: Optional[Callable[..., float]] = None
-
-    @staticmethod
-    def from_dict(d: Mapping[str, Any]) -> "UctDao":
-        return UctDao(
-            name=str(d.get("name", "puct")),
-            c=DepthSchedule.from_any(d.get("c", 2.5)),
-            fn=d.get("fn", None),
-        )
-
-    def c_at(self, depth: int) -> float:
-        return _as_float(self.c.at(depth))
-
-
-@dataclass(slots=True)
-class TreeDao:
-    """Compatibility payload for old path backups.
-
-    Rollout tree controls are not part of the current pyvartodd PolicyConfig
-    interface.
-    """
-
-    rollout_add: bool = True
-    rollout_active: bool = False
-    rollout_frozen_until: int = 0
-
-    @staticmethod
-    def from_dict(d: Mapping[str, Any]) -> "TreeDao":
-        return TreeDao(
-            rollout_add=_as_bool(d.get("rollout_add", True)),
-            rollout_active=_as_bool(d.get("rollout_active", False)),
-            rollout_frozen_until=_as_int(d.get("rollout_frozen_until", 0)),
-        )
-
-
-@dataclass(slots=True)
 class ModeDao:
     scores: RankSchedule[PolicyScores] = field(
         default_factory=lambda: RankSchedule.constant(_default_policy_scores())
@@ -963,11 +1021,11 @@ class ModeDao:
             todd=_converted_rank_schedule(d.get("todd", _default_todd_search()), _as_todd_search),
         )
 
-    def policy_kwargs(self, *, depth: int, action_count: Optional[int] = None,) -> Dict[str, Any]:
+    def policy_kwargs(self, *, depth: int, beamwidth: Optional[int] = None,) -> Dict[str, Any]:
         selection = _as_action_selection(self.selection.at(depth))
-        if action_count is not None:
+        if beamwidth is not None:
             selection = ActionSelection(
-                count=_as_int(action_count),
+                count=_as_int(beamwidth),
                 mode=str(selection.mode),
                 temperature=_as_float(selection.temperature),
             )
@@ -982,33 +1040,31 @@ class ModeDao:
 
 @dataclass(slots=True)
 class Dao:
-    """Search configuration.
-
-    Current execution uses only ``modes`` to construct a pyvartodd PolicyConfig.
-    The remaining scalar/tree fields stay here so older saved path backups can
-    still be loaded and summarized.
-    """
-
-    iterations: int = 3600
-    discount: float = 0.995
-    max_depth: int = 32
-    threads: int = 4
-
-    branching: DepthSchedule[int] = field(default_factory=lambda: DepthSchedule.constant(4))
-    rollout_depth: DepthSchedule[int] = field(default_factory=lambda: DepthSchedule.constant(10))
-
-    uct: UctDao = field(default_factory=UctDao)
-    tree: TreeDao = field(default_factory=TreeDao)
-
     modes: Dict[str, ModeDao] = field(default_factory=dict)
 
-    unfrozen_top: int = 0
-    freeze_spread: int = 0
     def __post_init__(self):
         if "default" not in self.modes:
             self.modes["default"] = ModeDao()
+
+    def __setstate__(self, state: Any) -> None:
+        values: Dict[str, Any] = {}
+        if isinstance(state, dict):
+            values.update(state)
+        elif isinstance(state, tuple):
+            for part in state:
+                if isinstance(part, dict):
+                    values.update(part)
+        object.__setattr__(self, "modes", values.get("modes") or {})
+        self.__post_init__()
+
     @staticmethod
     def from_dict(cfg: Mapping[str, Any]) -> "Dao":
+        unsupported_keys = sorted(key for key in cfg if key != "modes")
+        if unsupported_keys:
+            raise ValueError(
+                "unsupported Dao keys; configure only modes: "
+                + ", ".join(unsupported_keys)
+            )
         modes_in = cfg.get("modes", {}) or {}
         modes: Dict[str, ModeDao] = {}
         if isinstance(modes_in, Mapping):
@@ -1016,37 +1072,14 @@ class Dao:
                 if isinstance(v, Mapping):
                     modes[str(k)] = ModeDao.from_dict(v)
 
-        freeze = cfg.get("freeze", {}) or {}
-        return Dao(
-            iterations=_as_int(cfg.get("iterations", 3600)),
-            discount=_as_float(cfg.get("discount", 0.995)),
-            max_depth=_as_int(cfg.get("max_depth", 32)),
-            threads=_as_int(cfg.get("threads", 4)),
-            branching=DepthSchedule.from_any(cfg.get("branching", 1)),
-            rollout_depth=DepthSchedule.from_any(cfg.get("rollout_depth", 0)),
-            uct=UctDao.from_dict(cfg.get("uct", {}) or {}),
-            tree=TreeDao.from_dict(cfg.get("tree", {}) or {}),
-            modes=modes,
-            unfrozen_top=_as_int(freeze.get("unfrozen_top", cfg.get("unfrozen_top", 0))),
-            freeze_spread=_as_int(freeze.get("freeze_spread", cfg.get("freeze_spread", 0)))
-        )
+        return Dao(modes=modes)
+
     @property
     def mode(self):
         return self.modes["default"]
-    
-    def branching_at(self, depth: int) -> int:
-        return _as_int(self.branching.at(depth))
 
-    def rollout_depth_at(self, depth: int) -> int:
-        return _as_int(self.rollout_depth.at(depth))
-
-    def policy_config_at(self, depth: int, mode: str="default", action_count: int = 1) -> PolicyConfig:
-        """Build the pyvartodd PolicyConfig active at a rank.
-
-        The parameter is still named ``depth`` for compatibility with older
-        scripts, but callers pass the current matrix rank.
-        """
+    def policy_config_at(self, depth: int, mode: str = "default", beamwidth: Optional[int] = None) -> PolicyConfig:
         m = self.modes.get(mode)
         if m is None:
             raise KeyError(f"unknown mode: {mode}")
-        return PolicyConfig(**m.policy_kwargs(depth=depth, action_count=action_count))
+        return PolicyConfig(**m.policy_kwargs(depth=depth, beamwidth=beamwidth))

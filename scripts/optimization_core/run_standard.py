@@ -12,10 +12,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-try:
-    from .helper import Matrix, Tensor3D, load_matrix_array, normalize_matrix_array
-except ImportError:  # allows direct execution: python scripts/optimization_core/run_standard.py
-    from helper import Matrix, Tensor3D, load_matrix_array, normalize_matrix_array
+from scripts.optimization_core.helper import Matrix, Tensor3D, load_matrix_array, normalize_matrix_array
 
 DATA_ROOT = ROOT_DIR / "data/init_npy"
 DEFAULT_INIT_CIRCUIT = "gf_mult_Vandaele_wo_ancilla"

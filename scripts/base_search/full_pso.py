@@ -23,7 +23,7 @@ from scripts.optimization_core.helper import (
 np.random.seed(42)
 random.seed(40)
 
-LEGACY_ONE_HOT_CAP = 1 << 20
+ONE_HOT_CAP = 1 << 20
 PSO_PARTICLES = 16
 PSO_WORKERS = 16
 VALIDATION_TOP_K = 8
@@ -54,10 +54,10 @@ class Evaluator(BaseEvaluator):
     @staticmethod
     def _sample_caps(sample_count: int, one_hot_fraction: float):
         # path_store forced gen_part=1.0 in C++, so every one-hot basis vector was tried
-        # in addition to num_samples random dense vectors. Keep one_hot_fraction consumed
-        # for x0 compatibility, but do not let it shrink the one-hot action set.
+        # in addition to num_samples random dense vectors. Keep one_hot_fraction
+        # consumed so the parameter vector shape stays stable.
         _ = one_hot_fraction
-        return [LEGACY_ONE_HOT_CAP, 0, max(0, int(sample_count))]
+        return [ONE_HOT_CAP, 0, max(0, int(sample_count))]
 
     def policy_mapping(self):
         ranks = [0]
@@ -94,7 +94,6 @@ class Evaluator(BaseEvaluator):
                 ),
             )
         )
-        self.set_widths(actions=2, beam=2)
 
     def evaluate(self, params: Iterable[float], max_workers: int = 1, seeds: Iterable[int] | None = None) -> float:
         seeds = list(self.seeds if seeds is None else seeds)

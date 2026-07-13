@@ -13,8 +13,6 @@ from scripts.optimization_core.helper import (
     ToddSearch,
     TohpeSearch,
     ZBucketSearch,
-    find_rank,
-    get_matrix,
 )
 import random
 
@@ -50,7 +48,6 @@ class Evaluator(BaseEvaluator):
                 buckets=ZBucketSearch(min_buckets=100000, max_buckets=100000),
             )
         )
-        self.set_widths(actions=1, beam=1)
 
     def __call__(self, params: Iterable):
         tcounts = self.run(params, self.seeds, max_workers=4)

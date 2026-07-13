@@ -3,10 +3,7 @@ from typing import Tuple
 
 import numpy as np
 
-try:
-    from .helper import Matrix, Tensor3D, get_matrix
-except ImportError:  # kept for generated scripts that import helper as a flat module
-    from helper import Matrix, Tensor3D, get_matrix
+from .helper import Matrix, Tensor3D, get_matrix
 
 
 def validate(

@@ -141,7 +141,6 @@ class Evaluator(BaseEvaluator):
                 ),
             )
         )
-        self.set_widths(actions=1, beam=1)
 
     def evaluate(self, params: Iterable[float], max_workers: int = 1) -> float:
         ranks = self.run(params, self.seeds, max_workers=max_workers)
