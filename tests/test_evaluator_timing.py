@@ -51,6 +51,28 @@ class EvaluatorTimingTests(unittest.TestCase):
             evaluator.merge_run_state_from(other)
         self.assertEqual(evaluator.time_to_final_rank_seconds, 11.5)
 
+    def test_run_keeps_earliest_completion_for_equal_final_ranks(self):
+        evaluator = make_evaluator()
+        evaluator.active_params = []
+        evaluator.insert = lambda unused: None
+        evaluator.reinit = lambda: None
+        evaluator.todd = object()
+        node = SimpleNamespace(state=SimpleNamespace(rows=400))
+        worker_results = [
+            # Seed-order processing sees this later completion first.
+            (1, node, (3, 1), 150.0),
+            # This result completed earlier, but is processed second after sorting.
+            (2, node, (3, 1), 125.0),
+        ]
+
+        with patch(
+            "scripts.optimization_core.helper._worker_run_one_from_template",
+            side_effect=worker_results,
+        ):
+            self.assertEqual(evaluator.run([], [1, 2], max_workers=1), [400, 400])
+
+        self.assertEqual(evaluator.time_to_final_rank_seconds, 25.0)
+
 
 if __name__ == "__main__":
     unittest.main()
