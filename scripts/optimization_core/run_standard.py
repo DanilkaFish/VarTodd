@@ -122,17 +122,18 @@ def validate(
         raise ValueError("validate requires a matrix name")
 
     context = get_matrix(name)
-    result, report, paths = result
+    result, report, best_path = result
+    paths = report + best_path
     res = Matrix.from_numpy(result)
     if Tensor3D(context) != Tensor3D(res):
         raise RuntimeError(
             f"tensor mismatch for {name}: "
             f"expected {context.rows}x{context.cols}, got {res.rows}x{res.cols}"
         )
-    print(report + paths)
+    print(paths)
     return {
         "result": result,
-        "mcts info": report + paths,
+        "mcts info": paths,
         "paths": paths,
     }
 

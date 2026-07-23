@@ -35,7 +35,11 @@ class RunStandardTests(unittest.TestCase):
             output_path = Path(tmp) / "run.json"
             matrix = Matrix.from_numpy(np.zeros((4, 2), dtype=bool))
             result = np.zeros((3, 2), dtype=bool)
-            entry_result = (result, "report", "time_to_final_rank_seconds: 1.25")
+            entry_result = (
+                result,
+                "distinctive optimizer report fragment\n",
+                "time_to_final_rank_seconds: 1.25",
+            )
             module = type("Module", (), {"entrypoint": staticmethod(lambda _: entry_result)})
             with patch.object(run_standard, "import_module", return_value=module):
                 with patch.object(run_standard, "get_matrix", return_value=matrix):
@@ -56,6 +60,7 @@ class RunStandardTests(unittest.TestCase):
         self.assertEqual(saved[0]["final_rank"], 3)
         self.assertEqual(saved[0]["execution_seconds"], 3.5)
         self.assertEqual(saved[0]["time_to_final_rank_seconds"], 1.25)
+        self.assertIn("distinctive optimizer report fragment", saved[0]["paths"])
         self.assertIn("time_to_final_rank_seconds", saved[0]["paths"])
         self.assertTrue(result_exists)
 
