@@ -64,6 +64,62 @@ class RunStandardTests(unittest.TestCase):
         self.assertIn("time_to_final_rank_seconds", saved[0]["paths"])
         self.assertTrue(result_exists)
 
+    def test_main_writes_explicit_names_in_selection_order_after_reverse_completion(self):
+        completed_names = []
+        yielded_names = []
+        writer_calls = []
+
+        class FakeFuture:
+            def __init__(self, name):
+                self.name = name
+
+            def result(self):
+                completed_names.append(self.name)
+                return {"problem_name": self.name}, []
+
+        class FakeExecutor:
+            def __init__(self):
+                self.futures = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def submit(self, function, name, **kwargs):
+                future = FakeFuture(name)
+                self.futures.append(future)
+                return future
+
+        def reverse_as_completed(futures):
+            self.assertEqual(set(futures), set(executor.futures))
+            for future in reversed(executor.futures):
+                yielded_names.append(future.name)
+                yield future
+
+        def capture_report(output_path, records):
+            self.assertEqual(yielded_names, ["second", "first"])
+            self.assertEqual(completed_names, ["second", "first"])
+            writer_calls.append((output_path, records))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "run.json"
+            executor = FakeExecutor()
+            matrix = type("Matrix", (), {"rows": 7})()
+            with patch.object(run_standard, "ProcessPoolExecutor", return_value=executor):
+                with patch.object(run_standard, "as_completed", side_effect=reverse_as_completed):
+                    with patch.object(run_standard, "get_matrix", return_value=matrix):
+                        with patch.object(run_standard, "_write_json_report", side_effect=capture_report):
+                            run_standard.main(
+                                ["--output", str(output_path), "--names", "first", "second"]
+                            )
+
+        self.assertEqual(len(writer_calls), 1)
+        written_path, records = writer_calls[0]
+        self.assertEqual(written_path, output_path)
+        self.assertEqual([record["problem_name"] for record in records], ["first", "second"])
+
 
 if __name__ == "__main__":
     unittest.main()
