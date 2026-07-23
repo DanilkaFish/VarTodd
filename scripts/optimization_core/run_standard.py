@@ -1,6 +1,9 @@
 import argparse
+import json
 import os
+import re
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from importlib import import_module
 from pathlib import Path
@@ -12,44 +15,48 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from scripts.optimization_core.helper import Matrix, Tensor3D, load_matrix_array, normalize_matrix_array
+from scripts.optimization_core.helper import Matrix, Tensor3D, load_matrix_array
 
 DATA_ROOT = ROOT_DIR / "data/init_npy"
 DEFAULT_INIT_CIRCUIT = "gf_mult_Vandaele_wo_ancilla"
-DEFAULT_M_INIT = 600
-DEFAULT_N_INIT = 200
+DEFAULT_MODULE_PATH = "scripts/base_search/full_pso.py"
+DEFAULT_STOP_BEFORE_GF_DEGREE = 32
+GF_DEGREE_RE = re.compile(r"^gf2\^(\d+)_")
+TIME_TO_FINAL_RANK_RE = re.compile(
+    r"time_to_final_rank_seconds:\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+)
 
 def get_matrix(name: str) -> Matrix:
     return Matrix.from_numpy(load_matrix_array(DATA_ROOT / f"{name}.npy"))
 
 
-def _matrix_shape(path: Path) -> tuple[int, int]:
-    arr = normalize_matrix_array(np.load(path, mmap_mode="r"))
-    if arr.ndim != 2:
-        raise ValueError(f"{path} is not a 2D matrix, shape={arr.shape}")
-    return int(arr.shape[0]), int(arr.shape[1])
-
-
-def discover_names(init_circuit: str, m_init: int, n_init: int) -> list[str]:
+def discover_names(init_circuit: str, stop_before_gf_degree: int) -> list[str]:
     root = DATA_ROOT / init_circuit
     if not root.is_dir():
         raise FileNotFoundError(f"init circuit directory does not exist: {root}")
 
     records = []
-    for path in sorted(root.rglob("*.npy")):
-        rows, cols = _matrix_shape(path)
-        if rows < m_init and cols < n_init:
-            name = path.relative_to(root).with_suffix("").as_posix()
-            records.append((rows, cols, name))
-    records.sort()
-    return [name for _, _, name in records]
+    for path in root.rglob("*.npy"):
+        name = path.relative_to(root).with_suffix("").as_posix()
+        match = GF_DEGREE_RE.match(Path(name).name)
+        if match is None:
+            raise ValueError(f"cannot determine GF degree from problem name: {name}")
+        degree = int(match.group(1))
+        if degree < stop_before_gf_degree:
+            records.append((degree, name))
+    return [name for _, name in sorted(records)]
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a baseline optimizer over init matrices and save validated outputs."
     )
-    parser.add_argument("module_path", help="Optimizer module path, e.g. scripts/base_search/full_pso.py")
+    parser.add_argument(
+        "module_path",
+        nargs="?",
+        default=DEFAULT_MODULE_PATH,
+        help="Optimizer module path, e.g. scripts/base_search/full_pso.py",
+    )
     parser.add_argument(
         "workers",
         nargs="?",
@@ -63,16 +70,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help=f"Subdirectory under {DATA_ROOT} to scan.",
     )
     parser.add_argument(
-        "--m-init",
+        "--stop-before-gf-degree",
         type=int,
-        default=DEFAULT_M_INIT,
-        help="Keep matrices with rows strictly less than this value.",
-    )
-    parser.add_argument(
-        "--n-init",
-        type=int,
-        default=DEFAULT_N_INIT,
-        help="Keep matrices with columns strictly less than this value.",
+        default=DEFAULT_STOP_BEFORE_GF_DEGREE,
+        help="Keep matrices whose GF degree is strictly less than this value.",
     )
     parser.add_argument(
         "--names",
@@ -86,9 +87,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Print selected matrix names and exit without running the optimizer.",
     )
     parser.add_argument(
-        "--output-root",
-        default=str(ROOT_DIR / "data/baseline_npy"),
-        help="Directory where validated baseline matrices are saved.",
+        "--output",
+        required=True,
+        help="JSON report path; validated baseline matrices are saved beside it.",
     )
     return parser.parse_args(argv)
 
@@ -121,18 +122,32 @@ def validate(
         raise ValueError("validate requires a matrix name")
 
     context = get_matrix(name)
-    result, report, best_path = result
+    result, report, paths = result
     res = Matrix.from_numpy(result)
     if Tensor3D(context) != Tensor3D(res):
         raise RuntimeError(
             f"tensor mismatch for {name}: "
             f"expected {context.rows}x{context.cols}, got {res.rows}x{res.cols}"
         )
-    print(report + best_path)
+    print(report + paths)
     return {
         "result": result,
-        "mcts info": report + best_path,
+        "mcts info": report + paths,
+        "paths": paths,
     }
+
+
+def _extract_time_to_final_rank(paths: str) -> float | None:
+    match = TIME_TO_FINAL_RANK_RE.search(paths)
+    return float(match.group(1)) if match else None
+
+
+def _write_json_report(output_path: Path, records: list[dict[str, object]]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    temporary_path.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    temporary_path.replace(output_path)
+
 
 def _run_one(
     name: str,
@@ -140,46 +155,58 @@ def _run_one(
     module_path: str,
     last_name: str,
     init_circuit: str,
-    output_root: Path,
-) -> tuple[str, list]:
+    output_path: Path,
+    initial_rank: int,
+) -> tuple[dict[str, object], list]:
     entrypoint = import_module(module_path).entrypoint
+    start_time = time.perf_counter()
     en = entrypoint(get_matrix(init_circuit + "/" + name))
+    execution_seconds = time.perf_counter() - start_time
     if isinstance(en, tuple) and len(en) == 2:
         en, tcount = en
     else:
         tcount = []
     res = validate(en, init_circuit + "/" + name)
-    result_rank = res["result"].shape[0]
+    result_rank = int(res["result"].shape[0])
     safe_name = name.replace("/", "__")
-    output_dir = output_root / init_circuit
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_filename = output_dir / f"{last_name}-{safe_name}-{result_rank}.npy"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_filename = output_path.parent / f"{last_name}-{safe_name}-{result_rank}.npy"
     np.save(output_filename, res["result"])
     print(f"Results for {name} saved to {output_filename}:\n\tFinal rank = {result_rank}")
-    return name, tcount
+    return {
+        "problem_name": init_circuit + "/" + name,
+        "initial_rank": initial_rank,
+        "final_rank": result_rank,
+        "execution_seconds": execution_seconds,
+        "time_to_final_rank_seconds": _extract_time_to_final_rank(str(res["paths"])),
+        "paths": res["paths"],
+        "result_path": str(output_filename.resolve()),
+    }, tcount
 
-if __name__ == "__main__":
-    args = _parse_args(sys.argv[1:])
+
+def main(argv: Optional[list[str]] = None) -> None:
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
     module_path = _module_name(args.module_path)
     last_name = _module_stem(args.module_path)
     workers = max(1, int(args.workers))
     init_circuit = args.init_circuit
-    output_root = _resolve_project_path(args.output_root)
-    names = args.names or discover_names(init_circuit, args.m_init, args.n_init)
+    output_path = _resolve_project_path(args.output)
+    names = args.names or discover_names(init_circuit, args.stop_before_gf_degree)
 
     print(
         f"Selected {len(names)} matrices from {DATA_ROOT / init_circuit} "
-        f"with rows < {args.m_init} and cols < {args.n_init}:"
+        f"with GF degree < {args.stop_before_gf_degree}:"
     )
     for name in names:
-        rows, cols = _matrix_shape(DATA_ROOT / init_circuit / f"{name}.npy")
-        print(f"  {name} ({rows}x{cols})")
+        print(f"  {name}")
     if args.list_only:
-        raise SystemExit(0)
+        return
     if not names:
         raise SystemExit("no matrices selected")
 
-    tcounts = []
+    initial_ranks = [get_matrix(init_circuit + "/" + name).rows for name in names]
+    records: list[Optional[dict[str, object]]] = [None] * len(names)
+    tcounts: list[list] = []
     with ProcessPoolExecutor(max_workers=workers) as ex:
         futures = {
             ex.submit(
@@ -188,11 +215,19 @@ if __name__ == "__main__":
                 module_path=module_path,
                 last_name=last_name,
                 init_circuit=init_circuit,
-                output_root=output_root,
-            ): name
-            for name in names
+                output_path=output_path,
+                initial_rank=initial_ranks[index],
+            ): index
+            for index, name in enumerate(names)
         }
         for future in as_completed(futures):
-            name, tcount = future.result()
+            index = futures[future]
+            record, tcount = future.result()
+            records[index] = record
             tcounts.append(tcount)
+    _write_json_report(output_path, [record for record in records if record is not None])
     print([tcount for tcount in tcounts])
+
+
+if __name__ == "__main__":
+    main()
