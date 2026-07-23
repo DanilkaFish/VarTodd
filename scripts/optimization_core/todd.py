@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import heapq
+import time
 from typing import Any
 
 from .mcts_dao import Dao, Path
@@ -25,6 +26,7 @@ class Todd:
         path: Path,
         *args: Any,
         with_report: bool = False,
+        with_timing: bool = False,
         seed: int = 1,
         **kwargs: Any,
     ):
@@ -32,6 +34,8 @@ class Todd:
             with_report = bool(kwargs.pop("with_report"))
         if "seed" in kwargs:
             seed = int(kwargs.pop("seed"))
+        if "with_timing" in kwargs:
+            with_timing = bool(kwargs.pop("with_timing"))
         for legacy_key in ("width", "bs_width", "beamwidth", "todd_width"):
             kwargs.pop(legacy_key, None)
         if kwargs:
@@ -59,6 +63,7 @@ class Todd:
             raise ValueError("cannot run TODD from an empty path")
 
         best_node = root
+        best_discovered_at = time.perf_counter() if with_report and with_timing else None
         counter = 0
         best_counter = 0
         nodes = [root]
@@ -86,6 +91,8 @@ class Todd:
                     if child.state.rows < best_node.state.rows:
                         best_counter = 0
                         best_node = child
+                        if with_report and with_timing:
+                            best_discovered_at = time.perf_counter()
                     if child.state.rows == best_node.state.rows:
                         best_counter += 1
                     new_nodes.append(child)
@@ -95,6 +102,8 @@ class Todd:
 
         if with_report:
             best_counter = min(counter, best_counter)
+            if with_timing:
+                return best_node, (counter, best_counter), best_discovered_at
             return best_node, (counter, best_counter)
 
         return best_node.state.to_numpy()

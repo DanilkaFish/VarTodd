@@ -100,9 +100,13 @@ def _worker_run_one_from_template(
 ):
     # Todd.run only reads the incoming path and creates new child nodes.
     # Deep-copying a GF(2^64) path can recurse through ~1000 Node.parent links.
-    node, counters = todd.run(path, True, seed)
-    completed_at = time.perf_counter()
-    return seed, node, counters, completed_at
+    node, counters, discovered_at = todd.run(
+        path,
+        with_report=True,
+        with_timing=True,
+        seed=seed,
+    )
+    return seed, node, counters, discovered_at
 
 
 def _copy_path_header(path: Path) -> Path:
@@ -962,16 +966,16 @@ class BaseEvaluator:
             ):
                 self.time_to_final_rank_seconds = other_time
 
-    def _record_run_result(self, seed, node, counters, mats_ranks, completed_at=None):
+    def _record_run_result(self, seed, node, counters, mats_ranks, discovered_at=None):
         rank = node.state.rows
         mats_ranks.append(rank)
         self.total_eval += counters[0]
         self.tcount.append(rank)
         discovery_seconds = None
         if rank <= self._best_rank:
-            if completed_at is None:
-                completed_at = time.perf_counter()
-            discovery_seconds = completed_at - self._search_started_at
+            if discovered_at is None:
+                discovered_at = time.perf_counter()
+            discovery_seconds = discovered_at - self._search_started_at
         if rank < self._best_rank:
             self.time_to_final_rank_seconds = discovery_seconds
             self.best_seen = 0
@@ -1055,8 +1059,8 @@ class BaseEvaluator:
         results.sort(key=lambda x: seed_to_idx[x[0]])
 
         mats_ranks = []
-        for seed, node, counters, completed_at in results:
-            self._record_run_result(seed, node, counters, mats_ranks, completed_at)
+        for seed, node, counters, discovered_at in results:
+            self._record_run_result(seed, node, counters, mats_ranks, discovered_at)
         if timed_out:
             raise GracefulEvaluationTimeout("executor soft deadline reached")
         return mats_ranks
