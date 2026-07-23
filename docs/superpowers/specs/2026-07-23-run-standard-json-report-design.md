@@ -14,6 +14,10 @@ single JSON report file, rather than a root directory inferred by the runner.
 Optimized matrices remain separate `.npy` files in the report's parent
 directory; each JSON record stores its path.
 
+The default optimizer is the current `scripts/base_search/full_pso.py`, making
+the full PSO search the standard mechanism.  The positional module argument
+remains optional so experiments can explicitly select another optimizer.
+
 `--names` remains the opt-in way to run an explicit set of input matrices.
 Without it, the default input circuit is `gf_mult_Vandaele_wo_ancilla` and the
 runner selects every problem whose parsed GF degree is less than 32.  It orders
