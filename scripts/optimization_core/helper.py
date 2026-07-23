@@ -741,6 +741,8 @@ class BaseEvaluator:
         self.best_eval = 0
         self.total_eval = 0
         self.best_seen = 0
+        self._search_started_at = time.perf_counter()
+        self.time_to_final_rank_seconds: Optional[float] = None
         self.best_seed = None
         self.dao: Dao = Dao()
         self.max_depth = DEFAULT_MAX_DEPTH if max_depth is None else int(max_depth)
@@ -948,9 +950,16 @@ class BaseEvaluator:
             self._best_rank = other._best_rank
             self.best_paths = _copy_path_headers(other.best_paths)
             self.best_seed = other.best_seed
+            self.time_to_final_rank_seconds = other.time_to_final_rank_seconds
         elif other._best_rank == self._best_rank:
             self.best_paths.extend(_copy_path_headers(other.best_paths))
             self.best_seen += other.best_seen
+            other_time = other.time_to_final_rank_seconds
+            if other_time is not None and (
+                self.time_to_final_rank_seconds is None
+                or other_time < self.time_to_final_rank_seconds
+            ):
+                self.time_to_final_rank_seconds = other_time
 
     def _record_run_result(self, seed, node, counters, mats_ranks):
         rank = node.state.rows
@@ -958,6 +967,7 @@ class BaseEvaluator:
         self.total_eval += counters[0]
         self.tcount.append(rank)
         if rank < self._best_rank:
+            self.time_to_final_rank_seconds = time.perf_counter() - self._search_started_at
             self.best_seen = 0
             self.best_ranks.append(rank)
             self.best_evals.append(self.total_eval)
@@ -1113,6 +1123,7 @@ class BaseEvaluator:
             optimizer_landscape_summary(self.best_ranks, self.best_evals, self.total_eval, self.best_seen) +
             f"total_evals: {self.total_eval}" +
             f"\nbest_seen_times: {self.best_seen}" + 
+            f"\ntime_to_final_rank_seconds: {self.time_to_final_rank_seconds if self.time_to_final_rank_seconds is not None else 'n/a'}" +
             (f"\ntimeout_salvaged: 1" if timeout_salvage else "") +
             reuse_note +
             load_note +
