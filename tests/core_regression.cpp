@@ -193,6 +193,26 @@ void check_packed_count_storage() {
     medium.reset(32, 128, false);
     require(medium.count_bytes() == 2, "max bucket 128 should select 16-bit counters");
     require(medium.state_bytes() == 4, "16-bit counters should use 32-bit packed states");
+    medium.add(5, 256);
+    require(medium.argmax().bucket_id == 5 && medium.argmax().count == 256,
+            "16-bit packed counter lost its boundary value");
+
+    CountWS large;
+    large.reset(32, 32768, false);
+    require(large.count_bytes() == 4, "max bucket 32768 should select 32-bit counters");
+    require(large.state_bytes() == 8, "32-bit counters should use 64-bit packed states");
+    large.add(6, 65536);
+    require(large.argmax().bucket_id == 6 && large.argmax().count == 65536,
+            "32-bit packed counter lost its boundary value");
+
+    CountWS wide;
+    constexpr index_t wide_bucket = std::numeric_limits<std::uint32_t>::max();
+    wide.reset(32, wide_bucket, false);
+    require(wide.count_bytes() == 8, "large buckets should select wide counters");
+    require(wide.state_bytes() == 16, "wide counters should select the wide fallback");
+    wide.add(7, wide_bucket * 2);
+    require(wide.argmax().bucket_id == 7 && wide.argmax().count == wide_bucket * 2,
+            "wide counter lost its boundary value");
 }
 
 void check_policy_iteration_smoke() {
