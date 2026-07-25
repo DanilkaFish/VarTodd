@@ -3,8 +3,7 @@
 ## Goal
 
 Reduce the time and memory used by `CountWS` while preserving selection by
-descending count. Equal-count buckets may use deterministic first-touch order
-instead of ascending bucket ID.
+descending count. Equal-count buckets have no ordering guarantee.
 
 The optimization must work well for both balanced input vectors, which touch a
 large fraction of the buckets, and almost-uniform vectors, which touch only a
@@ -81,20 +80,19 @@ Debug checks verify the configured count bound and mapping capacity.
 
 ### Selection
 
-Top-N selection scans `counts[0:touched_size]` sequentially. It retains compact
-positions together with cached counts, so comparisons never reload counts
-through bucket IDs.
+Top-N selection exposes `counts[0:touched_size]` as a range of scored compact
+positions. `std::ranges::partial_sort_copy` writes
+`min(n, touched_size)` values into the output range in descending-count order.
+The same standard-library path is used for every value of `n`; there is no
+hand-written small-N specialization.
 
-For the common `n <= 8` case, selection uses a fixed-size bounded set. It
-recomputes the current worst retained entry only after a replacement. Larger
-requests use cached scored positions in a heap. The final result is ordered by
-descending count. Equal counts retain first-touch order, which is deterministic
-for a fixed input and traversal order.
+Each input value contains its cached count and compact position, so comparisons
+never reload counts through bucket IDs. Equal-count ordering is deliberately
+unspecified.
 
 The selected result contains both bucket ID and count. This removes the need
 for callers to access the internal count representation after selection.
-`argmax` uses the same sequential representation and returns the first touched
-position among equal maxima.
+`argmax` uses `std::ranges::max_element` over the same scored range.
 
 ## Interfaces
 
@@ -123,8 +121,8 @@ matches its current use as mutable state owned by one generator.
   nonzero epoch.
 - Epoch wrap clears the mapping before reuse.
 - `n == 0` or an empty touched set returns no candidates.
-- `n` larger than the touched set returns every touched bucket, ordered by
-  descending count and first-touch order for ties.
+- `n` larger than the touched set returns every touched bucket in descending
+  count order. Equal-count ordering is unspecified.
 
 ## Testing
 
@@ -134,9 +132,10 @@ Regression tests will cover:
 - parity-zero and parity-one initialization;
 - reset reuse and forced epoch wrap;
 - empty and zero-length selections;
-- `n == 1`, `n <= 8`, `n > 8`, and `n >= touched_size`;
+- several output sizes, including `n == 1` and `n >= touched_size`;
 - descending count ordering;
-- deterministic first-touch ordering for equal counts;
+- membership in the valid maximal set when equal counts straddle the output
+  boundary, without asserting tie order;
 - counts at each supported storage-width boundary;
 - a balanced synthetic vector and almost-all-zero/almost-all-one vectors;
 - equivalence of selected bucket scores with a simple wide reference counter.
