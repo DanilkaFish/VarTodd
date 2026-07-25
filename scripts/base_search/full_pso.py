@@ -4,7 +4,6 @@ import random
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Iterable
-from tqdm.auto import tqdm
 from scripts.optimization_core.helper import (
     ActionPool,
     ActionSelection,
@@ -23,74 +22,89 @@ from scripts.optimization_core.helper import (
 np.random.seed(42)
 random.seed(40)
 
-ONE_HOT_CAP = 1 << 20
-PSO_PARTICLES = 16
-PSO_WORKERS = 16
-VALIDATION_TOP_K = 8
-Z_RESERVE_CAP_MIN = 50_000
-Z_RESERVE_CAP_SPAN = 150_000
-Z_HARD_CAP_MIN = 100_000
-Z_HARD_CAP_SPAN = 400_000
-TODD_RESERVE_MAX = 3
+PSO_PARTICLES = 36
+PSO_WORKERS = 12
+PSO_SCORE_SEEDS = 4
+ROBUST_SPREAD_WEIGHT = 0.3
+PSO_OPTIONS = {"c1": 0.9, "c2": 0.6, "w": 0.9}
+# PSO_VELOCITY_CLAMP = (-0.25, 0.25)
+PSO_INITIAL_ITERATIONS = 50
+PSO_RESTART_ITERATIONS = 50
+Z_MAX_BUCKET_CAP = 50_000
+Z_LIMIT_BUCKET_CAP = 500_000
+SAMPLE_COUNT_MAX = 100
+TODD_RESERVE_MAX = 6
+Z_MIN_CAP = 500
 
 def _w_tanh(z: float, scale: float = 4.0, sharp: float = 1.5) -> float:
     return float(scale * np.tanh(z / sharp))
 
-def softmin(xs, beta=6.0):
-    xs = np.asarray(xs, dtype=float)
-    m = xs.min()
-    return float(m - (1.0/beta) * np.log(np.exp(-beta*(xs - m)).sum()))
+def robust_rank_cost(ranks: Iterable[float]) -> float:
+    values = np.asarray(list(ranks), dtype=float)
+    if values.size == 0:
+        raise ValueError("at least one rank is required")
+    return float(np.min(values) + ROBUST_SPREAD_WEIGHT * np.std(values))
 
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
-def budget_int(budget: float, minimum: int, span: int) -> int:
-    return int(minimum + int(span * float(budget)))
+def z_bucket_ranges(
+    z_budget: float,
+    z_research_budget: float,
+    z_limit_budget: float,
+    buckets_space: int,
+) -> tuple[int, int, int]:
+    space = max(1, int(buckets_space))
+    research = float(np.clip(z_research_budget, 0.0, 1.0))
+    maximum_cap = min(Z_MAX_BUCKET_CAP, space)
+    limit_cap = min(Z_LIMIT_BUCKET_CAP, space)
+    minimum = int(Z_MIN_CAP * float(np.clip(z_budget, 0.0, 1.0)))
+    maximum = minimum + int((maximum_cap - 1) * research)
+    limit = maximum + int((limit_cap - maximum) * z_limit_budget)
+    return minimum, maximum, limit
 
 class Evaluator(BaseEvaluator):
-    seeds = [random.randint(1, 10000) for _ in range(2)]
+    seeds = [random.randint(1, 10000) for _ in range(PSO_SCORE_SEEDS)]
     validation_seeds = [random.randint(1, 10000) for _ in range(12)]
 
     @staticmethod
     def _sample_caps(sample_count: int, one_hot_fraction: float):
-        # path_store forced gen_part=1.0 in C++, so every one-hot basis vector was tried
-        # in addition to num_samples random dense vectors. Keep one_hot_fraction
-        # consumed so the parameter vector shape stays stable.
-        _ = one_hot_fraction
-        return [ONE_HOT_CAP, 0, max(0, int(sample_count))]
+        return [int(one_hot_fraction*sample_count), 0, max(0, int(sample_count*(1-one_hot_fraction)))]
 
     def policy_mapping(self):
         ranks = [0]
         pool_score = ExplorationScore([self.map_par(_w_tanh) for _ in range(5)], pow=1)
         final_weights = [self.map_par(_w_tanh) for _ in range(6)]
         final_centers = [self.map_par(sigmoid) for _ in range(6)]
-        final_score = FinalizationScore(final_weights, final_centers, pow=1)
+        final_score = FinalizationScore(final_weights, final_centers, pow=2)
         self.set_scores(ranks, [PolicyScores(exploration=pool_score, final=final_score)])
 
         z_budget = self.map_par(sigmoid)
         z_research_budget = self.map_par(sigmoid)
+        z_limit_budget = self.map_par(sigmoid)
         todd_reserve_budget = self.map_par(sigmoid)
         sample_budget = self.map_par(sigmoid)
-        one_hot_fraction = 0.1 + 0.5 * self.map_par(sigmoid)
-        sample_count = 8 + int(48 * sample_budget)
+        one_hot_fraction = 0.1 + 0.8 * self.map_par(sigmoid)
+        sample_count = 1 + int(SAMPLE_COUNT_MAX * sample_budget)
         sample_caps = self._sample_caps(sample_count, one_hot_fraction)
-        z_reserve_cap = budget_int(z_research_budget, Z_RESERVE_CAP_MIN, Z_RESERVE_CAP_SPAN)
-        z_hard_cap = max(z_reserve_cap, budget_int(z_research_budget, Z_HARD_CAP_MIN, Z_HARD_CAP_SPAN))
+        z_min, z_max, z_limit = z_bucket_ranges(
+            z_budget, z_research_budget, z_limit_budget, self.buckets_space
+        )
         todd_reserve = min(TODD_RESERVE_MAX, int(TODD_RESERVE_MAX * todd_reserve_budget))
 
-        sampling = SamplingBudget(one_hot="all", sparse=sample_caps[1], dense=sample_caps[2], sparse_max_weight=2)
+        sampling = SamplingBudget(one_hot=sample_caps[0], sparse=sample_caps[1], dense=sample_caps[2], sparse_max_weight=2)
         self.set_action_selection(ActionSelection(count=2, mode="softmax", temperature=0.2))
-        self.set_action_pool(ActionPool(final_size=12))
-        self.set_tohpe_search(TohpeSearch(sampling=sampling, pool=SourcePool(keep=2, reserve=0), z_choices=2))
+        self.set_action_pool(ActionPool(final_size=18))
+        self.set_tohpe_search(TohpeSearch(sampling=sampling, pool=SourcePool(keep=12, reserve=0), z_choices=4))
         self.set_todd_search(
             ToddSearch(
                 sampling=sampling,
                 pool=SourcePool(keep=12, reserve=todd_reserve),
-                actions_per_bucket=1,
+                actions_per_bucket=2,
                 buckets=ZBucketSearch(
-                    min_buckets=10 + int(250 * z_budget),
-                    max_buckets=z_reserve_cap,
-                    limit_bucket=z_hard_cap,
+                    min_buckets=z_min,
+                    max_buckets=z_max,
+                    limit_bucket=z_limit,
                 ),
             )
         )
@@ -98,9 +112,7 @@ class Evaluator(BaseEvaluator):
     def evaluate(self, params: Iterable[float], max_workers: int = 1, seeds: Iterable[int] | None = None) -> float:
         seeds = list(self.seeds if seeds is None else seeds)
         tcounts = self.run(params, seeds, max_workers=max_workers)
-        bestish = softmin(tcounts, beta=6.0)
-        spread = float(np.std(tcounts)) if len(tcounts) > 1 else 0.0
-        return bestish + 0.02 * spread
+        return robust_rank_cost(tcounts)
     def __call__(self, params: Iterable):
         return self.evaluate(params, max_workers=1, seeds=self.validation_seeds)
     
@@ -132,43 +144,10 @@ def _score_position(fun: Evaluator, position, seeds=None) -> tuple[float, Evalua
         local_fun.close_workers()
     return float(cost), local_fun
 
-def _unique_positions(items, limit: int):
-    out = []
-    seen = set()
-    for cost, position in items:
-        pos = np.asarray(position, dtype=float).copy()
-        key = tuple(np.round(pos, 8))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append((float(cost), pos))
-        if len(out) >= limit:
-            break
-    return out
-
-def _validate_top_positions(fun: Evaluator, candidates):
-    best_cost = float("inf")
-    best_position = None
-    for _, position in tqdm(candidates, desc="validating policies", total=len(candidates), leave=True):
-        cost, local_fun = _score_position(fun, position, seeds=fun.validation_seeds)
-        fun.merge_run_state_from(local_fun)
-        if cost < best_cost:
-            best_cost = cost
-            best_position = np.asarray(position, dtype=float).copy()
-    return best_position, best_cost
-
 def run_opt(fun: Evaluator, num_eval: int=10, label: str = "pso") -> np.ndarray:
     x = fun.extract_active()
     n_params = len(x)
     bounds = (np.full(n_params, -1.0), np.full(n_params, 1.0))
-    options = {
-        'c1': 0.4,
-        'c2': 0.4,
-        'w': 0.7,
-    }
-
-    search_history = []
-
     print(f"{label}: optimizing {n_params} params for {num_eval} iterations")
     with ThreadPoolExecutor(max_workers=PSO_WORKERS) as executor:
         def objective(positions):
@@ -177,44 +156,38 @@ def run_opt(fun: Evaluator, num_eval: int=10, label: str = "pso") -> np.ndarray:
             for _, local_fun in results:
                 fun.merge_run_state_from(local_fun)
             costs = np.asarray([cost for cost, _ in results], dtype=float)
-            search_history.extend((float(cost), pos.copy()) for cost, pos in zip(costs, positions))
             return costs
 
         optimizer = ps.single.GlobalBestPSO(
             n_particles=PSO_PARTICLES,
             dimensions=n_params,
-            options=options,
+            options=PSO_OPTIONS,
             bounds=bounds,
+            # velocity_clamp=PSO_VELOCITY_CLAMP,
         )
-        best_cost, best_position = optimizer.optimize(
+        _, best_position = optimizer.optimize(
             objective,
             iters=num_eval,
             verbose=True
         )
 
-    ranked = sorted(search_history + [(float(best_cost), np.asarray(best_position, dtype=float).copy())],
-                    key=lambda item: item[0])
-    validation_candidates = _unique_positions(ranked, VALIDATION_TOP_K)
-    validated_position, validated_cost = _validate_top_positions(fun, validation_candidates)
-    print(f"validation best cost={validated_cost:.3f} over {len(validation_candidates)} policies "
-          f"and {len(fun.validation_seeds)} seeds")
-    return validated_position
+    return np.asarray(best_position, dtype=float)
         
 def entrypoint(mat: Matrix):
-    fun = Evaluator(mat=mat, fin_rank=170, max_depth=500)
-    num_eval = 50
-    x0 = run_opt(fun, num_eval, label="initial pso")
+    fun = Evaluator(mat=mat, max_depth=1000)
+    x0 = run_opt(fun, PSO_INITIAL_ITERATIONS, label="initial pso")
     print(f"{fun.best_paths[0].final_node.state.rows=}")
 
     best_rank = fun.best_paths[0].final_node.state.rows
+    upper_rank_thr = max(best_rank + 1, best_rank + (fun.init_rank - best_rank) // 3 * 2)
     mid_rank_thr = max(best_rank + 1, (fun.init_rank + best_rank) // 2)
-    late_rank_thr = max(best_rank + 1, best_rank + (mid_rank_thr - best_rank) // 2)
+    late_rank_thr = max(best_rank + 1, (mid_rank_thr + best_rank) // 2)
 
-    for stage, rank_thr in enumerate((mid_rank_thr, late_rank_thr), start=1):
+    for stage, rank_thr in enumerate((upper_rank_thr, mid_rank_thr, late_rank_thr), start=1):
         print(f"restart {stage}: setup_new_init at rank_thr={rank_thr}")
         x_active = fun.set_up_new_init(0, rank_thr=rank_thr, xopt=None)
         if x_active is None:
             print(f"restart {stage}: no branch found")
             break
-        x0 = run_opt(fun, 30, label=f"restart {stage} pso")
+        x0 = run_opt(fun, PSO_RESTART_ITERATIONS, label=f"restart {stage} pso")
     return fun.get_best()

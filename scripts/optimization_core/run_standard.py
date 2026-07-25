@@ -61,7 +61,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "workers",
         nargs="?",
         type=int,
-        default=max(1, min(8, os.cpu_count() or 1)),
+        default=max(1, min(1, os.cpu_count() or 1)),
         help="Number of matrices to process in parallel.",
     )
     parser.add_argument(
@@ -225,8 +225,11 @@ def main(argv: Optional[list[str]] = None) -> None:
             index = futures[future]
             record, tcount = future.result()
             records[index] = record
+            _write_json_report(
+                output_path,
+                [record for record in records if record is not None],
+            )
             tcounts.append(tcount)
-    _write_json_report(output_path, [record for record in records if record is not None])
     print([tcount for tcount in tcounts])
 
 
