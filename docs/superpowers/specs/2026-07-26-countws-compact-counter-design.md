@@ -2,8 +2,9 @@
 
 ## Goal
 
-Reduce the time and memory used by `CountWS` while preserving selection by
-descending count. Equal-count buckets have no ordering guarantee.
+Reduce the time and memory used by `CountWS` while preserving selection of the
+requested number of greatest-count buckets. The returned buckets have no
+ordering guarantee.
 
 The optimization must work well for both balanced input vectors, which touch a
 large fraction of the buckets, and almost-uniform vectors, which touch only a
@@ -36,6 +37,8 @@ count at the bucket ID:
   also contains the current epoch, so reset normally remains O(1).
 - `counts[pos]` stores the count for a touched position.
 - `pos_to_id[pos]` maps the compact position back to its bucket ID.
+- `selection_positions` is reusable scratch space containing compact positions
+  for top-K partitioning.
 - `touched_size` is the number of valid compact positions in the current epoch.
 
 The mapping word uses the smallest safe unsigned integer type. Its low bits
@@ -80,15 +83,16 @@ Debug checks verify the configured count bound and mapping capacity.
 
 ### Selection
 
-Top-N selection exposes `counts[0:touched_size]` as a range of scored compact
-positions. `std::ranges::partial_sort_copy` writes
-`min(n, touched_size)` values into the output range in descending-count order.
-The same standard-library path is used for every value of `n`; there is no
-hand-written small-N specialization.
+Top-N selection fills `selection_positions[0:touched_size]` with consecutive
+compact positions. If fewer than all touched buckets are requested,
+`std::ranges::nth_element` partitions this range at
+`min(n, touched_size)`. Its comparator reads the narrow contiguous count array
+by compact position.
 
-Each input value contains its cached count and compact position, so comparisons
-never reload counts through bucket IDs. Equal-count ordering is deliberately
-unspecified.
+The selected prefix is converted to scored bucket results without sorting it.
+The result therefore contains the requested greatest-count buckets in
+unspecified order. When equal counts straddle the partition boundary, any
+corresponding buckets are valid.
 
 The selected result contains both bucket ID and count. This removes the need
 for callers to access the internal count representation after selection.
@@ -121,8 +125,8 @@ matches its current use as mutable state owned by one generator.
   nonzero epoch.
 - Epoch wrap clears the mapping before reuse.
 - `n == 0` or an empty touched set returns no candidates.
-- `n` larger than the touched set returns every touched bucket in descending
-  count order. Equal-count ordering is unspecified.
+- `n` larger than the touched set returns every touched bucket in unspecified
+  order.
 
 ## Testing
 
@@ -133,9 +137,9 @@ Regression tests will cover:
 - reset reuse and forced epoch wrap;
 - empty and zero-length selections;
 - several output sizes, including `n == 1` and `n >= touched_size`;
-- descending count ordering;
-- membership in the valid maximal set when equal counts straddle the output
-  boundary, without asserting tie order;
+- membership in the greatest-count set without asserting output order;
+- membership in the valid maximal set when equal counts straddle the partition
+  boundary;
 - counts at each supported storage-width boundary;
 - a balanced synthetic vector and almost-all-zero/almost-all-one vectors;
 - equivalence of selected bucket scores with a simple wide reference counter.
