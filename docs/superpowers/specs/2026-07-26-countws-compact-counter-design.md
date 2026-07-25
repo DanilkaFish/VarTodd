@@ -20,9 +20,9 @@ build/bin/RelWithDebInfo/bench \
   12 40 8 0
 ```
 
-The verified pre-change run completed 12 iterations in 9.118 seconds, or
-759.8 milliseconds per iteration. A `perf` profile attributed 37.26% of sampled
-cycles to `CountWS::argmax_n_into` and 23.26% to `CountWS::add`.
+The five-run pre-change median completed 12 iterations in 6.820 seconds, or
+568.3 milliseconds per iteration. An earlier `perf` profile identified both
+`CountWS::argmax_n_into` and `CountWS::add` as dominant costs.
 
 For this matrix, the Todd index has 1,407,877 buckets and a maximum bucket size
 of 9. Each bucket entry contributes at most 2, so every counter is bounded by
@@ -30,32 +30,27 @@ of 9. Each bucket entry contributes at most 2, so every counter is bounded by
 
 ## Representation
 
-`CountWS` will store touched buckets by compact position rather than storing the
-count at the bucket ID:
+`CountWS` stores a packed state directly at each bucket ID:
 
-- `id_to_pos` maps a bucket ID to a compact touched position. Each mapping word
-  also contains the current epoch, so reset normally remains O(1).
-- `counts[pos]` stores the count for a touched position.
-- `pos_to_id[pos]` maps the compact position back to its bucket ID.
-- `selection_positions` is reusable scratch space containing compact positions
-  for top-K partitioning.
-- `touched_size` is the number of valid compact positions in the current epoch.
+- `state_by_id[id]` combines the bucket's current epoch and count.
+- `touched_ids` contains each bucket first touched in the current epoch.
+- `touched_size` is the valid prefix of `touched_ids`.
 
-The mapping word uses the smallest safe unsigned integer type. Its low bits
-hold a position in `[0, K)`, and its remaining bits hold the epoch. The
-benchmark needs 21 position bits, leaving 11 epoch bits in a 32-bit word.
-When the epoch wraps, `id_to_pos` is cleared before the next epoch begins.
-A wider mapping word is used when the bucket count leaves too few epoch bits in
-32 bits.
+The count uses the smallest safe unsigned integer type for
+`2 * max_bucket_size`. The state word is twice that width, with the count in
+the low half and epoch in the high half. The benchmark therefore uses an
+8-bit count and 8-bit epoch in one 16-bit state cell. Wider 32-bit and 64-bit
+state cells support 16-bit and 32-bit counts. Exceptionally large counts use a
+wide fallback.
 
-The count array uses the smallest unsigned integer type that can represent
-`2 * max_bucket_size`. The benchmark therefore uses 8-bit counts. Wider count
-types are selected for matrices with larger buckets. The bound calculation
-must be checked for arithmetic overflow.
+This direct state layout replaced an experimentally implemented
+ID-to-compact-position map. Profiling that representation showed that the
+dependent map lookup followed by `counts[pos]` raised accumulation to 49.2% of
+cycles and produced no median speedup. The direct packed state requires one
+random load/update and makes the benchmark state array about 2.7 MiB.
 
-The hot accumulation loop is instantiated for the selected mapping and count
-types. Runtime representation dispatch occurs once outside the pair loop, not
-once per update.
+Runtime representation dispatch occurs once outside the pair loop, not once
+per update.
 
 ## Operations
 
@@ -65,29 +60,27 @@ Configuration records the bucket count and maximum possible counter value,
 allocates or grows storage, advances the epoch, and sets `touched_size` to
 zero. Storage is reused by subsequent calls.
 
-On epoch wrap, the ID-to-position mapping is cleared and the epoch restarts at
-one. Compact count and ID arrays do not need clearing because only positions
-below `touched_size` are valid.
+On epoch wrap, `state_by_id` is cleared and the epoch restarts at one.
+`touched_ids` does not need clearing because only positions below
+`touched_size` are valid.
 
 ### Add
 
-An update reads the packed mapping for its bucket ID:
+An update reads the packed state for its bucket ID:
 
-1. If the stored epoch is current, decode the position and increment its
-   contiguous counter.
-2. Otherwise, allocate the next compact position, write its ID and initial
-   count, and update the packed mapping.
+1. If the stored epoch is current, increment the count in the same state word.
+2. Otherwise, append the ID to `touched_ids` and write the current epoch with
+   the initial count.
 
 The initial count remains `delta - parity`, matching existing parity behavior.
-Debug checks verify the configured count bound and mapping capacity.
+Debug checks verify the configured count bound and bucket-ID capacity.
 
 ### Selection
 
-Top-N selection fills `selection_positions[0:touched_size]` with consecutive
-compact positions. If fewer than all touched buckets are requested,
-`std::ranges::nth_element` partitions this range at
-`min(n, touched_size)`. Its comparator reads the narrow contiguous count array
-by compact position.
+If fewer than all touched buckets are requested,
+`std::ranges::nth_element` partitions `touched_ids[0:touched_size]` at
+`min(n, touched_size)`. Its comparator extracts the narrow count from each
+bucket's packed state.
 
 The selected prefix is converted to scored bucket results without sorting it.
 The result therefore contains the requested greatest-count buckets in
@@ -121,9 +114,8 @@ matches its current use as mutable state owned by one generator.
 - The maximum counter bound is computed from the index's maximum bucket size
   with checked multiplication.
 - Narrow counter selection is permitted only when that proven bound fits.
-- Mapping packing must preserve every position value and reserve a usable,
-  nonzero epoch.
-- Epoch wrap clears the mapping before reuse.
+- State packing must preserve the configured count bound and a nonzero epoch.
+- Epoch wrap clears the packed state array before reuse.
 - `n == 0` or an empty touched set returns no candidates.
 - `n` larger than the touched set returns every touched bucket in unspecified
   order.

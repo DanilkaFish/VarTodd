@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace ID-indexed 64-bit `CountWS` counters with compact touched-position counters and use `std::ranges::nth_element` to return an unsorted top-K set.
+**Goal:** Replace ID-indexed 64-bit `CountWS` counters with packed epoch/count states and use `std::ranges::nth_element` to return an unsorted top-K set.
 
-**Architecture:** A generation-stamped ID-to-position map resolves bucket IDs to compact positions. Narrow counts and position-to-ID values are stored contiguously by touched position; selection partitions reusable compact-position scratch space. Runtime storage-width dispatch happens once around the accumulation loops.
+**Architecture:** A narrow state word at each bucket ID packs its epoch and count, while a compact touched-ID array records active buckets. Selection partitions that touched-ID array in place and extracts counts from the packed state. Runtime storage-width dispatch happens once around the accumulation loops.
 
 **Tech Stack:** C++20, CMake/Ninja multi-config build, the existing `vartodd_core_regression` executable, `std::variant`, `std::ranges::nth_element`, and Linux `perf`.
 
@@ -343,7 +343,67 @@ git add include/nullspace.hpp src/core/nullspace.cpp tests/core_regression.cpp
 git commit -m "Use compact counters for Tohpe selection"
 ```
 
-### Task 4: Verify Correctness and Performance
+### Task 4: Replace the Profiled Position Map with Direct Packed States
+
+**Files:**
+- Modify: `include/nullspace.hpp`
+- Modify: `tests/core_regression.cpp`
+
+**Interfaces:**
+- Produces: `detail::PackedCountStorage<Count, StateWord>`
+- Produces: `CountWS::state_bytes() const -> std::size_t`
+- Changes: optimized variants to `(uint8_t,uint16_t)`,
+  `(uint16_t,uint32_t)`, and `(uint32_t,uint64_t)`
+
+- [ ] **Step 1: Record the failed position-map performance result**
+
+Compare the first five-run result with `/tmp/vartodd-countws-baseline.txt`.
+The measured medians, 6818.25 ms and 6819.74 ms, show no meaningful
+improvement. Profile the exact workload and confirm that the dependent
+ID-to-position lookup raises accumulation to 49.2% of sampled cycles.
+
+- [ ] **Step 2: Add a failing packed-state width test**
+
+Change the storage regression to instantiate:
+
+```cpp
+detail::PackedCountStorage<std::uint8_t, std::uint16_t>
+```
+
+Require `CountWS::state_bytes()` to return 2 for maximum bucket size 9 and 4
+for maximum bucket size 128. Run the focused build and observe failure because
+the packed storage and diagnostic do not exist.
+
+- [ ] **Step 3: Implement direct packed state updates**
+
+Store one `StateWord` per bucket and one 32-bit ID per touched bucket. Pack the
+count in the low `numeric_limits<Count>::digits` bits and the epoch above it.
+On first touch, append the bucket ID; on repeat touch, update the same state
+word. Partition the touched-ID array directly:
+
+```cpp
+std::ranges::nth_element(first, first + n, last, [this](auto a, auto b) {
+    return count_of_(a) > count_of_(b);
+});
+```
+
+Do not allocate an ID-to-position map, position-to-ID array, or selection
+position array for the optimized variants.
+
+- [ ] **Step 4: Verify the refinement**
+
+```bash
+cmake --build build --config RelWithDebInfo --target vartodd_core_regression bench -j2
+ctest --test-dir build -C RelWithDebInfo --output-on-failure
+build/bin/RelWithDebInfo/bench \
+  ./data/init_npy/gf_mult_Vandaele_wo_ancilla/gf2^32_3228310.npy \
+  12 40 8 0
+```
+
+Expected: all tests pass and the benchmark is materially below the 6819.74 ms
+baseline median.
+
+### Task 5: Verify Correctness and Performance
 
 **Files:**
 - Inspect: `include/nullspace.hpp`
