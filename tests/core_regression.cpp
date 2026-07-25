@@ -178,6 +178,20 @@ void check_compact_count_storage() {
     density_ws.add(63, 2);
     const std::map<std::uint32_t, index_t> sparse_reference{{0, 2}, {63, 4}};
     require_top_count_set(density_ws.argmax_n(64), sparse_reference, 64);
+
+    CountWS narrow;
+    narrow.reset(32, 9, false);
+    require(narrow.count_bytes() == 1, "max bucket 9 should select byte counters");
+    require(narrow.mapping_bytes() == 4, "32 buckets should select 32-bit mappings");
+    narrow.add(3, 2);
+    narrow.add(19, 2);
+    narrow.add(3, 2);
+    const std::map<std::uint32_t, index_t> wrapper_reference{{3, 4}, {19, 2}};
+    require_top_count_set(narrow.argmax_n(1), wrapper_reference, 1);
+
+    CountWS medium;
+    medium.reset(32, 128, false);
+    require(medium.count_bytes() == 2, "max bucket 128 should select 16-bit counters");
 }
 
 void check_policy_iteration_smoke() {

@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace todd {
@@ -172,18 +173,102 @@ class CompactCountStorage {
 
 } // namespace detail
 
-struct CountWS {
-    std::vector<index_t>       cnt;
-    std::vector<std::uint16_t> tag;
-    std::vector<std::uint32_t> used;
-    std::uint16_t              epoch = 1;
-    bool                       parity = false;
+class CountWS {
+    template <class Count, class MapWord>
+    using StorageFor = detail::CompactCountStorage<Count, MapWord>;
 
-    auto argmax_n(std::size_t n) const -> std::vector<index_t>;
-    void argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) const;
-    auto argmax() const -> index_t;
-    void reset(std::size_t K);
-    void add(index_t id, index_t delta);
+    using Storage = std::variant<StorageFor<std::uint8_t, std::uint32_t>,
+                                 StorageFor<std::uint16_t, std::uint32_t>,
+                                 StorageFor<std::uint32_t, std::uint32_t>,
+                                 StorageFor<std::uint64_t, std::uint32_t>,
+                                 StorageFor<std::uint8_t, std::uint64_t>,
+                                 StorageFor<std::uint16_t, std::uint64_t>,
+                                 StorageFor<std::uint32_t, std::uint64_t>,
+                                 StorageFor<std::uint64_t, std::uint64_t>>;
+
+  public:
+    void reset(std::size_t buckets, index_t max_bucket, bool parity) {
+        if (buckets > std::numeric_limits<std::uint32_t>::max())
+            throw std::overflow_error("CountWS supports at most 2^32-1 buckets");
+        if (max_bucket > std::numeric_limits<index_t>::max() / 2)
+            throw std::overflow_error("CountWS maximum count overflow");
+
+        const index_t max_count = max_bucket * 2;
+        const unsigned position_bits =
+            (buckets <= 1) ? 0U : std::bit_width(static_cast<std::uint64_t>(buckets - 1));
+        const bool use_u32_mapping = position_bits <= 24;
+
+        auto select = [this, buckets, max_count, parity]<class Count, class MapWord>() {
+            using Selected = StorageFor<Count, MapWord>;
+            if (!std::holds_alternative<Selected>(storage_))
+                storage_.template emplace<Selected>();
+            std::get<Selected>(storage_).reset(buckets, max_count, parity);
+            count_bytes_ = sizeof(Count);
+            mapping_bytes_ = sizeof(MapWord);
+        };
+
+        if (use_u32_mapping) {
+            if (max_count <= std::numeric_limits<std::uint8_t>::max())
+                select.template operator()<std::uint8_t, std::uint32_t>();
+            else if (max_count <= std::numeric_limits<std::uint16_t>::max())
+                select.template operator()<std::uint16_t, std::uint32_t>();
+            else if (max_count <= std::numeric_limits<std::uint32_t>::max())
+                select.template operator()<std::uint32_t, std::uint32_t>();
+            else
+                select.template operator()<std::uint64_t, std::uint32_t>();
+        } else {
+            if (max_count <= std::numeric_limits<std::uint8_t>::max())
+                select.template operator()<std::uint8_t, std::uint64_t>();
+            else if (max_count <= std::numeric_limits<std::uint16_t>::max())
+                select.template operator()<std::uint16_t, std::uint64_t>();
+            else if (max_count <= std::numeric_limits<std::uint32_t>::max())
+                select.template operator()<std::uint32_t, std::uint64_t>();
+            else
+                select.template operator()<std::uint64_t, std::uint64_t>();
+        }
+    }
+
+    template <class F>
+    decltype(auto) with_storage(F&& function) {
+        return std::visit(
+            [&function](auto& storage) -> decltype(auto) {
+                return std::forward<F>(function)(storage);
+            },
+            storage_);
+    }
+
+    template <class F>
+    decltype(auto) with_storage(F&& function) const {
+        return std::visit(
+            [&function](const auto& storage) -> decltype(auto) {
+                return std::forward<F>(function)(storage);
+            },
+            storage_);
+    }
+
+    void add(index_t id, index_t delta) {
+        with_storage([id, delta](auto& storage) { storage.add(id, delta); });
+    }
+
+    std::vector<CountWSScore> argmax_n(std::size_t n) {
+        return with_storage([n](auto& storage) { return storage.argmax_n(n); });
+    }
+
+    void argmax_n_into(std::size_t n, std::vector<CountWSScore>& out) {
+        with_storage([n, &out](auto& storage) { storage.argmax_n_into(n, out); });
+    }
+
+    CountWSScore argmax() const {
+        return with_storage([](const auto& storage) { return storage.argmax(); });
+    }
+
+    std::size_t count_bytes() const noexcept { return count_bytes_; }
+    std::size_t mapping_bytes() const noexcept { return mapping_bytes_; }
+
+  private:
+    Storage     storage_;
+    std::size_t count_bytes_ = 1;
+    std::size_t mapping_bytes_ = 4;
 };
 
 // Owns a matrix plus the indexes/bases reused during one policy iteration.
@@ -308,7 +393,7 @@ class TohpeGenerator {
     mutable CountWS                 ws_;
     mutable std::vector<index_t>    scratch_ones_;
     mutable std::vector<index_t>    scratch_zeros_;
-    mutable std::vector<index_t>    scratch_candidates_;
+    mutable std::vector<CountWSScore> scratch_candidates_;
     mutable std::vector<TohpeZInfo> scratch_z_infos_;
 };
 

@@ -275,102 +275,6 @@ static void or_shifted(RowView dst, index_t offset, RowCView src) noexcept {
 
 } // namespace
 
-void CountWS::reset(std::size_t K) {
-    if (K > std::numeric_limits<std::uint32_t>::max())
-        throw std::overflow_error("CountWS supports at most 2^32-1 buckets");
-    if (cnt.size() < K) {
-        cnt.resize(K);
-        tag.resize(K, 0);
-    }
-    ++epoch;
-    if (epoch == 0) {
-        std::fill(tag.begin(), tag.end(), 0);
-        epoch = 1;
-    }
-    used.clear();
-}
-
-void CountWS::add(index_t id, index_t delta) {
-    assert(id < cnt.size());
-    assert(id <= std::numeric_limits<std::uint32_t>::max());
-    const auto idx = static_cast<std::size_t>(id);
-    if (tag[idx] != epoch) {
-        tag[idx] = epoch;
-        cnt[idx] = delta - parity;
-        used.push_back(static_cast<std::uint32_t>(id));
-    } else
-        cnt[idx] += delta;
-}
-
-index_t CountWS::argmax() const {
-    assert(used.size() > 0);
-    std::uint32_t best = used[0];
-    for (auto id : used)
-        if (cnt[id] > cnt[best] || (cnt[id] == cnt[best] && id < best))
-            best = id;
-    return static_cast<index_t>(best);
-}
-
-std::vector<index_t> CountWS::argmax_n(std::size_t n) const {
-    std::vector<index_t> candidates;
-    argmax_n_into(n, candidates);
-    return candidates;
-}
-
-void CountWS::argmax_n_into(std::size_t n, std::vector<index_t>& scratch_out) const {
-    scratch_out.clear();
-    if (used.empty() || n == 0)
-        return;
-
-    auto better = [this](auto a, auto b) {
-        if (cnt[a] != cnt[b])
-            return cnt[a] > cnt[b];
-        return a < b;
-    };
-
-    n = std::min(n, used.size());
-    if (n <= 8) {
-        scratch_out.reserve(n);
-        for (auto id : used) {
-            auto it = scratch_out.begin();
-            while (it != scratch_out.end() && better(*it, id))
-                ++it;
-            if (it == scratch_out.end()) {
-                if (scratch_out.size() < n)
-                    scratch_out.push_back(id);
-                continue;
-            }
-            if (scratch_out.size() < n) {
-                scratch_out.insert(it, id);
-                continue;
-            }
-            scratch_out.insert(it, id);
-            scratch_out.pop_back();
-        }
-        return;
-    }
-    if (n == used.size()) {
-        scratch_out.assign(used.begin(), used.end());
-        std::ranges::sort(scratch_out, better);
-        return;
-    }
-
-    scratch_out.reserve(n);
-    for (auto id : used) {
-        if (scratch_out.size() < n) {
-            scratch_out.push_back(id);
-            std::push_heap(scratch_out.begin(), scratch_out.end(), better);
-            continue;
-        }
-        if (better(id, scratch_out.front())) {
-            std::pop_heap(scratch_out.begin(), scratch_out.end(), better);
-            scratch_out.back() = id;
-            std::push_heap(scratch_out.begin(), scratch_out.end(), better);
-        }
-    }
-    std::ranges::sort(scratch_out, better);
-}
-
 MatrixWithData::MatrixWithData(Matrix P, bool build_full_todd) : P_{std::move(P)}, index_{P_} {
     if (build_full_todd) {
         auto precomputed = build_matrix_with_data_precompute(P_);
@@ -623,33 +527,33 @@ void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
             scratch_zeros_[zeros_size++] = i;
     }
 
-    ws_.reset(idx.buckets_num());
-    ws_.parity = y_count % 2;
-    for (std::size_t oi = 0; oi < ones_size; ++oi) {
-        const index_t i = scratch_ones_[oi];
-        ws_.add(idx.single_id()[static_cast<std::size_t>(i)], 1);
+    ws_.reset(idx.buckets_num(), idx.max_bucket(), (y_count & 1U) != 0);
+    ws_.with_storage([&](auto& counts) {
+        for (std::size_t oi = 0; oi < ones_size; ++oi) {
+            const index_t i = scratch_ones_[oi];
+            counts.add(idx.single_id()[static_cast<std::size_t>(i)], 1);
 
-        for (std::size_t zi = 0; zi < zeros_size; ++zi) {
-            const index_t j = scratch_zeros_[zi];
-            const auto id = idx.pair_bucket_id(i, j);
-            ws_.add(id, 2);
+            for (std::size_t zi = 0; zi < zeros_size; ++zi) {
+                const index_t j = scratch_zeros_[zi];
+                counts.add(idx.pair_bucket_id(i, j), 2);
+            }
         }
-    }
-    if (ws_.parity) {
-        for (std::size_t zi = 0; zi < zeros_size; ++zi) {
-            const index_t i = scratch_zeros_[zi];
-            ws_.add(idx.single_id()[static_cast<std::size_t>(i)], 2);
+        if ((y_count & 1U) != 0) {
+            for (std::size_t zi = 0; zi < zeros_size; ++zi) {
+                const index_t i = scratch_zeros_[zi];
+                counts.add(idx.single_id()[static_cast<std::size_t>(i)], 2);
+            }
         }
-    }
+        counts.argmax_n_into(num_samples, scratch_candidates_);
+    });
 
     scratch_out.clear();
-    ws_.argmax_n_into(num_samples, scratch_candidates_);
     scratch_out.reserve(scratch_candidates_.size());
-    for (auto id : scratch_candidates_) {
-        const auto bucket_id = static_cast<std::uint32_t>(id);
+    for (const auto& candidate : scratch_candidates_) {
+        const auto bucket_id = candidate.bucket_id;
         scratch_out.push_back(TohpeZInfo{
             .z           = Row(idx.key_of(bucket_id)),
-            .reduction   = index_t(ws_.cnt[id]),
+            .reduction   = candidate.count,
             .bucket_size = idx.bucket_size(bucket_id),
             .bucket_id   = bucket_id,
         });
