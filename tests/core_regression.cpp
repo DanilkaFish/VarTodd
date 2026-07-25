@@ -132,8 +132,8 @@ void require_top_count_set(const std::vector<CountWSScore>& actual,
     require(actual_counts == expected_counts, "compact CountWS must return the greatest counts");
 }
 
-void check_compact_count_storage() {
-    detail::CompactCountStorage<std::uint8_t, std::uint8_t> ws;
+void check_packed_count_storage() {
+    detail::PackedCountStorage<std::uint8_t, std::uint16_t> ws;
 
     ws.reset(8, 20, false);
     ws.add(7, 2);
@@ -154,7 +154,7 @@ void check_compact_count_storage() {
     const std::map<std::uint32_t, index_t> odd_reference{{1, 2}, {2, 1}};
     require_top_count_set(ws.argmax_n(2), odd_reference, 2);
 
-    for (std::uint32_t generation = 0; generation < 40; ++generation) {
+    for (std::uint32_t generation = 0; generation < 300; ++generation) {
         ws.reset(8, 20, false);
         const std::uint32_t id = generation & 7U;
         ws.add(id, 2);
@@ -163,7 +163,7 @@ void check_compact_count_storage() {
                 "compact CountWS epoch wrap leaked an old bucket");
     }
 
-    detail::CompactCountStorage<std::uint8_t, std::uint8_t> density_ws;
+    detail::PackedCountStorage<std::uint8_t, std::uint16_t> density_ws;
     density_ws.reset(64, 100, false);
     std::map<std::uint32_t, index_t> balanced_reference;
     for (std::uint32_t id = 0; id < 64; id += 2) {
@@ -182,7 +182,7 @@ void check_compact_count_storage() {
     CountWS narrow;
     narrow.reset(32, 9, false);
     require(narrow.count_bytes() == 1, "max bucket 9 should select byte counters");
-    require(narrow.mapping_bytes() == 4, "32 buckets should select 32-bit mappings");
+    require(narrow.state_bytes() == 2, "byte counters should use 16-bit packed states");
     narrow.add(3, 2);
     narrow.add(19, 2);
     narrow.add(3, 2);
@@ -192,6 +192,7 @@ void check_compact_count_storage() {
     CountWS medium;
     medium.reset(32, 128, false);
     require(medium.count_bytes() == 2, "max bucket 128 should select 16-bit counters");
+    require(medium.state_bytes() == 4, "16-bit counters should use 32-bit packed states");
 }
 
 void check_policy_iteration_smoke() {
@@ -232,7 +233,7 @@ int main() {
         check_row_views();
         check_matrix_basics();
         check_todd_index_basics();
-        check_compact_count_storage();
+        check_packed_count_storage();
         check_policy_iteration_smoke();
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

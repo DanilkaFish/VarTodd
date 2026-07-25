@@ -35,6 +35,131 @@ struct CountWSScore {
 
 namespace detail {
 
+template <class Count, class StateWord>
+class PackedCountStorage {
+    static_assert(std::is_integral_v<Count> && std::is_unsigned_v<Count>);
+    static_assert(std::is_integral_v<StateWord> && std::is_unsigned_v<StateWord>);
+    static_assert(std::numeric_limits<StateWord>::digits >= 2 * std::numeric_limits<Count>::digits);
+
+  public:
+    void reset(std::size_t buckets, index_t max_count, bool parity) {
+        if (buckets > std::numeric_limits<std::uint32_t>::max())
+            throw std::overflow_error("PackedCountStorage supports at most 2^32-1 buckets");
+        if (max_count > static_cast<index_t>(std::numeric_limits<Count>::max()))
+            throw std::overflow_error("PackedCountStorage count type is too narrow");
+
+        const bool layout_changed = buckets_ != buckets;
+        if (buckets > capacity_) {
+            state_by_id_ = std::make_unique<StateWord[]>(buckets);
+            touched_ids_ = std::make_unique_for_overwrite<std::uint32_t[]>(buckets);
+            capacity_ = buckets;
+        } else if (layout_changed && capacity_ != 0) {
+            std::fill_n(state_by_id_.get(), capacity_, StateWord{0});
+        }
+
+        buckets_ = buckets;
+        touched_size_ = 0;
+        max_count_ = max_count;
+        parity_ = parity;
+
+        if (layout_changed)
+            epoch_ = 0;
+        if (epoch_ == std::numeric_limits<Count>::max()) {
+            if (capacity_ != 0)
+                std::fill_n(state_by_id_.get(), capacity_, StateWord{0});
+            epoch_ = 1;
+        } else {
+            ++epoch_;
+        }
+    }
+
+    void add(index_t id, index_t delta) noexcept {
+        assert(id < buckets_);
+        assert(id <= std::numeric_limits<std::uint32_t>::max());
+        assert(delta >= static_cast<index_t>(parity_));
+
+        constexpr unsigned count_bits = std::numeric_limits<Count>::digits;
+        constexpr StateWord count_mask = static_cast<StateWord>(std::numeric_limits<Count>::max());
+        const auto idx = static_cast<std::size_t>(id);
+        const StateWord state = state_by_id_[idx];
+        const StateWord epoch_prefix = static_cast<StateWord>(epoch_) << count_bits;
+        if ((state >> count_bits) == static_cast<StateWord>(epoch_)) {
+            const index_t next = static_cast<index_t>(state & count_mask) + delta;
+            assert(next <= max_count_);
+            assert(next <= static_cast<index_t>(std::numeric_limits<Count>::max()));
+            state_by_id_[idx] = static_cast<StateWord>(epoch_prefix | static_cast<StateWord>(next));
+            return;
+        }
+
+        const index_t initial = delta - static_cast<index_t>(parity_);
+        assert(touched_size_ < buckets_);
+        assert(initial <= max_count_);
+        assert(initial <= static_cast<index_t>(std::numeric_limits<Count>::max()));
+        state_by_id_[idx] = static_cast<StateWord>(epoch_prefix | static_cast<StateWord>(initial));
+        touched_ids_[touched_size_++] = static_cast<std::uint32_t>(id);
+    }
+
+    std::vector<CountWSScore> argmax_n(std::size_t n) {
+        std::vector<CountWSScore> out;
+        argmax_n_into(n, out);
+        return out;
+    }
+
+    void argmax_n_into(std::size_t n, std::vector<CountWSScore>& out) {
+        out.clear();
+        if (n == 0 || touched_size_ == 0)
+            return;
+
+        n = std::min(n, touched_size_);
+        auto* const first = touched_ids_.get();
+        auto* const last = first + touched_size_;
+        if (n < touched_size_) {
+            std::ranges::nth_element(first, first + n, last, [this](std::uint32_t a, std::uint32_t b) {
+                return count_of_(a) > count_of_(b);
+            });
+        }
+
+        out.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::uint32_t id = first[i];
+            out.push_back(CountWSScore{
+                .bucket_id = id,
+                .count = count_of_(id),
+            });
+        }
+    }
+
+    CountWSScore argmax() const {
+        assert(touched_size_ != 0);
+        auto* const first = touched_ids_.get();
+        auto* const last = first + touched_size_;
+        const auto best = std::ranges::max_element(first, last, [this](std::uint32_t a, std::uint32_t b) {
+            return count_of_(a) < count_of_(b);
+        });
+        return CountWSScore{
+            .bucket_id = *best,
+            .count = count_of_(*best),
+        };
+    }
+
+    std::size_t touched_size() const noexcept { return touched_size_; }
+
+  private:
+    index_t count_of_(std::uint32_t id) const noexcept {
+        constexpr StateWord count_mask = static_cast<StateWord>(std::numeric_limits<Count>::max());
+        return static_cast<index_t>(state_by_id_[id] & count_mask);
+    }
+
+    std::unique_ptr<StateWord[]>     state_by_id_;
+    std::unique_ptr<std::uint32_t[]> touched_ids_;
+    std::size_t                      capacity_ = 0;
+    std::size_t                      buckets_ = 0;
+    std::size_t                      touched_size_ = 0;
+    Count                            epoch_ = 0;
+    index_t                          max_count_ = 0;
+    bool                             parity_ = false;
+};
+
 template <class Count, class MapWord>
 class CompactCountStorage {
     static_assert(std::is_integral_v<Count> && std::is_unsigned_v<Count>);
@@ -174,17 +299,11 @@ class CompactCountStorage {
 } // namespace detail
 
 class CountWS {
-    template <class Count, class MapWord>
-    using StorageFor = detail::CompactCountStorage<Count, MapWord>;
-
-    using Storage = std::variant<StorageFor<std::uint8_t, std::uint32_t>,
-                                 StorageFor<std::uint16_t, std::uint32_t>,
-                                 StorageFor<std::uint32_t, std::uint32_t>,
-                                 StorageFor<std::uint64_t, std::uint32_t>,
-                                 StorageFor<std::uint8_t, std::uint64_t>,
-                                 StorageFor<std::uint16_t, std::uint64_t>,
-                                 StorageFor<std::uint32_t, std::uint64_t>,
-                                 StorageFor<std::uint64_t, std::uint64_t>>;
+    using Packed8 = detail::PackedCountStorage<std::uint8_t, std::uint16_t>;
+    using Packed16 = detail::PackedCountStorage<std::uint16_t, std::uint32_t>;
+    using Packed32 = detail::PackedCountStorage<std::uint32_t, std::uint64_t>;
+    using Wide = detail::CompactCountStorage<std::uint64_t, std::uint64_t>;
+    using Storage = std::variant<Packed8, Packed16, Packed32, Wide>;
 
   public:
     void reset(std::size_t buckets, index_t max_bucket, bool parity) {
@@ -194,38 +313,23 @@ class CountWS {
             throw std::overflow_error("CountWS maximum count overflow");
 
         const index_t max_count = max_bucket * 2;
-        const unsigned position_bits =
-            (buckets <= 1) ? 0U : std::bit_width(static_cast<std::uint64_t>(buckets - 1));
-        const bool use_u32_mapping = position_bits <= 24;
-
-        auto select = [this, buckets, max_count, parity]<class Count, class MapWord>() {
-            using Selected = StorageFor<Count, MapWord>;
+        auto select = [this, buckets, max_count, parity]<class Selected>(std::size_t count_bytes,
+                                                                        std::size_t state_bytes) {
             if (!std::holds_alternative<Selected>(storage_))
                 storage_.template emplace<Selected>();
             std::get<Selected>(storage_).reset(buckets, max_count, parity);
-            count_bytes_ = sizeof(Count);
-            mapping_bytes_ = sizeof(MapWord);
+            count_bytes_ = count_bytes;
+            state_bytes_ = state_bytes;
         };
 
-        if (use_u32_mapping) {
-            if (max_count <= std::numeric_limits<std::uint8_t>::max())
-                select.template operator()<std::uint8_t, std::uint32_t>();
-            else if (max_count <= std::numeric_limits<std::uint16_t>::max())
-                select.template operator()<std::uint16_t, std::uint32_t>();
-            else if (max_count <= std::numeric_limits<std::uint32_t>::max())
-                select.template operator()<std::uint32_t, std::uint32_t>();
-            else
-                select.template operator()<std::uint64_t, std::uint32_t>();
-        } else {
-            if (max_count <= std::numeric_limits<std::uint8_t>::max())
-                select.template operator()<std::uint8_t, std::uint64_t>();
-            else if (max_count <= std::numeric_limits<std::uint16_t>::max())
-                select.template operator()<std::uint16_t, std::uint64_t>();
-            else if (max_count <= std::numeric_limits<std::uint32_t>::max())
-                select.template operator()<std::uint32_t, std::uint64_t>();
-            else
-                select.template operator()<std::uint64_t, std::uint64_t>();
-        }
+        if (max_count <= std::numeric_limits<std::uint8_t>::max())
+            select.template operator()<Packed8>(1, 2);
+        else if (max_count <= std::numeric_limits<std::uint16_t>::max())
+            select.template operator()<Packed16>(2, 4);
+        else if (max_count <= std::numeric_limits<std::uint32_t>::max())
+            select.template operator()<Packed32>(4, 8);
+        else
+            select.template operator()<Wide>(8, 16);
     }
 
     template <class F>
@@ -263,12 +367,12 @@ class CountWS {
     }
 
     std::size_t count_bytes() const noexcept { return count_bytes_; }
-    std::size_t mapping_bytes() const noexcept { return mapping_bytes_; }
+    std::size_t state_bytes() const noexcept { return state_bytes_; }
 
   private:
     Storage     storage_;
     std::size_t count_bytes_ = 1;
-    std::size_t mapping_bytes_ = 4;
+    std::size_t state_bytes_ = 2;
 };
 
 // Owns a matrix plus the indexes/bases reused during one policy iteration.
