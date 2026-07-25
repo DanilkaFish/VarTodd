@@ -1,11 +1,14 @@
 #include "matrix.hpp"
+#include "nullspace.hpp"
 #include "todd_index.hpp"
 #include "todd_generator.hpp"
 
+#include <algorithm>
 #include <array>
 #include <compare>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -101,6 +104,82 @@ void check_todd_index_basics() {
     require(ptr == ptr_by_key && len == len_by_key, "bucket id/key lookup should resolve same range");
 }
 
+void require_top_count_set(const std::vector<CountWSScore>& actual,
+                           const std::map<std::uint32_t, index_t>& reference, std::size_t requested) {
+    const std::size_t expected_size = std::min(requested, reference.size());
+    require(actual.size() == expected_size, "compact CountWS result size mismatch");
+
+    std::vector<index_t> expected_counts;
+    expected_counts.reserve(reference.size());
+    for (const auto& [id, count] : reference) {
+        (void)id;
+        expected_counts.push_back(count);
+    }
+    std::ranges::sort(expected_counts, std::greater{});
+    expected_counts.resize(expected_size);
+
+    std::vector<index_t> actual_counts;
+    actual_counts.reserve(actual.size());
+    std::unordered_set<std::uint32_t> selected_ids;
+    for (const auto& score : actual) {
+        const auto it = reference.find(score.bucket_id);
+        require(it != reference.end(), "compact CountWS returned an untouched bucket");
+        require(it->second == score.count, "compact CountWS returned a wrong bucket count");
+        require(selected_ids.insert(score.bucket_id).second, "compact CountWS returned a duplicate bucket");
+        actual_counts.push_back(score.count);
+    }
+    std::ranges::sort(actual_counts, std::greater{});
+    require(actual_counts == expected_counts, "compact CountWS must return the greatest counts");
+}
+
+void check_compact_count_storage() {
+    detail::CompactCountStorage<std::uint8_t, std::uint8_t> ws;
+
+    ws.reset(8, 20, false);
+    ws.add(7, 2);
+    ws.add(2, 1);
+    ws.add(7, 2);
+    ws.add(4, 2);
+    const std::map<std::uint32_t, index_t> even_reference{{2, 1}, {4, 2}, {7, 4}};
+
+    require_top_count_set(ws.argmax_n(2), even_reference, 2);
+    require(ws.argmax_n(0).empty(), "zero CountWS sample count should be empty");
+    require_top_count_set(ws.argmax_n(100), even_reference, 100);
+    require(ws.argmax().bucket_id == 7 && ws.argmax().count == 4, "compact CountWS argmax mismatch");
+
+    ws.reset(8, 20, true);
+    ws.add(1, 1);
+    ws.add(2, 2);
+    ws.add(1, 2);
+    const std::map<std::uint32_t, index_t> odd_reference{{1, 2}, {2, 1}};
+    require_top_count_set(ws.argmax_n(2), odd_reference, 2);
+
+    for (std::uint32_t generation = 0; generation < 40; ++generation) {
+        ws.reset(8, 20, false);
+        const std::uint32_t id = generation & 7U;
+        ws.add(id, 2);
+        const auto result = ws.argmax_n(8);
+        require(result.size() == 1 && result[0].bucket_id == id && result[0].count == 2,
+                "compact CountWS epoch wrap leaked an old bucket");
+    }
+
+    detail::CompactCountStorage<std::uint8_t, std::uint8_t> density_ws;
+    density_ws.reset(64, 100, false);
+    std::map<std::uint32_t, index_t> balanced_reference;
+    for (std::uint32_t id = 0; id < 64; id += 2) {
+        density_ws.add(id, 2);
+        balanced_reference[id] = 2;
+    }
+    require_top_count_set(density_ws.argmax_n(64), balanced_reference, 64);
+
+    density_ws.reset(64, 100, false);
+    density_ws.add(0, 2);
+    density_ws.add(63, 2);
+    density_ws.add(63, 2);
+    const std::map<std::uint32_t, index_t> sparse_reference{{0, 2}, {63, 4}};
+    require_top_count_set(density_ws.argmax_n(64), sparse_reference, 64);
+}
+
 void check_policy_iteration_smoke() {
     Matrix P(4, 3);
     P[0].set(0);
@@ -139,6 +218,7 @@ int main() {
         check_row_views();
         check_matrix_basics();
         check_todd_index_basics();
+        check_compact_count_storage();
         check_policy_iteration_smoke();
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
