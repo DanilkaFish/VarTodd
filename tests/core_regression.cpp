@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 
@@ -20,6 +21,17 @@ using namespace todd;
 void require(bool ok, const char* message) {
     if (!ok)
         throw std::runtime_error(message);
+}
+
+bool same_entry(const SumEntry& lhs, const SumEntry& rhs) {
+    return lhs.a == rhs.a && lhs.b == rhs.b;
+}
+
+void require_same_entries(const std::vector<SumEntry>& actual, const std::vector<SumEntry>& expected,
+                          const char* message) {
+    require(actual.size() == expected.size(), message);
+    for (std::size_t i = 0; i < actual.size(); ++i)
+        require(same_entry(actual[i], expected[i]), message);
 }
 
 std::filesystem::path data_path(const char* relative) {
@@ -102,6 +114,68 @@ void check_todd_index_basics() {
     index_t         len_by_key = 0;
     require(index.sum_bucket(pair, ptr_by_key, len_by_key), "pair bucket key lookup failed");
     require(ptr == ptr_by_key && len == len_by_key, "bucket id/key lookup should resolve same range");
+
+    std::vector<SumEntry> by_id;
+    std::vector<SumEntry> by_key;
+    require(index.materialize_bucket(bucket_id, by_id), "pair materialization by id failed");
+    require(index.materialize_bucket(pair, by_key), "pair materialization by key failed");
+    require_same_entries(by_id, by_key, "id/key materialization order differs");
+}
+
+void check_todd_index_duplicate_order() {
+    Matrix P(6, 3);
+    P[2].set(0);
+    P[3].set(0);
+    P[4].set(1);
+    P[5].set(1);
+
+    ToddIndex index(P);
+    require(index.buckets_num() == 4, "duplicate-heavy bucket count changed");
+    require(index.max_bucket() == 6, "duplicate-heavy maximum bucket changed");
+
+    const std::array<std::uint32_t, 6> expected_single_ids{0, 0, 1, 1, 2, 2};
+    require(index.single_id() == std::vector<std::uint32_t>(expected_single_ids.begin(), expected_single_ids.end()),
+            "single bucket IDs no longer follow first-encounter order");
+
+    const std::array<std::uint32_t, 15> expected_pair_ids{0, 1, 1, 2, 2, 1, 1, 2, 2, 0, 3, 3, 3, 3, 0};
+    std::size_t                         pair_pos = 0;
+    for (index_t i = 0; i < P.rows(); ++i) {
+        for (index_t j = i + 1; j < P.rows(); ++j) {
+            require(index.pair_bucket_id(i, j) == expected_pair_ids[pair_pos++],
+                    "pair bucket IDs no longer follow first-encounter order");
+        }
+    }
+
+    const std::array<std::vector<SumEntry>, 4> expected_entries{
+        std::vector<SumEntry>{SumEntry{0}, SumEntry{1}, SumEntry{0, 1}, SumEntry{2, 3}, SumEntry{4, 5}},
+        std::vector<SumEntry>{SumEntry{2}, SumEntry{3}, SumEntry{0, 2}, SumEntry{0, 3}, SumEntry{1, 2},
+                              SumEntry{1, 3}},
+        std::vector<SumEntry>{SumEntry{4}, SumEntry{5}, SumEntry{0, 4}, SumEntry{0, 5}, SumEntry{1, 4},
+                              SumEntry{1, 5}},
+        std::vector<SumEntry>{SumEntry{2, 4}, SumEntry{2, 5}, SumEntry{3, 4}, SumEntry{3, 5}},
+    };
+
+    std::vector<SumEntry> actual;
+    for (std::uint32_t id = 0; id < expected_entries.size(); ++id) {
+        require(index.materialize_bucket(id, actual), "duplicate-heavy bucket materialization failed");
+        require_same_entries(actual, expected_entries[id], "duplicate-heavy member order changed");
+    }
+
+    Row expected_key(3);
+    for (std::uint32_t id = 0; id < expected_entries.size(); ++id) {
+        expected_key.reset();
+        if (id == 1 || id == 3)
+            expected_key.set(0);
+        if (id == 2 || id == 3)
+            expected_key.set(1);
+        require(index.key_of(id) == expected_key, "duplicate-heavy representative key changed");
+    }
+
+    Row absent(3);
+    absent.set(2);
+    actual.emplace_back(0);
+    require(!index.materialize_bucket(absent, actual), "absent ToddIndex key unexpectedly found");
+    require(actual.empty(), "absent ToddIndex lookup did not clear output");
 }
 
 void require_top_count_set(const std::vector<CountWSScore>& actual,
@@ -253,6 +327,7 @@ int main() {
         check_row_views();
         check_matrix_basics();
         check_todd_index_basics();
+        check_todd_index_duplicate_order();
         check_packed_count_storage();
         check_policy_iteration_smoke();
     } catch (const std::exception& e) {

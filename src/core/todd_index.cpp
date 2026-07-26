@@ -199,6 +199,26 @@ bool ToddIndex::sum_bucket(std::uint32_t id, const SumEntry*& ptr, index_t& len)
     return len != 0;
 }
 
+bool ToddIndex::materialize_bucket(RowCView key, std::vector<SumEntry>& out) const {
+    out.clear();
+    const SumEntry* ptr = nullptr;
+    index_t         len = 0;
+    if (!sum_bucket(key, ptr, len))
+        return false;
+    out.assign(ptr, ptr + len);
+    return true;
+}
+
+bool ToddIndex::materialize_bucket(std::uint32_t id, std::vector<SumEntry>& out) const {
+    out.clear();
+    const SumEntry* ptr = nullptr;
+    index_t         len = 0;
+    if (!sum_bucket(id, ptr, len))
+        return false;
+    out.assign(ptr, ptr + len);
+    return true;
+}
+
 index_t ToddIndex::get_size_from_z(RowCView z) const {
     const SumEntry* p   = nullptr;
     index_t         len = 0;

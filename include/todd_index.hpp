@@ -211,6 +211,8 @@ class ToddIndex {
     index_t       get_size_from_z(RowCView z) const;
     bool          sum_bucket(RowCView key, const SumEntry*& ptr, index_t& len) const noexcept;
     bool          sum_bucket(std::uint32_t id, const SumEntry*& ptr, index_t& len) const noexcept;
+    bool          materialize_bucket(RowCView key, std::vector<SumEntry>& out) const;
+    bool          materialize_bucket(std::uint32_t id, std::vector<SumEntry>& out) const;
     index_t       bucket_size(std::uint32_t id) const noexcept {
         return (id < bucket_len_.size()) ? bucket_len_[static_cast<std::size_t>(id)] : 0;
     }
