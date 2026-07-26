@@ -206,6 +206,22 @@ void require_top_count_set(const std::vector<CountWSScore>& actual,
     require(actual_counts == expected_counts, "compact CountWS must return the greatest counts");
 }
 
+void check_bucket_lengths() {
+    detail::BucketLengths lengths;
+
+    lengths.assign({0, 1, 9, 255}, 255);
+    require(lengths.count_bytes() == 1, "byte bucket lengths not selected");
+    require(lengths.get(3) == 255, "byte bucket length changed");
+
+    lengths.assign({0, 256, 65535}, 65535);
+    require(lengths.count_bytes() == 2, "16-bit bucket lengths not selected");
+    require(lengths.get(1) == 256, "16-bit bucket length changed");
+
+    lengths.assign({0, 65536}, 65536);
+    require(lengths.count_bytes() == 4, "32-bit bucket lengths not selected");
+    require(lengths.get(1) == 65536, "32-bit bucket length changed");
+}
+
 void check_packed_count_storage() {
     detail::PackedCountStorage<std::uint8_t, std::uint16_t> ws;
 
@@ -328,6 +344,7 @@ int main() {
         check_matrix_basics();
         check_todd_index_basics();
         check_todd_index_duplicate_order();
+        check_bucket_lengths();
         check_packed_count_storage();
         check_policy_iteration_smoke();
     } catch (const std::exception& e) {

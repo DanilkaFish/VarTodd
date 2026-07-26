@@ -10,7 +10,9 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace todd {
@@ -196,6 +198,75 @@ struct HashKeyHash {
     }
     std::size_t operator()(HashKey k) const noexcept { return static_cast<std::size_t>(mix(k)); }
 };
+
+namespace detail {
+
+class BucketLengths {
+  public:
+    void assign(const std::vector<std::uint32_t>& counts, std::uint32_t max_count) {
+        if (max_count <= std::numeric_limits<std::uint8_t>::max()) {
+            storage_ = narrow_<std::uint8_t>(counts);
+        } else if (max_count <= std::numeric_limits<std::uint16_t>::max()) {
+            storage_ = narrow_<std::uint16_t>(counts);
+        } else {
+            storage_ = counts;
+        }
+    }
+
+    index_t get(std::size_t id) const noexcept {
+        return std::visit(
+            [id](const auto& values) -> index_t {
+                return id < values.size() ? static_cast<index_t>(values[id]) : 0;
+            },
+            storage_);
+    }
+
+    std::size_t size() const noexcept {
+        return std::visit([](const auto& values) { return values.size(); }, storage_);
+    }
+
+    std::size_t count_bytes() const noexcept {
+        return std::visit(
+            [](const auto& values) {
+                using value_type = typename std::decay_t<decltype(values)>::value_type;
+                return sizeof(value_type);
+            },
+            storage_);
+    }
+
+    std::size_t storage_bytes() const noexcept {
+        return std::visit(
+            [](const auto& values) {
+                using value_type = typename std::decay_t<decltype(values)>::value_type;
+                return values.capacity() * sizeof(value_type);
+            },
+            storage_);
+    }
+
+    template <class F> decltype(auto) with_values(F&& fn) const {
+        return std::visit(
+            [&fn](const auto& values) -> decltype(auto) {
+                return std::forward<F>(fn)(values);
+            },
+            storage_);
+    }
+
+  private:
+    template <class Count>
+    static std::vector<Count> narrow_(const std::vector<std::uint32_t>& counts) {
+        std::vector<Count> out;
+        out.reserve(counts.size());
+        for (const std::uint32_t count : counts) {
+            assert(count <= std::numeric_limits<Count>::max());
+            out.push_back(static_cast<Count>(count));
+        }
+        return out;
+    }
+
+    std::variant<std::vector<std::uint8_t>, std::vector<std::uint16_t>, std::vector<std::uint32_t>> storage_;
+};
+
+} // namespace detail
 
 // Index row and row-pair sums by the resulting GF(2) vector.
 class ToddIndex {
