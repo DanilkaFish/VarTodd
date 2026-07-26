@@ -41,6 +41,10 @@ static std::size_t flat_table_capacity(std::size_t max_buckets) {
     return cap;
 }
 
+template <class T> static std::size_t vector_storage_bytes(const std::vector<T>& values) noexcept {
+    return values.capacity() * sizeof(T);
+}
+
 ToddIndex::ToddIndex(const Matrix& P) : P_(P), m_(P.rows()), n_bits_(P.cols()) {
     build_masks_();
     build_row_hashes_();
@@ -319,6 +323,14 @@ index_t ToddIndex::get_size_from_z(RowCView z) const {
         return 0;
     const auto id = find_bucket_(hash_vec(z), z);
     return id == std::numeric_limits<std::uint32_t>::max() ? 0 : bucket_size(id);
+}
+
+std::size_t ToddIndex::storage_bytes() const noexcept {
+    return vector_storage_bytes(masks_) + vector_storage_bytes(hP_) + vector_storage_bytes(single_id_) +
+           vector_storage_bytes(pair_id_) + vector_storage_bytes(lookup_slots_) +
+           vector_storage_bytes(representative_pos_) + vector_storage_bytes(pair_row_off_) +
+           bucket_len_.storage_bytes() + vector_storage_bytes(duplicate_buckets_) +
+           vector_storage_bytes(duplicate_positions_) + vector_storage_bytes(scratch_bucket_id_sizes_);
 }
 
 std::vector<ToddIndex::BucketIdSize>& ToddIndex::sum_bucket_id_sizes_scratch() const {

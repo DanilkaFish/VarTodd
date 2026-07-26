@@ -131,6 +131,8 @@ void check_todd_index_duplicate_order() {
     require(index.buckets_num() == 4, "duplicate-heavy bucket count changed");
     require(index.max_bucket() == 6, "duplicate-heavy maximum bucket changed");
     require(index.bucket_length_bytes() == 1, "small ToddIndex should use byte bucket lengths");
+    require(index.storage_bytes() > 0, "ToddIndex storage accounting is empty");
+    require(index.storage_bytes() < 4096, "small ToddIndex retained unexpectedly large storage");
 
     const std::array<std::uint32_t, 6> expected_single_ids{0, 0, 1, 1, 2, 2};
     require(index.single_id() == std::vector<std::uint32_t>(expected_single_ids.begin(), expected_single_ids.end()),

@@ -296,6 +296,7 @@ class ToddIndex {
     Row           key_of(std::uint32_t id) const;
     index_t       buckets_num() const noexcept { return bucket_len_.size(); }
     index_t       max_bucket() const noexcept { return max_bucket_; }
+    std::size_t   storage_bytes() const noexcept;
 
   private:
     const Matrix&                                                     P_;
