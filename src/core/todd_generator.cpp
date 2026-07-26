@@ -667,8 +667,8 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
     auto  local_svs  = SeenValues{};
     local_pool.reserve(config.todd.pool.keep);
 
-    const SumEntry* ptr = nullptr;
-    auto            len = index_t{};
+    std::vector<SumEntry> bucket_entries;
+    bucket_entries.reserve(static_cast<std::size_t>(index.max_bucket()));
 
     for (std::size_t i = 0; i < bucket_search_limit; ++i) {
         if (i >= min_buckets_to_search) {
@@ -682,9 +682,11 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
         auto& [bucket_id, bucket_size] = buckets[i];
         stats.total += 1;
         stats.z_researched += 1;
-        if (!index.sum_bucket(bucket_id, ptr, len) || len == 0)
+        if (!index.materialize_bucket(bucket_id, bucket_entries) || bucket_entries.empty())
             continue;
 
+        const SumEntry* ptr       = bucket_entries.data();
+        const index_t   len       = static_cast<index_t>(bucket_entries.size());
         const index_t k         = ptr[0].a;
         const bool    is_single = !ptr[0].is_pair();
         const index_t l         = is_single ? k_single_sentinel<index_t>() : static_cast<index_t>(ptr[0].b);

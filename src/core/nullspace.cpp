@@ -298,12 +298,11 @@ const MatrixWithData::FullToddData& MatrixWithData::full_todd() const {
 Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{std::move(M)}, z_{std::move(z)} {
     const ToddIndex& idx = M_->index();
 
-    const SumEntry* ptr = nullptr;
-    index_t         len = 0;
-    if (!idx.sum_bucket(z_, ptr, len)) {
+    std::vector<SumEntry> entries;
+    if (!idx.materialize_bucket(z_, entries)) {
         return;
     }
-    init_from_entries_(ptr, len);
+    init_from_entries_(entries.data(), static_cast<index_t>(entries.size()));
 }
 
 Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntry* ptr, index_t len)
@@ -475,10 +474,10 @@ NullSpace TohpeGenerator::make(RowCView z) const {
 }
 
 NullSpace TohpeGenerator::make(RowCView z, std::uint32_t bucket_id) const {
-    const SumEntry* ptr = nullptr;
-    index_t         len = 0;
-    M_->index().sum_bucket(bucket_id, ptr, len);
-    return NullSpace(M_, std::make_unique<TohpeWitness>(M_, z, ptr, len));
+    std::vector<SumEntry> entries;
+    M_->index().materialize_bucket(bucket_id, entries);
+    return NullSpace(M_, std::make_unique<TohpeWitness>(
+                             M_, z, entries.data(), static_cast<index_t>(entries.size())));
 }
 
 Row TohpeGenerator::best_z(RowCView y) const {
@@ -610,10 +609,9 @@ Matrix FullToddGenerator::full_todd_kernel(RowCView z, const SumEntry* ptr, inde
 }
 
 NullSpace FullToddGenerator::make(RowCView z) const {
-    const SumEntry* ptr = nullptr;
-    index_t         len = 0;
-    M_->index().sum_bucket(z, ptr, len);
-    return make(z, ptr, len);
+    std::vector<SumEntry> entries;
+    M_->index().materialize_bucket(z, entries);
+    return make(z, entries.data(), static_cast<index_t>(entries.size()));
 }
 
 NullSpace FullToddGenerator::make(RowCView z, const SumEntry* ptr, index_t len) const {
@@ -625,28 +623,30 @@ NullSpace FullToddGenerator::make(RowCView z, const SumEntry* ptr, index_t len) 
 }
 
 NullSpace FullToddGenerator::make(index_t row) const {
-    Row             z   = M_->P()[row];
-    const SumEntry* ptr = nullptr;
-    index_t         len = 0;
-    M_->index().sum_bucket(z, ptr, len);
-    Matrix Y = full_todd_kernel(z, ptr, len);
+    Row                   z = M_->P()[row];
+    std::vector<SumEntry> entries;
+    M_->index().materialize_bucket(M_->index().single_id()[static_cast<std::size_t>(row)], entries);
+    const auto len = static_cast<index_t>(entries.size());
+    Matrix Y = full_todd_kernel(z, entries.data(), len);
 #ifndef NDEBUG
     assert(rows_are_linearly_independent(Y));
 #endif
-    return NullSpace(M_, std::make_unique<ToddWitness>(M_, std::move(z), ptr, len, std::move(Y)));
+    return NullSpace(M_,
+                     std::make_unique<ToddWitness>(M_, std::move(z), entries.data(), len, std::move(Y)));
 }
 
 NullSpace FullToddGenerator::make(index_t row1, index_t row2) const {
     Row z = M_->P()[row1];
     z ^= M_->P()[row2];
-    const SumEntry* ptr = nullptr;
-    index_t         len = 0;
-    M_->index().sum_bucket(z, ptr, len);
-    Matrix Y = full_todd_kernel(z, ptr, len);
+    std::vector<SumEntry> entries;
+    M_->index().materialize_bucket(M_->index().pair_bucket_id(row1, row2), entries);
+    const auto len = static_cast<index_t>(entries.size());
+    Matrix Y = full_todd_kernel(z, entries.data(), len);
 #ifndef NDEBUG
     assert(rows_are_linearly_independent(Y));
 #endif
-    return NullSpace(M_, std::make_unique<ToddWitness>(M_, std::move(z), ptr, len, std::move(Y)));
+    return NullSpace(M_,
+                     std::make_unique<ToddWitness>(M_, std::move(z), entries.data(), len, std::move(Y)));
 }
 
 } // namespace todd

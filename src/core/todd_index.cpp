@@ -135,7 +135,8 @@ std::uint32_t ToddIndex::find_bucket_(HashKey hk, RowCView key) const noexcept {
     return npos;
 }
 
-std::uint32_t ToddIndex::get_bucket_id_(HashKey hk, RowCView sumv, std::uint32_t source_pos) {
+std::pair<std::uint32_t, bool> ToddIndex::get_bucket_id_(HashKey hk, RowCView sumv,
+                                                        std::uint32_t source_pos) {
     const std::uint64_t mixed = HashKeyHash::mix(hk);
     const std::uint32_t fingerprint =
         slot_fingerprint_bits_ == 0
@@ -145,17 +146,15 @@ std::uint32_t ToddIndex::get_bucket_id_(HashKey hk, RowCView sumv, std::uint32_t
     for (std::size_t probe = 0; probe < lookup_slots_.size(); ++probe) {
         std::uint32_t& slot = lookup_slots_[slot_pos];
         if (slot == 0) {
-            if (bucket_len_.size() >= std::numeric_limits<std::uint32_t>::max())
+            if (representative_pos_.size() >= std::numeric_limits<std::uint32_t>::max())
                 throw std::overflow_error("ToddIndex bucket id overflow");
-            const std::uint32_t id = static_cast<std::uint32_t>(bucket_len_.size());
-            bucket_off_.push_back(0);
-            bucket_len_.push_back(0);
+            const std::uint32_t id = static_cast<std::uint32_t>(representative_pos_.size());
             representative_pos_.push_back(source_pos);
             const std::uint32_t encoded_id = id + 1;
             slot = slot_fingerprint_bits_ == 0
                        ? encoded_id
                        : static_cast<std::uint32_t>((fingerprint << slot_id_bits_) | encoded_id);
-            return id;
+            return {id, true};
         }
 
         const std::uint32_t encoded_id = slot & slot_id_mask_;
@@ -165,7 +164,7 @@ std::uint32_t ToddIndex::get_bucket_id_(HashKey hk, RowCView sumv, std::uint32_t
             assert(encoded_id != 0);
             const std::uint32_t id = encoded_id - 1;
             if (representative_equals_(id, sumv))
-                return id;
+                return {id, false};
         }
         slot_pos = (slot_pos + 1) & lookup_mask_;
     }
@@ -195,13 +194,14 @@ void ToddIndex::build_sum_buckets_() {
         slot_id_bits_ == 32U ? std::numeric_limits<std::uint32_t>::max()
                              : static_cast<std::uint32_t>((std::uint32_t{1} << slot_id_bits_) - 1U);
 
-    bucket_off_.clear();
-    bucket_len_.clear();
     representative_pos_.clear();
     max_bucket_ = 0;
-    bucket_off_.reserve(sum_count);
-    bucket_len_.reserve(sum_count);
     representative_pos_.reserve(sum_count);
+    duplicate_buckets_.clear();
+    duplicate_positions_.clear();
+    std::vector<std::uint32_t> build_lengths;
+    build_lengths.reserve(sum_count);
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> duplicate_build;
 
     pair_row_off_.assign(row_count + 1, 0);
     std::size_t pair_off = 0;
@@ -222,8 +222,12 @@ void ToddIndex::build_sum_buckets_() {
     for (index_t i = 0; i < n; ++i) {
         RowCView            row(row_data[static_cast<std::size_t>(i)], n_bits_, nb);
         const auto source_pos = static_cast<std::uint32_t>(i);
-        const std::uint32_t id = get_bucket_id_(hP_[static_cast<std::size_t>(i)], row, source_pos);
-        ++bucket_len_[static_cast<std::size_t>(id)];
+        const auto [id, inserted] = get_bucket_id_(hP_[static_cast<std::size_t>(i)], row, source_pos);
+        if (inserted)
+            build_lengths.push_back(0);
+        else
+            duplicate_build.emplace_back(id, source_pos);
+        ++build_lengths[static_cast<std::size_t>(id)];
         single_id_[static_cast<std::size_t>(i)] = id;
     }
     std::size_t pair_pos = 0;
@@ -240,64 +244,41 @@ void ToddIndex::build_sum_buckets_() {
             RowCView sumv(tmp.data(), n_bits_, nb);
 
             const auto source_pos = static_cast<std::uint32_t>(row_count + pair_pos);
-            const std::uint32_t id = get_bucket_id_(hk, sumv, source_pos);
-            ++bucket_len_[static_cast<std::size_t>(id)];
+            const auto [id, inserted] = get_bucket_id_(hk, sumv, source_pos);
+            if (inserted)
+                build_lengths.push_back(0);
+            else
+                duplicate_build.emplace_back(id, source_pos);
+            ++build_lengths[static_cast<std::size_t>(id)];
             pair_id_[pair_pos++] = id;
         }
     }
-    index_t off = 0;
-    for (std::uint32_t id = 0; id < bucket_len_.size(); ++id) {
-        bucket_off_[static_cast<std::size_t>(id)] = off;
-        off += bucket_len_[static_cast<std::size_t>(id)];
-        max_bucket_ = std::max(max_bucket_, bucket_len_[static_cast<std::size_t>(id)]);
-    }
-    std::vector<index_t> bucket_cur(bucket_len_.size(), 0);
-    sum_entries_.assign(static_cast<std::size_t>(off), SumEntry{0, 0});
-    for (index_t i = 0; i < n; ++i) {
-        const std::uint32_t id  = single_id_[static_cast<std::size_t>(i)];
-        const index_t       cur = bucket_cur[static_cast<std::size_t>(id)]++;
-        sum_entries_[static_cast<std::size_t>(bucket_off_[static_cast<std::size_t>(id)] + cur)] = SumEntry{i};
-    }
-    pair_pos = 0;
-    for (index_t i = 0; i < n; ++i) {
-        for (index_t j = i + 1; j < n; ++j) {
-            const std::uint32_t id  = pair_id_[pair_pos++];
-            const index_t       cur = bucket_cur[static_cast<std::size_t>(id)]++;
-            sum_entries_[static_cast<std::size_t>(bucket_off_[static_cast<std::size_t>(id)] + cur)] = SumEntry{i, j};
+
+    std::uint32_t max_bucket = 0;
+    for (const std::uint32_t len : build_lengths)
+        max_bucket = std::max(max_bucket, len);
+    max_bucket_ = static_cast<index_t>(max_bucket);
+    bucket_len_.assign(build_lengths, max_bucket);
+
+    std::ranges::sort(duplicate_build);
+    duplicate_positions_.reserve(duplicate_build.size());
+    duplicate_buckets_.reserve(duplicate_build.size());
+    for (std::size_t i = 0; i < duplicate_build.size();) {
+        const std::uint32_t id    = duplicate_build[i].first;
+        const auto begin = static_cast<std::uint32_t>(duplicate_positions_.size());
+        std::size_t j = i;
+        while (j < duplicate_build.size() && duplicate_build[j].first == id) {
+            duplicate_positions_.push_back(duplicate_build[j].second);
+            ++j;
         }
+        const auto end = static_cast<std::uint32_t>(duplicate_positions_.size());
+        duplicate_buckets_.push_back(DuplicateBucket{.id = id, .begin = begin, .end = end});
+        assert(bucket_size(id) == static_cast<index_t>(end - begin + 1));
+        i = j;
     }
 
     hP_.clear();
     hP_.shrink_to_fit();
-}
-
-bool ToddIndex::sum_bucket(RowCView key, const SumEntry*& ptr, index_t& len) const noexcept {
-    if (key.size() != n_bits_) {
-        ptr = nullptr;
-        len = 0;
-        return false;
-    }
-    const HashKey hk = hash_vec(key);
-    const auto    id = find_bucket_(hk, key);
-    if (id == std::numeric_limits<std::uint32_t>::max()) {
-        ptr = nullptr;
-        len = 0;
-        return false;
-    }
-    ptr = sum_entries_.data() + static_cast<std::size_t>(bucket_off_[static_cast<std::size_t>(id)]);
-    len = bucket_len_[static_cast<std::size_t>(id)];
-    return true;
-}
-
-bool ToddIndex::sum_bucket(std::uint32_t id, const SumEntry*& ptr, index_t& len) const noexcept {
-    if (id >= bucket_len_.size()) {
-        ptr = nullptr;
-        len = 0;
-        return false;
-    }
-    ptr = sum_entries_.data() + static_cast<std::size_t>(bucket_off_[static_cast<std::size_t>(id)]);
-    len = bucket_len_[static_cast<std::size_t>(id)];
-    return len != 0;
 }
 
 Row ToddIndex::key_of(std::uint32_t id) const {
@@ -308,36 +289,45 @@ Row ToddIndex::key_of(std::uint32_t id) const {
 
 bool ToddIndex::materialize_bucket(RowCView key, std::vector<SumEntry>& out) const {
     out.clear();
-    const SumEntry* ptr = nullptr;
-    index_t         len = 0;
-    if (!sum_bucket(key, ptr, len))
+    if (key.size() != n_bits_)
         return false;
-    out.assign(ptr, ptr + len);
-    return true;
+    const auto id = find_bucket_(hash_vec(key), key);
+    return id != std::numeric_limits<std::uint32_t>::max() && materialize_bucket(id, out);
 }
 
 bool ToddIndex::materialize_bucket(std::uint32_t id, std::vector<SumEntry>& out) const {
     out.clear();
-    const SumEntry* ptr = nullptr;
-    index_t         len = 0;
-    if (!sum_bucket(id, ptr, len))
+    if (id >= representative_pos_.size())
         return false;
-    out.assign(ptr, ptr + len);
+    out.reserve(static_cast<std::size_t>(bucket_size(id)));
+    out.push_back(decode_source_position_(representative_pos_[id]));
+    if (bucket_size(id) == 1)
+        return true;
+
+    const auto it = std::lower_bound(
+        duplicate_buckets_.begin(), duplicate_buckets_.end(), id,
+        [](const DuplicateBucket& bucket, std::uint32_t value) { return bucket.id < value; });
+    assert(it != duplicate_buckets_.end() && it->id == id);
+    for (std::uint32_t pos = it->begin; pos < it->end; ++pos)
+        out.push_back(decode_source_position_(duplicate_positions_[pos]));
+    assert(out.size() == static_cast<std::size_t>(bucket_size(id)));
     return true;
 }
 
 index_t ToddIndex::get_size_from_z(RowCView z) const {
-    const SumEntry* p   = nullptr;
-    index_t         len = 0;
-    sum_bucket(z, p, len);
-    return len;
+    if (z.size() != n_bits_)
+        return 0;
+    const auto id = find_bucket_(hash_vec(z), z);
+    return id == std::numeric_limits<std::uint32_t>::max() ? 0 : bucket_size(id);
 }
 
 std::vector<ToddIndex::BucketIdSize>& ToddIndex::sum_bucket_id_sizes_scratch() const {
     scratch_bucket_id_sizes_.clear();
     scratch_bucket_id_sizes_.reserve(bucket_len_.size());
-    for (std::uint32_t id = 0; id < bucket_len_.size(); ++id)
-        scratch_bucket_id_sizes_.emplace_back(id, bucket_len_[static_cast<std::size_t>(id)]);
+    bucket_len_.with_values([&](const auto& lengths) {
+        for (std::uint32_t id = 0; id < lengths.size(); ++id)
+            scratch_bucket_id_sizes_.emplace_back(id, static_cast<std::uint32_t>(lengths[id]));
+    });
     return scratch_bucket_id_sizes_;
 }
 
@@ -348,32 +338,35 @@ std::vector<ToddIndex::BucketIdSize>& ToddIndex::top_sum_bucket_id_sizes_scratch
         return scratch_bucket_id_sizes_;
 
     const std::size_t cap = std::min(N, max_count);
-    auto better = [&](std::size_t a, std::size_t b) { return bucket_len_[a] > bucket_len_[b]; };
+    bucket_len_.with_values([&](const auto& lengths) {
+        auto better = [&](std::size_t a, std::size_t b) { return lengths[a] > lengths[b]; };
 
-    std::vector<std::size_t> idx;
-    if (cap == N) {
-        idx.resize(N);
-        for (std::size_t i = 0; i < N; ++i)
-            idx[i] = i;
-        std::sort(idx.begin(), idx.end(), better);
-    } else {
-        idx.reserve(cap);
-        for (std::size_t id = 0; id < N; ++id) {
-            if (idx.size() < cap) {
-                idx.push_back(id);
-                std::push_heap(idx.begin(), idx.end(), better);
-            } else if (better(id, idx.front())) {
-                std::pop_heap(idx.begin(), idx.end(), better);
-                idx.back() = id;
-                std::push_heap(idx.begin(), idx.end(), better);
+        std::vector<std::size_t> idx;
+        if (cap == N) {
+            idx.resize(N);
+            for (std::size_t i = 0; i < N; ++i)
+                idx[i] = i;
+            std::sort(idx.begin(), idx.end(), better);
+        } else {
+            idx.reserve(cap);
+            for (std::size_t id = 0; id < N; ++id) {
+                if (idx.size() < cap) {
+                    idx.push_back(id);
+                    std::push_heap(idx.begin(), idx.end(), better);
+                } else if (better(id, idx.front())) {
+                    std::pop_heap(idx.begin(), idx.end(), better);
+                    idx.back() = id;
+                    std::push_heap(idx.begin(), idx.end(), better);
+                }
             }
+            std::sort(idx.begin(), idx.end(), better);
         }
-        std::sort(idx.begin(), idx.end(), better);
-    }
 
-    scratch_bucket_id_sizes_.reserve(idx.size());
-    for (auto id : idx)
-        scratch_bucket_id_sizes_.emplace_back(static_cast<std::uint32_t>(id), bucket_len_[id]);
+        scratch_bucket_id_sizes_.reserve(idx.size());
+        for (auto id : idx)
+            scratch_bucket_id_sizes_.emplace_back(static_cast<std::uint32_t>(id),
+                                                  static_cast<std::uint32_t>(lengths[id]));
+    });
     return scratch_bucket_id_sizes_;
 }
 } // namespace todd

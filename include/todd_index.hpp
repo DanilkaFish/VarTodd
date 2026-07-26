@@ -271,7 +271,7 @@ class BucketLengths {
 // Index row and row-pair sums by the resulting GF(2) vector.
 class ToddIndex {
   public:
-    using BucketIdSize = std::pair<std::uint32_t, index_t>;
+    using BucketIdSize = std::pair<std::uint32_t, std::uint32_t>;
 
     explicit ToddIndex(const Matrix& P);
     const Matrix& matrix() const noexcept { return P_; }
@@ -279,13 +279,12 @@ class ToddIndex {
     index_t       cols() const noexcept { return n_bits_; }
     HashKey       hash_vec(RowCView v) const noexcept;
     index_t       get_size_from_z(RowCView z) const;
-    bool          sum_bucket(RowCView key, const SumEntry*& ptr, index_t& len) const noexcept;
-    bool          sum_bucket(std::uint32_t id, const SumEntry*& ptr, index_t& len) const noexcept;
     bool          materialize_bucket(RowCView key, std::vector<SumEntry>& out) const;
     bool          materialize_bucket(std::uint32_t id, std::vector<SumEntry>& out) const;
     index_t       bucket_size(std::uint32_t id) const noexcept {
-        return (id < bucket_len_.size()) ? bucket_len_[static_cast<std::size_t>(id)] : 0;
+        return bucket_len_.get(static_cast<std::size_t>(id));
     }
+    std::size_t bucket_length_bytes() const noexcept { return bucket_len_.count_bytes(); }
 
     std::vector<BucketIdSize>&                sum_bucket_id_sizes_scratch() const;
     std::vector<BucketIdSize>&                top_sum_bucket_id_sizes_scratch(std::size_t max_count) const;
@@ -308,15 +307,21 @@ class ToddIndex {
     std::vector<std::uint32_t>                                        lookup_slots_;
     std::vector<std::uint32_t>                                        representative_pos_;
     std::vector<std::size_t>                                          pair_row_off_;
-    std::vector<index_t>                                              bucket_off_;
-    std::vector<index_t>                                              bucket_len_;
+    detail::BucketLengths                                             bucket_len_;
     index_t                                                           max_bucket_{};
-    std::vector<SumEntry>                                             sum_entries_;
     mutable std::vector<BucketIdSize>                                 scratch_bucket_id_sizes_;
     std::size_t                                                       lookup_mask_{};
     std::uint32_t                                                     slot_id_mask_{};
     unsigned                                                          slot_id_bits_{};
     unsigned                                                          slot_fingerprint_bits_{};
+
+    struct DuplicateBucket {
+        std::uint32_t id;
+        std::uint32_t begin;
+        std::uint32_t end;
+    };
+    std::vector<DuplicateBucket> duplicate_buckets_;
+    std::vector<std::uint32_t>   duplicate_positions_;
 
     void        build_masks_();
     void        build_row_hashes_();
@@ -337,7 +342,7 @@ class ToddIndex {
     Row         row_from_source_position_(std::uint32_t pos) const;
     bool        representative_equals_(std::uint32_t id, RowCView key) const noexcept;
     std::uint32_t find_bucket_(HashKey hk, RowCView key) const noexcept;
-    std::uint32_t get_bucket_id_(HashKey hk, RowCView sumv, std::uint32_t source_pos);
+    std::pair<std::uint32_t, bool> get_bucket_id_(HashKey hk, RowCView sumv, std::uint32_t source_pos);
 };
 } // namespace todd
 #endif

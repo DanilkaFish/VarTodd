@@ -105,19 +105,13 @@ void check_todd_index_basics() {
     require(index.rows() == loaded.rows() && index.cols() == loaded.cols(), "ToddIndex shape mismatch");
     require(index.max_bucket() > 0 && index.buckets_num() > 0, "ToddIndex should build nonempty buckets");
 
-    const SumEntry* ptr = nullptr;
-    index_t         len = 0;
-    require(index.sum_bucket(loaded[0], ptr, len) && len > 0, "single-row bucket lookup failed");
+    std::vector<SumEntry> single_entries;
+    require(index.materialize_bucket(loaded[0], single_entries) && !single_entries.empty(),
+            "single-row bucket lookup failed");
 
     Row pair = loaded[0] ^ loaded[1];
     const auto bucket_id = index.pair_bucket_id(0, 1);
     require(index.key_of(bucket_id) == pair, "pair bucket key mismatch");
-    require(index.sum_bucket(bucket_id, ptr, len) && len > 0, "pair bucket id lookup failed");
-
-    const SumEntry* ptr_by_key = nullptr;
-    index_t         len_by_key = 0;
-    require(index.sum_bucket(pair, ptr_by_key, len_by_key), "pair bucket key lookup failed");
-    require(ptr == ptr_by_key && len == len_by_key, "bucket id/key lookup should resolve same range");
 
     std::vector<SumEntry> by_id;
     std::vector<SumEntry> by_key;
@@ -136,6 +130,7 @@ void check_todd_index_duplicate_order() {
     ToddIndex index(P);
     require(index.buckets_num() == 4, "duplicate-heavy bucket count changed");
     require(index.max_bucket() == 6, "duplicate-heavy maximum bucket changed");
+    require(index.bucket_length_bytes() == 1, "small ToddIndex should use byte bucket lengths");
 
     const std::array<std::uint32_t, 6> expected_single_ids{0, 0, 1, 1, 2, 2};
     require(index.single_id() == std::vector<std::uint32_t>(expected_single_ids.begin(), expected_single_ids.end()),
