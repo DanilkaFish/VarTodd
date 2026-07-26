@@ -23,12 +23,15 @@ target_link_libraries(vartodd
 )
 
 target_compile_options(vartodd PRIVATE
-    $<$<CONFIG:Release>:-O3>
+    $<$<CONFIG:Release>:-O3 -fno-omit-frame-pointer>
+    $<$<CONFIG:RelWithDebInfo>:-fno-omit-frame-pointer>
+    $<$<BOOL:${VARTODD_ENABLE_NATIVE_ARCH}>:-march=native>
 )
-# target_link_libraries(vartodd PUBLIC tcmalloc)
+
 # set_property(TARGET vartodd PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 target_compile_definitions(vartodd PUBLIC
   $<$<CONFIG:Release>:NDEBUG>
+  $<$<CONFIG:RelWithDebInfo>:NDEBUG>
 )
 # Include directories
 target_include_directories(vartodd

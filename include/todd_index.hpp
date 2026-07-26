@@ -114,7 +114,7 @@ inline bool insert_into_y_basis(Row& y, Matrix& basis, PivotMap& pivY) {
         }
 
         yv ^= basis[static_cast<index_t>(brow)];
-        q = yv.find_first();
+        q = yv.find_next(q);
     }
 
     return false;
@@ -155,18 +155,18 @@ Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, inde
         while (p != RowView::npos && p < divider) {
             const auto prow = pivA.get(static_cast<std::size_t>(p));
             if (prow < 0)
+                pivA.set(static_cast<std::size_t>(p), pivot_rows.rows());
+                pivot_rows.push_back(row.cview());
                 break;
 
             rowv ^= pivot_rows[static_cast<index_t>(prow)];
             p = rowv.find_next(p);
         }
 
-        if (p == RowView::npos)
-            continue;
+        // if (p == RowView::npos)
+            // continue;
 
         if (p < divider) {
-            pivA.set(static_cast<std::size_t>(p), pivot_rows.rows());
-            pivot_rows.push_back(row.cview());
             continue;
         }
 

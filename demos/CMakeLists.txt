@@ -1,8 +1,15 @@
 add_executable(vartodd_demo vartodd.cpp)
+add_executable(bench bench.cpp)
+target_compile_options(bench PRIVATE
+    $<$<CONFIG:Release>:-O3 -fno-omit-frame-pointer>
+    $<$<CONFIG:RelWithDebInfo>:-fno-omit-frame-pointer>
+    $<$<BOOL:${VARTODD_ENABLE_NATIVE_ARCH}>:-march=native>
+)
+target_link_libraries(bench PRIVATE vartodd)
 target_compile_options(vartodd_demo PRIVATE
     $<$<CONFIG:Release>:-O3>
 )
-if(NOT APPLE)
+if(NOT APPLE AND VARTODD_ENABLE_NATIVE_ARCH)
     target_compile_options(vartodd_demo PRIVATE
         $<$<CONFIG:Release>:-march=native>
     )

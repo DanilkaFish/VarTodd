@@ -39,6 +39,7 @@ if(APPLE)
     set(Python3_FIND_FRAMEWORK LAST)
 endif()
 
+option(VARTODD_ENABLE_NATIVE_ARCH "Compile with -march=native (disable for a portable/non-AVX2 baseline build)" ON)
 option(VARTODD_ENABLE_IPO "Enable IPO/LTO in Release builds when supported" ON)
 if(VARTODD_ENABLE_IPO)
     check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
