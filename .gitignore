@@ -8,6 +8,7 @@
 outcmaes*
 .codex
 .agents
+.worktrees/
 
 # Generated artifacts
 # benchmark_results/
