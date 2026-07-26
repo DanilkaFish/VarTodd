@@ -688,8 +688,8 @@ void generate_todd_candidates(PolicyIterationContext& ctx, const NormalizedPolic
         const index_t k         = ptr[0].a;
         const bool    is_single = !ptr[0].is_pair();
         const index_t l         = is_single ? k_single_sentinel<index_t>() : static_cast<index_t>(ptr[0].b);
-        const RowCView key      = index.key_of(bucket_id);
-        auto          ns        = local_gen.make(key, ptr, len);
+        Row  key = index.key_of(bucket_id);
+        auto ns  = local_gen.make(key.cview(), ptr, len);
 
         const auto dim = ns.basis().rows();
         const auto n   = stats.total;

@@ -11,12 +11,16 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
 namespace {
 
 using namespace todd;
+
+static_assert(std::is_same_v<decltype(std::declval<const ToddIndex&>().key_of(0)), Row>,
+              "ToddIndex keys must own their reconstructed storage");
 
 void require(bool ok, const char* message) {
     if (!ok)

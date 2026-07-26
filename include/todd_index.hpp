@@ -4,7 +4,7 @@
 #include "matrix.hpp"
 
 #include <algorithm>
-#include <ankerl/unordered_dense.h>
+#include <bit>
 #include <cstddef>
 #include <cstring>
 #include <cstdint>
@@ -271,7 +271,6 @@ class BucketLengths {
 // Index row and row-pair sums by the resulting GF(2) vector.
 class ToddIndex {
   public:
-    using SumKeySize = std::pair<RowCView, index_t>;
     using BucketIdSize = std::pair<std::uint32_t, index_t>;
 
     explicit ToddIndex(const Matrix& P);
@@ -288,9 +287,6 @@ class ToddIndex {
         return (id < bucket_len_.size()) ? bucket_len_[static_cast<std::size_t>(id)] : 0;
     }
 
-    const std::vector<HashKey>&               row_hashes() const noexcept { return hP_; }
-    std::vector<std::pair<RowCView, index_t>> sum_key_sizes() const;
-    std::vector<SumKeySize>&                  sum_key_sizes_scratch() const;
     std::vector<BucketIdSize>&                sum_bucket_id_sizes_scratch() const;
     std::vector<BucketIdSize>&                top_sum_bucket_id_sizes_scratch(std::size_t max_count) const;
     const std::vector<std::uint32_t>&         single_id() const noexcept { return single_id_; }
@@ -298,7 +294,7 @@ class ToddIndex {
         assert(i != j);
         return pair_id_[pair_index_fast_(i, j)];
     }
-    RowCView      key_of(std::uint32_t id) const noexcept { return bucket_key_(id); }
+    Row           key_of(std::uint32_t id) const;
     index_t       buckets_num() const noexcept { return bucket_len_.size(); }
     index_t       max_bucket() const noexcept { return max_bucket_; }
 
@@ -309,16 +305,18 @@ class ToddIndex {
     std::vector<HashKey>                                              hP_;
     std::vector<std::uint32_t>                                        single_id_;
     std::vector<std::uint32_t>                                        pair_id_;
+    std::vector<std::uint32_t>                                        lookup_slots_;
+    std::vector<std::uint32_t>                                        representative_pos_;
+    std::vector<std::size_t>                                          pair_row_off_;
     std::vector<index_t>                                              bucket_off_;
     std::vector<index_t>                                              bucket_len_;
-    std::vector<std::uint32_t>                                        bucket_next_;
-    std::vector<std::uint64_t>                                        bucket_key_blocks_;
-    index_t                                                           bucket_key_blocks_per_row_{};
     index_t                                                           max_bucket_{};
     std::vector<SumEntry>                                             sum_entries_;
-    mutable std::vector<SumKeySize>                                   scratch_sum_key_sizes_;
     mutable std::vector<BucketIdSize>                                 scratch_bucket_id_sizes_;
-    ankerl::unordered_dense::map<HashKey, std::uint32_t, HashKeyHash> head_;
+    std::size_t                                                       lookup_mask_{};
+    std::uint32_t                                                     slot_id_mask_{};
+    unsigned                                                          slot_id_bits_{};
+    unsigned                                                          slot_fingerprint_bits_{};
 
     void        build_masks_();
     void        build_row_hashes_();
@@ -335,17 +333,11 @@ class ToddIndex {
         return (ii * (2 * mm - ii - 1)) / 2 + (jj - ii - 1);
     }
 
-    RowCView bucket_key_(std::uint32_t id) const noexcept {
-        const auto* data = bucket_key_blocks_per_row_
-                               ? bucket_key_blocks_.data() +
-                                     static_cast<std::size_t>(id) * static_cast<std::size_t>(bucket_key_blocks_per_row_)
-                               : nullptr;
-        return RowCView(data, n_bits_, bucket_key_blocks_per_row_);
-    }
-
-    void push_bucket_key_(RowCView key);
-
-    std::uint32_t get_bucket_id_(HashKey hk, RowCView sumv);
+    SumEntry    decode_source_position_(std::uint32_t pos) const;
+    Row         row_from_source_position_(std::uint32_t pos) const;
+    bool        representative_equals_(std::uint32_t id, RowCView key) const noexcept;
+    std::uint32_t find_bucket_(HashKey hk, RowCView key) const noexcept;
+    std::uint32_t get_bucket_id_(HashKey hk, RowCView sumv, std::uint32_t source_pos);
 };
 } // namespace todd
 #endif
