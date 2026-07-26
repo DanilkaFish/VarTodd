@@ -154,11 +154,11 @@ Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, inde
         auto p    = rowv.find_first();
         while (p != RowView::npos && p < divider) {
             const auto prow = pivA.get(static_cast<std::size_t>(p));
-            if (prow < 0)
+            if (prow < 0){
                 pivA.set(static_cast<std::size_t>(p), pivot_rows.rows());
                 pivot_rows.push_back(row.cview());
                 break;
-
+            }
             rowv ^= pivot_rows[static_cast<index_t>(prow)];
             p = rowv.find_next(p);
         }
