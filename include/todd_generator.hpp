@@ -93,6 +93,9 @@ struct Candidate {
     bool is_tohpe() const;
 };
 
+// Canonical fallback for candidates whose score and reduction are equal.
+bool candidate_tie_preferred(const Candidate& a, const Candidate& b) noexcept;
+
 struct SeenValues {
     Int max_red = 0;
     Int max_dim = 0;

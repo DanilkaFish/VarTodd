@@ -113,11 +113,15 @@ class PackedCountStorage {
         n = std::min(n, touched_size_);
         auto* const first = touched_ids_.get();
         auto* const last = first + touched_size_;
+        const auto better = [this](std::uint32_t a, std::uint32_t b) {
+            const index_t count_a = count_of_(a);
+            const index_t count_b = count_of_(b);
+            return count_a != count_b ? count_a > count_b : a < b;
+        };
         if (n < touched_size_) {
-            std::ranges::nth_element(first, first + n, last, [this](std::uint32_t a, std::uint32_t b) {
-                return count_of_(a) > count_of_(b);
-            });
+            std::ranges::nth_element(first, first + n, last, better);
         }
+        std::ranges::sort(first, first + n, better);
 
         out.reserve(n);
         for (std::size_t i = 0; i < n; ++i) {
@@ -134,7 +138,9 @@ class PackedCountStorage {
         auto* const first = touched_ids_.get();
         auto* const last = first + touched_size_;
         const auto best = std::ranges::max_element(first, last, [this](std::uint32_t a, std::uint32_t b) {
-            return count_of_(a) < count_of_(b);
+            const index_t count_a = count_of_(a);
+            const index_t count_b = count_of_(b);
+            return count_a != count_b ? count_a < count_b : a > b;
         });
         return CountWSScore{
             .bucket_id = *best,
@@ -251,11 +257,15 @@ class CompactCountStorage {
         auto* const first = selection_positions_.get();
         auto* const last = first + touched_size_;
         std::iota(first, last, std::uint32_t{0});
+        const auto better = [this](std::uint32_t a, std::uint32_t b) {
+            const Count count_a = counts_[a];
+            const Count count_b = counts_[b];
+            return count_a != count_b ? count_a > count_b : pos_to_id_[a] < pos_to_id_[b];
+        };
         if (n < touched_size_) {
-            std::ranges::nth_element(first, first + n, last, [this](std::uint32_t a, std::uint32_t b) {
-                return counts_[a] > counts_[b];
-            });
+            std::ranges::nth_element(first, first + n, last, better);
         }
+        std::ranges::sort(first, first + n, better);
 
         out.reserve(n);
         for (std::size_t i = 0; i < n; ++i) {
@@ -269,12 +279,15 @@ class CompactCountStorage {
 
     CountWSScore argmax() const {
         assert(touched_size_ != 0);
-        const auto values = std::ranges::subrange(counts_.get(), counts_.get() + touched_size_);
-        const auto best = std::ranges::max_element(values);
-        const auto pos = static_cast<std::size_t>(best - counts_.get());
+        std::size_t pos = 0;
+        for (std::size_t i = 1; i < touched_size_; ++i) {
+            if (counts_[i] > counts_[pos] ||
+                (counts_[i] == counts_[pos] && pos_to_id_[i] < pos_to_id_[pos]))
+                pos = i;
+        }
         return CountWSScore{
             .bucket_id = pos_to_id_[pos],
-            .count = static_cast<index_t>(*best),
+            .count = static_cast<index_t>(counts_[pos]),
         };
     }
 

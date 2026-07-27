@@ -87,9 +87,14 @@ class PyRNG {
     double   rand_double(double low, double high);
     index_t  random_raw();
     void     seed(index_t seed_val);
+    template <class T> void shuffle(std::vector<T>& values) {
+        for (std::size_t i = values.size(); i > 1; --i)
+            std::swap(values[i - 1], values[static_cast<std::size_t>(rand_int(0, i - 1))]);
+    }
     std::minstd_rand& get_engine();
 
   private:
+    unsigned __int128 bounded_raw_(unsigned __int128 bound);
     template <class Fn>
     void for_each_capped_bitvector_in_region(index_t full_dim, index_t region_dim,
                                               std::array<index_t, 3> sample_caps,

@@ -279,17 +279,45 @@ Matrix L_expansion(const Matrix& mat) {
     return out;
 }
 
+unsigned __int128 PyRNG::bounded_raw_(unsigned __int128 bound) {
+    if (bound == 0)
+        throw std::invalid_argument("PyRNG bounded draw requires a non-zero bound");
+
+    constexpr std::uint64_t raw_base = static_cast<std::uint64_t>(std::minstd_rand::max()) -
+                                       static_cast<std::uint64_t>(std::minstd_rand::min()) + 1ULL;
+    constexpr unsigned __int128 raw_space = static_cast<unsigned __int128>(raw_base) * raw_base * raw_base;
+    if (bound > raw_space)
+        throw std::overflow_error("PyRNG bounded draw exceeds its raw sampling space");
+
+    for (;;) {
+        unsigned __int128 space = raw_base;
+        unsigned __int128 value = static_cast<std::uint64_t>(rng() - std::minstd_rand::min());
+        while (space < bound) {
+            value = value * raw_base + static_cast<std::uint64_t>(rng() - std::minstd_rand::min());
+            space *= raw_base;
+        }
+        const unsigned __int128 limit = space - space % bound;
+        if (value < limit)
+            return value % bound;
+    }
+}
+
 index_t PyRNG::rand_int(index_t low, index_t high) {
-    std::uniform_int_distribution<index_t> dist(low, high);
-    return dist(rng);
+    if (low > high)
+        throw std::invalid_argument("PyRNG rand_int requires low <= high");
+    const auto span = static_cast<unsigned __int128>(high) - low + 1;
+    return low + static_cast<index_t>(bounded_raw_(span));
 }
+
 uint64_t PyRNG::rand_u64() {
-    std::uniform_int_distribution<uint64_t> dist(0, std::numeric_limits<uint64_t>::max());
-    return dist(rng);
+    return static_cast<uint64_t>(bounded_raw_(static_cast<unsigned __int128>(1) << 64));
 }
+
 double PyRNG::rand_double(double low, double high) {
-    std::uniform_real_distribution<double> dist(low, high);
-    return dist(rng);
+    if (!(low <= high))
+        throw std::invalid_argument("PyRNG rand_double requires low <= high");
+    const double unit = std::ldexp(static_cast<double>(rand_u64() >> 11), -53);
+    return low + (high - low) * unit;
 }
 
 index_t PyRNG::random_raw() { return rng(); }

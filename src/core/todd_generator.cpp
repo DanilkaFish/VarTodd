@@ -14,6 +14,32 @@
 
 namespace todd {
 
+bool candidate_tie_preferred(const Candidate& a, const Candidate& b) noexcept {
+    if (a.source != b.source)
+        return a.source < b.source;
+    if (a.k != b.k)
+        return a.k < b.k;
+    if (a.l != b.l)
+        return a.l < b.l;
+    if (a.bucket_id != b.bucket_id)
+        return a.bucket_id < b.bucket_id;
+    if (!(a.z == b.z))
+        return a.z < b.z;
+    return a.vec < b.vec;
+}
+
+namespace {
+
+bool scored_candidate_preferred(const Candidate& a, float a_score, const Candidate& b, float b_score) noexcept {
+    if (a_score != b_score)
+        return a_score > b_score;
+    if (a.reduction != b.reduction)
+        return a.reduction > b.reduction;
+    return candidate_tie_preferred(a, b);
+}
+
+} // namespace
+
 template <class Score> class TopKPool {
   public:
     explicit TopKPool(std::size_t limit, Score keyfn = Score{}) : limit_(limit), keyfn_(std::move(keyfn)) {}
@@ -65,15 +91,7 @@ template <class Score> class TopKPool {
     Score             keyfn_;
     std::vector<Node> heap_;
     static bool       worse_candidate_(float a_key, Candidate const& a, float b_key, Candidate const& b) noexcept {
-        if (a_key != b_key)
-            return a_key > b_key;
-        if (a.reduction != b.reduction)
-            return a.reduction > b.reduction;
-        if (a.k != b.k)
-            return a.k < b.k;
-        if (a.l != b.l)
-            return a.l < b.l;
-        return a.vec < b.vec;
+        return scored_candidate_preferred(a, a_key, b, b_key);
     }
     static bool worse_node_(Node const& a, Node const& b) noexcept {
         return worse_candidate_(a.key, a.cand, b.key, b.cand);
@@ -304,11 +322,14 @@ void diversify_buckets(Buckets& buckets, std::size_t max_count, float temperatur
     const std::size_t cap = std::min(N, max_count);
     temperature           = std::max(0.0f, temperature);
     random_fraction       = std::clamp(random_fraction, 0.0f, 1.0f);
+    auto better = [&](std::size_t a, std::size_t b) {
+        return buckets[a].second != buckets[b].second ? buckets[a].second > buckets[b].second
+                                                      : buckets[a].first < buckets[b].first;
+    };
 
     if (temperature == 0.0f && random_fraction == 0.0f) {
         std::vector<std::size_t> idx(N);
         std::iota(idx.begin(), idx.end(), 0);
-        auto better = [&](std::size_t a, std::size_t b) { return buckets[a].second > buckets[b].second; };
         if (cap < N) {
             std::nth_element(idx.begin(), idx.begin() + static_cast<std::ptrdiff_t>(cap), idx.end(), better);
             idx.resize(cap);
@@ -349,14 +370,14 @@ void diversify_buckets(Buckets& buckets, std::size_t max_count, float temperatur
                              [&](std::size_t a, std::size_t b) {
                                  if (score[a] != score[b])
                                      return score[a] > score[b];
-                                 return buckets[a].second > buckets[b].second;
+                                 return better(a, b);
                              });
             idx.resize(top_count);
         }
         std::sort(idx.begin(), idx.end(), [&](std::size_t a, std::size_t b) {
             if (score[a] != score[b])
                 return score[a] > score[b];
-            return buckets[a].second > buckets[b].second;
+            return better(a, b);
         });
         for (auto id : idx) {
             selected[id] = 1;
@@ -373,7 +394,7 @@ void diversify_buckets(Buckets& buckets, std::size_t max_count, float temperatur
             if (!selected[i])
                 remaining.push_back(i);
         }
-        std::shuffle(remaining.begin(), remaining.end(), rng.get_engine());
+        rng.shuffle(remaining);
         if (remaining.size() > random_count)
             remaining.resize(random_count);
         random_idx = std::move(remaining);
@@ -404,15 +425,7 @@ void diversify_buckets(Buckets& buckets, std::size_t max_count, float temperatur
 }
 
 bool pool_preferred(Candidate const& a, Candidate const& b) {
-    if (a.pool_score != b.pool_score)
-        return a.pool_score > b.pool_score;
-    if (a.reduction != b.reduction)
-        return a.reduction > b.reduction;
-    if (a.k != b.k)
-        return a.k < b.k;
-    if (a.l != b.l)
-        return a.l < b.l;
-    return a.vec < b.vec;
+    return scored_candidate_preferred(a, a.pool_score, b, b.pool_score);
 }
 
 // Move the reserved best prefix from one source; remaining candidates are merged and sorted later.
@@ -480,15 +493,7 @@ std::vector<Candidate> pick_best_view(FinalizationPool& pool, std::size_t n) {
     if (n > all.size())
         n = all.size();
     auto better = [&](const Candidate& a, const Candidate& b) {
-        if (a.final_score != b.final_score)
-            return a.final_score > b.final_score;
-        if (a.reduction != b.reduction)
-            return a.reduction > b.reduction;
-        if (a.k != b.k)
-            return a.k < b.k;
-        if (a.l != b.l)
-            return a.l < b.l;
-        return a.vec < b.vec;
+        return scored_candidate_preferred(a, a.final_score, b, b.final_score);
     };
     if (n < all.size()) {
         std::ranges::nth_element(all, all.begin() + n, better);
@@ -505,15 +510,7 @@ std::vector<Candidate> pick_softmax_view(FinalizationPool& pool, std::size_t n, 
     if (n > all.size())
         n = all.size();
     auto better = [&](const Candidate& a, const Candidate& b) {
-        if (a.final_score != b.final_score)
-            return a.final_score > b.final_score;
-        if (a.reduction != b.reduction)
-            return a.reduction > b.reduction;
-        if (a.k != b.k)
-            return a.k < b.k;
-        if (a.l != b.l)
-            return a.l < b.l;
-        return a.vec < b.vec;
+        return scored_candidate_preferred(a, a.final_score, b, b.final_score);
     };
     if (!(temperature > 0.0f) || !std::isfinite(temperature)) {
         if (n < all.size()) {
@@ -543,7 +540,9 @@ std::vector<Candidate> pick_softmax_view(FinalizationPool& pool, std::size_t n, 
 
     if (n < N) {
         std::nth_element(idx.begin(), idx.begin() + n, idx.end(),
-                         [&](std::size_t a, std::size_t b) { return key[a] > key[b]; });
+                         [&](std::size_t a, std::size_t b) {
+                             return key[a] != key[b] ? key[a] > key[b] : better(all[a], all[b]);
+                         });
         idx.resize(n);
     }
 

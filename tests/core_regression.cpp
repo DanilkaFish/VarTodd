@@ -307,6 +307,70 @@ void check_packed_count_storage() {
             "wide counter lost its boundary value");
 }
 
+void check_count_selection_tie_order() {
+    detail::PackedCountStorage<std::uint8_t, std::uint16_t> ws;
+    ws.reset(8, 8, false);
+    ws.add(5, 2);
+    ws.add(2, 2);
+    ws.add(7, 2);
+
+    const auto selected = ws.argmax_n(3);
+    require(selected.size() == 3, "equal-count selection lost a bucket");
+    require(selected[0].bucket_id == 2 && selected[1].bucket_id == 5 && selected[2].bucket_id == 7,
+            "equal-count Z choices must use ascending bucket ID");
+}
+
+void check_top_bucket_tie_order() {
+    Matrix P(6, 3);
+    P[2].set(0);
+    P[3].set(0);
+    P[4].set(1);
+    P[5].set(1);
+
+    ToddIndex index(P);
+    const auto& top = index.top_sum_bucket_id_sizes_scratch(3);
+    require(top.size() == 3, "top bucket selection lost a bucket");
+    require(top[0].first == 1 && top[1].first == 2 && top[2].first == 0,
+            "equal-size Todd buckets must use ascending ID");
+}
+
+void check_portable_random_and_seed_contract() {
+    PyRNG rng(123);
+    require(rng.rand_int(0, 100) == 47, "portable bounded RNG stream changed");
+    require(rng.rand_u64() == 9824761154233434147ULL, "portable 64-bit RNG stream changed");
+
+    Matrix P(4, 3);
+    P[0].set(0);
+    P[1].set(0);
+    P[2].set(1);
+    P[3].set(2);
+    require(matrix_seed(P, 7, 3) == 3727290120U, "portable matrix seed changed");
+}
+
+void check_candidate_tie_order() {
+    Candidate tohpe;
+    tohpe.source = CandidateSourceTohpe;
+    Candidate todd;
+    todd.source = CandidateSourceTodd;
+    require(candidate_tie_preferred(tohpe, todd), "candidate ties must prefer source order");
+
+    Candidate lower_bucket;
+    lower_bucket.source = CandidateSourceTohpe;
+    lower_bucket.bucket_id = 5;
+    Candidate higher_bucket = lower_bucket;
+    higher_bucket.bucket_id = 6;
+    require(candidate_tie_preferred(lower_bucket, higher_bucket),
+            "candidate ties must prefer lower bucket ID");
+
+    Candidate lower_z = lower_bucket;
+    lower_z.z = Row(3);
+    lower_z.z.set(0);
+    Candidate higher_z = lower_z;
+    higher_z.z.reset(0);
+    higher_z.z.set(1);
+    require(candidate_tie_preferred(lower_z, higher_z), "candidate ties must prefer canonical Z order");
+}
+
 void check_policy_iteration_smoke() {
     Matrix P(4, 3);
     P[0].set(0);
@@ -340,6 +404,40 @@ void check_policy_iteration_smoke() {
     require(result.chosen[0].pool_tohpe_size + result.chosen[0].pool_tohpeprefix_size +
                 result.chosen[0].pool_todd_size == result.chosen[0].pool_size,
             "final pool composition should contain all three sources");
+}
+
+void check_policy_iteration_repeatability() {
+    Matrix P(4, 3);
+    P[0].set(0);
+    P[1].set(0);
+    P[2].set(1);
+    P[3].set(2);
+    auto data = std::make_shared<MatrixWithData>(std::move(P), true);
+
+    PolicyConfig cfg;
+    cfg.selection.count = 2;
+    cfg.selection.mode = "softmax";
+    cfg.selection.temperature = 0.2f;
+    cfg.pool.final_size = 4;
+    cfg.tohpe = TohpeSearch{SamplingBudget{8, 8, 4, 2}, SourcePool{4, 0}, 2};
+    cfg.tohpeprefix = TohpePrefixSearch{SamplingBudget{8, 8, 4, 2}, SourcePool{4, 0}, 2,
+                                         ZBucketSearch{1, 8, 0.0f, 0.0f, 8}};
+    cfg.todd = ToddSearch{SamplingBudget{8, 8, 4, 2}, SourcePool{4, 0}, 2,
+                          ZBucketSearch{1, 8, 0.0f, 0.0f, 8}};
+
+    const auto first  = policy_iteration_impl(data, cfg, 123, 0);
+    const auto second = policy_iteration_impl(data, cfg, 123, 0);
+    require(first.seed == second.seed && first.chosen.size() == second.chosen.size() &&
+                first.states.size() == second.states.size(),
+            "fixed-seed policy iteration result shape changed");
+    for (std::size_t i = 0; i < first.chosen.size(); ++i) {
+        const auto& a = first.chosen[i];
+        const auto& b = second.chosen[i];
+        require(a.final_score == b.final_score && a.pool_score == b.pool_score && a.reduction == b.reduction &&
+                    a.k == b.k && a.l == b.l && a.basis_dim == b.basis_dim && a.tohpe_dim == b.tohpe_dim &&
+                    a.bucket_size == b.bucket_size && a.source == b.source && first.states[i] == second.states[i],
+                "fixed-seed policy iteration selected different candidates");
+    }
 }
 
 void check_tohpe_only_policy_continues_after_todd_stops() {
@@ -543,7 +641,12 @@ int main() {
         check_todd_index_duplicate_order();
         check_bucket_lengths();
         check_packed_count_storage();
+        check_count_selection_tie_order();
+        check_top_bucket_tie_order();
+        check_portable_random_and_seed_contract();
+        check_candidate_tie_order();
         check_policy_iteration_smoke();
+        check_policy_iteration_repeatability();
         check_tohpe_only_policy_continues_after_todd_stops();
         check_tohpe_policy();
         check_tohpe_and_tohpeprefix_stats_merge();

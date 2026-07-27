@@ -351,7 +351,9 @@ std::vector<ToddIndex::BucketIdSize>& ToddIndex::top_sum_bucket_id_sizes_scratch
 
     const std::size_t cap = std::min(N, max_count);
     bucket_len_.with_values([&](const auto& lengths) {
-        auto better = [&](std::size_t a, std::size_t b) { return lengths[a] > lengths[b]; };
+        auto better = [&](std::size_t a, std::size_t b) {
+            return lengths[a] != lengths[b] ? lengths[a] > lengths[b] : a < b;
+        };
 
         std::vector<std::size_t> idx;
         if (cap == N) {

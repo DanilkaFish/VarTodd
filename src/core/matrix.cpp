@@ -1,7 +1,6 @@
 #include "matrix.hpp"
 
 #include <algorithm>
-#include <boost/functional/hash.hpp>
 
 #include <cnpy++.hpp>
 #include <cstddef>
@@ -150,20 +149,28 @@ bool RowEq::operator()(RowCView a, RowCView b) const noexcept {
 }
 
 std::uint32_t matrix_seed(const Matrix& mat, std::uint32_t base_seed, std::uint32_t step) noexcept {
-    // FNV offset basis keeps empty matrices deterministic.
-    std::size_t h = 0xcbf29ce484222325ULL;
+    constexpr std::uint64_t fnv_offset = 0xcbf29ce484222325ULL;
+    constexpr std::uint64_t fnv_prime  = 0x100000001b3ULL;
+    std::uint64_t           hash       = fnv_offset;
+    const auto add = [&](std::uint64_t value) {
+        hash ^= value;
+        hash *= fnv_prime;
+    };
 
-    boost::hash_combine(h, static_cast<std::size_t>(base_seed));
-    boost::hash_combine(h, static_cast<std::size_t>(step));
-    RowHash rh{};
-
-    for (index_t i = 0; i < mat.rows(); i++) {
-        boost::hash_combine(h, rh(mat[i]));
+    add(mat.rows());
+    add(mat.cols());
+    add(base_seed);
+    add(step);
+    for (index_t i = 0; i < mat.rows(); ++i) {
+        const RowCView row = mat[i];
+        for (index_t block = 0; block < row.blocks(); ++block) {
+            std::uint64_t value = row.data()[block];
+            if (block + 1 == row.blocks())
+                value &= tail_mask_bits(row.size());
+            add(value);
+        }
     }
-
-    std::uint64_t h64  = static_cast<std::uint64_t>(h);
-    std::uint32_t seed = static_cast<std::uint32_t>(h64 ^ (h64 >> 32));
-    return seed;
+    return static_cast<std::uint32_t>(hash ^ (hash >> 32));
 }
 // ---------------- Matrix ----------------
 
