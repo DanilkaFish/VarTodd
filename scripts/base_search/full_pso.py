@@ -9,6 +9,7 @@ from scripts.base_search.full_optimizer_common import (
     OPTIMIZER_WORKERS,
     Z_LIMIT_BUCKET_CAP,
     initial_population,
+    reset_optimizer_random_state,
     run_two_phase,
 )
 
@@ -54,6 +55,7 @@ def run_opt(
     )
 
     with BatchObjective(fun, archive, workers=PSO_WORKERS) as objective:
+        reset_optimizer_random_state(PSO_RANDOM_SEED + phase)
         optimizer = ps.single.LocalBestPSO(
             n_particles=PSO_PARTICLES,
             dimensions=dimensions,

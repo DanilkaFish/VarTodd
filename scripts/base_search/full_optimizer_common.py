@@ -42,6 +42,12 @@ Z_MIN_CAP = 500
 _seed_rng = random.Random(40)
 
 
+def reset_optimizer_random_state(seed: int) -> None:
+    phase_seed = int(seed)
+    random.seed(phase_seed)
+    np.random.seed(phase_seed % (2**32))
+
+
 def to_unit(params: Iterable[float]) -> np.ndarray:
     values = np.asarray(params, dtype=float)
     return (values - NATIVE_LOWER) / (NATIVE_UPPER - NATIVE_LOWER)
