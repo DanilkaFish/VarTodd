@@ -8,10 +8,6 @@ import pyswarms as ps
 from scripts.base_search import full_optimizer_common
 
 
-def _source(module) -> str:
-    return Path(module.__file__).read_text()
-
-
 class OptimizerRepeatabilityTests(unittest.TestCase):
     def test_reset_optimizer_random_state_repeats_python_and_numpy_streams(self):
         full_optimizer_common.reset_optimizer_random_state(712)
@@ -50,19 +46,24 @@ class OptimizerRepeatabilityTests(unittest.TestCase):
         )
 
     def test_every_optimizer_resets_its_phase_random_state(self):
-        from scripts.base_search import full_cmaes, full_de, full_pso
-
+        optimizer_dir = Path(full_optimizer_common.__file__).parent
         expectations = (
-            (full_pso, "reset_optimizer_random_state(PSO_RANDOM_SEED + phase)"),
             (
-                full_cmaes,
+                "full_pso.py",
+                "reset_optimizer_random_state(PSO_RANDOM_SEED + phase)",
+            ),
+            (
+                "full_cmaes.py",
                 "reset_optimizer_random_state(CMA_RANDOM_SEED + phase)",
             ),
-            (full_de, "reset_optimizer_random_state(DE_RANDOM_SEED + phase)"),
+            (
+                "full_de.py",
+                "reset_optimizer_random_state(DE_RANDOM_SEED + phase)",
+            ),
         )
-        for module, call in expectations:
-            with self.subTest(module=module.__name__):
-                self.assertIn(call, _source(module))
+        for filename, call in expectations:
+            with self.subTest(filename=filename):
+                self.assertIn(call, (optimizer_dir / filename).read_text())
 
 
 if __name__ == "__main__":
