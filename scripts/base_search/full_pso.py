@@ -15,6 +15,7 @@ from scripts.optimization_core.helper import (
     SamplingBudget,
     SourcePool,
     ToddSearch,
+    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
@@ -30,11 +31,11 @@ PSO_OPTIONS = {"c1": 0.9, "c2": 0.6, "w": 0.9}
 # PSO_VELOCITY_CLAMP = (-0.25, 0.25)
 PSO_INITIAL_ITERATIONS = 50
 PSO_RESTART_ITERATIONS = 50
-Z_MAX_BUCKET_CAP = 50_000
+Z_MAX_BUCKET_CAP = 10_000
 Z_LIMIT_BUCKET_CAP = 500_000
-SAMPLE_COUNT_MAX = 100
-TODD_RESERVE_MAX = 6
-Z_MIN_CAP = 500
+Z_MIN_CAP = 200
+SAMPLE_COUNT_MAX = 50
+TODD_RESERVE_MAX = 4
 
 def _w_tanh(z: float, scale: float = 4.0, sharp: float = 1.5) -> float:
     return float(scale * np.tanh(z / sharp))
@@ -92,13 +93,30 @@ class Evaluator(BaseEvaluator):
         )
         todd_reserve = min(TODD_RESERVE_MAX, int(TODD_RESERVE_MAX * todd_reserve_budget))
 
-        sampling = SamplingBudget(one_hot=sample_caps[0], sparse=sample_caps[1], dense=sample_caps[2], sparse_max_weight=2)
+        tohpe_sampling = SamplingBudget(
+            one_hot=sample_caps[0], sparse=sample_caps[1], dense=sample_caps[2], sparse_max_weight=2
+        )
+        todd_sampling = SamplingBudget(
+            one_hot=sample_caps[0], sparse=sample_caps[1], dense=sample_caps[2], sparse_max_weight=2
+        )
         self.set_action_selection(ActionSelection(count=2, mode="softmax", temperature=0.2))
         self.set_action_pool(ActionPool(final_size=18))
-        self.set_tohpe_search(TohpeSearch(sampling=sampling, pool=SourcePool(keep=12, reserve=0), z_choices=4))
+        self.set_tohpe_search(TohpeSearch(pool=SourcePool(keep=4, reserve=0), sampling=SamplingBudget(10, 0, 0), z_choices=4))
+        self.set_tohpeprefix_search(
+            TohpePrefixSearch(
+                sampling=tohpe_sampling,
+                pool=SourcePool(keep=12, reserve=todd_reserve),
+                actions_per_bucket=2,
+                buckets=ZBucketSearch(
+                    min_buckets=z_min,
+                    max_buckets=z_max,
+                    limit_bucket=z_limit,
+                ),
+            )
+        )
         self.set_todd_search(
             ToddSearch(
-                sampling=sampling,
+                sampling=todd_sampling,
                 pool=SourcePool(keep=12, reserve=todd_reserve),
                 actions_per_bucket=2,
                 buckets=ZBucketSearch(

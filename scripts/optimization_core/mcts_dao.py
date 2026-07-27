@@ -15,6 +15,7 @@ from .node import (
     SamplingBudget,
     SourcePool,
     ToddSearch,
+    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
@@ -173,6 +174,7 @@ class Path:
             return (
                 ("beamwidth", "1"),
                 ("tohpe_pool", "2/0"),
+                ("tohpeprefix_pool", "0/0"),
                 ("todd_pool", "16/0"),
             )
 
@@ -200,8 +202,10 @@ class Path:
         beamwidth = _as_int(selection.count)
         action_pool = _as_action_pool(value("pool", _default_action_pool()))
         tohpe = _as_tohpe_search(value("tohpe", _default_tohpe_search()))
+        tohpeprefix = _as_tohpeprefix_search(value("tohpeprefix", _default_tohpeprefix_search()))
         todd = _as_todd_search(value("todd", _default_todd_search()))
-        buckets = _as_z_bucket_search(todd.buckets)
+        tohpeprefix_buckets = _as_z_bucket_search(tohpeprefix.buckets)
+        todd_buckets = _as_z_bucket_search(todd.buckets)
         scores = _as_policy_scores(value("scores", _default_policy_scores()))
 
         fields = [
@@ -210,14 +214,20 @@ class Path:
             ("selection_temperature", _as_float(selection.temperature)),
             ("action_pool_final_size", _as_int(action_pool.final_size)),
             ("tohpe_sampling", fmt_sampling(tohpe.sampling)),
+            ("tohpeprefix_sampling", fmt_sampling(tohpeprefix.sampling)),
             ("todd_sampling", fmt_sampling(todd.sampling)),
             ("tohpe_pool", fmt_source_pool(tohpe.pool)),
+            ("tohpeprefix_pool", fmt_source_pool(tohpeprefix.pool)),
             ("todd_pool", fmt_source_pool(todd.pool)),
             ("tohpe_z_choices", _as_int(tohpe.z_choices)),
+            ("tohpeprefix_actions_per_bucket", _as_int(tohpeprefix.actions_per_bucket)),
             ("todd_actions_per_bucket", _as_int(todd.actions_per_bucket)),
-            ("z_min_buckets", _as_int(buckets.min_buckets)),
-            ("z_max_buckets", _as_int(buckets.max_buckets)),
-            ("z_limit_bucket", _as_int(buckets.limit_bucket)),
+            ("tohpeprefix_z_min_buckets", _as_int(tohpeprefix_buckets.min_buckets)),
+            ("tohpeprefix_z_max_buckets", _as_int(tohpeprefix_buckets.max_buckets)),
+            ("tohpeprefix_z_limit_bucket", _as_int(tohpeprefix_buckets.limit_bucket)),
+            ("todd_z_min_buckets", _as_int(todd_buckets.min_buckets)),
+            ("todd_z_max_buckets", _as_int(todd_buckets.max_buckets)),
+            ("todd_z_limit_bucket", _as_int(todd_buckets.limit_bucket)),
             ("pool_scores", self._format_score(scores.exploration, ["red", "dim", "bucket", "yw", "zw"])),
             ("final_scores", self._format_score(scores.final, ["red", "dim", "bucket", "yw", "zw", "tohpe"])),
         ]
@@ -261,26 +271,34 @@ class Path:
         selection_temp = values.get("selection_temperature", "0")
         final_pool = values.get("action_pool_final_size", "16")
         tohpe_pool = values.get("tohpe_pool", "2/0")
+        tohpeprefix_pool = values.get("tohpeprefix_pool", "0/0")
         todd_pool = values.get("todd_pool", "16/0")
         tohpe_sampling_label = values.get("tohpe_sampling", "oh:all/sp:0/de:32/w:2")
+        tohpeprefix_sampling_label = values.get("tohpeprefix_sampling", "oh:all/sp:0/de:32/w:2")
         todd_samples = values.get("todd_sampling", "oh:all/sp:0/de:32/w:2")
         tohpe_z_choices = values.get("tohpe_z_choices", "8")
-        min_z = values.get("z_min_buckets", "32")
-        max_z = values.get("z_max_buckets", "0")
-        limit_z = values.get("z_limit_bucket", "-1")
-        actions_per_bucket = values.get("todd_actions_per_bucket", "4")
+        tohpeprefix_actions_per_bucket = values.get("tohpeprefix_actions_per_bucket", "4")
+        todd_actions_per_bucket = values.get("todd_actions_per_bucket", "4")
+        tohpeprefix_min_z = values.get("tohpeprefix_z_min_buckets", "32")
+        tohpeprefix_max_z = values.get("tohpeprefix_z_max_buckets", "0")
+        tohpeprefix_limit_z = values.get("tohpeprefix_z_limit_bucket", "-1")
+        todd_min_z = values.get("todd_z_min_buckets", "32")
+        todd_max_z = values.get("todd_z_max_buckets", "0")
+        todd_limit_z = values.get("todd_z_limit_bucket", "-1")
 
         diversity_parts = [
-            f"actions_per_bucket:{actions_per_bucket}",
+            f"tohpeprefix_actions_per_bucket:{tohpeprefix_actions_per_bucket}",
+            f"todd_actions_per_bucket:{todd_actions_per_bucket}",
         ]
 
         line = (
             f"  {profile_id} "
             f"rank_region={Path._profile_region(profile_groups, all_groups)} "
             f"search_shape=beamwidth:{beamwidth}/selection:{selection_mode}@{selection_temp} "
-            f"pool=final:{final_pool}/tohpe:{tohpe_pool}/todd:{todd_pool} "
-            f"samples=tohpe:{tohpe_sampling_label}/todd:{todd_samples}/tohpe_z:{tohpe_z_choices} "
-            f"z_buckets=min_buckets:{min_z}/max_buckets:{max_z}/limit_bucket:{limit_z} "
+            f"pool=final:{final_pool}/tohpe:{tohpe_pool}/tohpeprefix:{tohpeprefix_pool}/todd:{todd_pool} "
+            f"samples=tohpe:{tohpe_sampling_label}/tohpeprefix:{tohpeprefix_sampling_label}/todd:{todd_samples} "
+            f"tohpe_z_choices:{tohpe_z_choices} z_buckets=tohpeprefix:{tohpeprefix_min_z}..{tohpeprefix_max_z}/{tohpeprefix_limit_z} "
+            f"todd:{todd_min_z}..{todd_max_z}/{todd_limit_z} "
             f"diversity={'/'.join(diversity_parts)}"
         )
         if include_scores:
@@ -343,14 +361,16 @@ class Path:
     def _format_group(group: Dict[str, Any], group_num: int) -> str:
         steps = int(group["steps"])
         accepted_tohpe = group["accepted_tohpe"]
+        accepted_tohpeprefix = group["accepted_tohpeprefix"]
         accepted_todd = group["accepted_todd"]
         researched_z = group["researched_z"]
         accepted_total = [
-            float(tohpe) + float(todd)
-            for tohpe, todd in zip(accepted_tohpe, accepted_todd)
+            float(tohpe) + float(prefix) + float(todd)
+            for tohpe, prefix, todd in zip(accepted_tohpe, accepted_tohpeprefix, accepted_todd)
         ]
         productive_indices = [idx for idx, accepted in enumerate(accepted_total) if accepted > 0]
         productive_tohpe = [accepted_tohpe[idx] for idx in productive_indices]
+        productive_tohpeprefix = [accepted_tohpeprefix[idx] for idx in productive_indices]
         productive_todd = [accepted_todd[idx] for idx in productive_indices]
         accepted_per_z = [
             Path._safe_div(accepted_total[idx], researched_z[idx])
@@ -390,14 +410,16 @@ class Path:
                     (
                         "source="
                         f"tohpe:{_fmt_float(Path._mean(accepted_tohpe))}/"
+                        f"tohpeprefix:{_fmt_float(Path._mean(accepted_tohpeprefix))}/"
                         f"todd:{_fmt_float(Path._mean(accepted_todd))}"
                     ),
                 ]
             )
             pool_sizes = group.get("pool_size") or []
             pool_tohpe = group.get("pool_tohpe_size") or []
+            pool_tohpeprefix = group.get("pool_tohpeprefix_size") or []
             pool_todd = group.get("pool_todd_size") or []
-            if pool_sizes or pool_tohpe or pool_todd:
+            if pool_sizes or pool_tohpe or pool_tohpeprefix or pool_todd:
                 pool_parts = []
                 if pool_sizes:
                     pool_parts.append(
@@ -406,6 +428,8 @@ class Path:
                     )
                 if pool_tohpe:
                     pool_parts.append(f"tohpe_mean:{_fmt_float(Path._mean(pool_tohpe))}")
+                if pool_tohpeprefix:
+                    pool_parts.append(f"tohpeprefix_mean:{_fmt_float(Path._mean(pool_tohpeprefix))}")
                 if pool_todd:
                     pool_parts.append(f"todd_mean:{_fmt_float(Path._mean(pool_todd))}")
                 parts.append("pool=" + "/".join(pool_parts))
@@ -414,6 +438,7 @@ class Path:
                     (
                         "accepted_min="
                         f"tohpe:{int(min(productive_tohpe or accepted_tohpe))}/"
+                        f"tohpeprefix:{int(min(productive_tohpeprefix or accepted_tohpeprefix))}/"
                         f"todd:{int(min(productive_todd or accepted_todd))}"
                     ),
                     (
@@ -434,7 +459,7 @@ class Path:
                 parts.append("accepted_per_z=n/a")
             notes = Path._evidence_notes(
                 start_rank=int(group["start_rank"]),
-                accepted_tohpe=accepted_tohpe,
+                accepted_tohpe=[float(h) + float(p) for h, p in zip(accepted_tohpe, accepted_tohpeprefix)],
                 accepted_todd=accepted_todd,
                 researched_z=researched_z,
                 accepted_per_z=accepted_per_z,
@@ -491,13 +516,17 @@ class Path:
         notes = set(
             Path._evidence_notes(
                 start_rank=int(group["start_rank"]),
-                accepted_tohpe=group["accepted_tohpe"],
+                accepted_tohpe=[
+                    float(h) + float(p)
+                    for h, p in zip(group["accepted_tohpe"], group["accepted_tohpeprefix"])
+                ],
                 accepted_todd=group["accepted_todd"],
                 researched_z=group["researched_z"],
                 accepted_per_z=[
-                    Path._safe_div(t + d, z)
-                    for t, d, z in zip(
-                        group["accepted_tohpe"], group["accepted_todd"], group["researched_z"]
+                    Path._safe_div(h + p + t, z)
+                    for h, p, t, z in zip(
+                        group["accepted_tohpe"], group["accepted_tohpeprefix"],
+                        group["accepted_todd"], group["researched_z"]
                     )
                     if z > 0
                 ],
@@ -548,12 +577,14 @@ class Path:
         red_max = [v for g in band for v in g["red_max"]]
         dim = [v for g in band for v in g["basis_dim"]]
         tohpe = [v for g in band for v in g["accepted_tohpe"]]
+        tohpeprefix = [v for g in band for v in g["accepted_tohpeprefix"]]
         todd = [v for g in band for v in g["accepted_todd"]]
         zr = [v for g in band for v in g["researched_z"]]
         pool = [v for g in band for v in g["pool_size"]]
         pool_h = [v for g in band for v in g["pool_tohpe_size"]]
+        pool_p = [v for g in band for v in g["pool_tohpeprefix_size"]]
         pool_t = [v for g in band for v in g["pool_todd_size"]]
-        apz = [Path._safe_div(t + d, z) for t, d, z in zip(tohpe, todd, zr) if z > 0]
+        apz = [Path._safe_div(h + p + t, z) for h, p, t, z in zip(tohpe, tohpeprefix, todd, zr) if z > 0]
         if not red:
             return head + " action_stats=unavailable"
         parts = [head]
@@ -565,17 +596,21 @@ class Path:
                 parts.append(f"dim:{dmin}")
             else:
                 parts.append(f"dim:{dmin}..{dmax}(m:{cls._num(Path._mean(dim))})")
-        parts.append(f"src=H:{cls._num(Path._mean(tohpe))}/T:{cls._num(Path._mean(todd))}")
+        parts.append(
+            f"src=H:{cls._num(Path._mean(tohpe))}/P:{cls._num(Path._mean(tohpeprefix))}/"
+            f"T:{cls._num(Path._mean(todd))}"
+        )
         if pool:
             parts.append(
                 f"pool:{cls._num(Path._mean(pool))}"
                 f"(H{cls._num(Path._mean(pool_h)) if pool_h else '0'}"
+                f"/P{cls._num(Path._mean(pool_p)) if pool_p else '0'}"
                 f"/T{cls._num(Path._mean(pool_t)) if pool_t else '0'})"
             )
         parts.append(f"z:{cls._pair(Path._mean(zr), max(zr) if zr else 0, 0)}")
         notes = Path._evidence_notes(
             start_rank=int(first["start_rank"]),
-            accepted_tohpe=tohpe,
+            accepted_tohpe=[float(h) + float(p) for h, p in zip(tohpe, tohpeprefix)],
             accepted_todd=todd,
             researched_z=zr,
             accepted_per_z=apz,
@@ -612,10 +647,12 @@ class Path:
                 "basis_max": [],
                 "bucket": [],
                 "accepted_tohpe": [],
+                "accepted_tohpeprefix": [],
                 "accepted_todd": [],
                 "researched_z": [],
                 "pool_size": [],
                 "pool_tohpe_size": [],
+                "pool_tohpeprefix_size": [],
                 "pool_todd_size": [],
                 "missing_stats": 0,
             }
@@ -642,12 +679,14 @@ class Path:
                     dim_lt5_split_seen = True
 
                 pool_tohpe_for_split = self._safe_float_attr(cand, "pool_tohpe_size")
+                pool_tohpeprefix_for_split = self._safe_float_attr(cand, "pool_tohpeprefix_size")
                 pool_todd_for_split = self._safe_float_attr(cand, "pool_todd_size")
                 if (
                     not todd_pool_split_seen
                     and pool_tohpe_for_split is not None
+                    and pool_tohpeprefix_for_split is not None
                     and pool_todd_for_split is not None
-                    and pool_todd_for_split > pool_tohpe_for_split
+                    and pool_todd_for_split > pool_tohpe_for_split + pool_tohpeprefix_for_split
                 ):
                     split_reasons.append("todd_pool_gt_tohpe")
                     todd_pool_split_seen = True
@@ -670,13 +709,15 @@ class Path:
             if max_basis is not None:
                 group["basis_max"].append(max_basis)
             group["bucket"].append(float(cand.bucket_size))
-            for attr_name in ("pool_size", "pool_tohpe_size", "pool_todd_size"):
+            for attr_name in ("pool_size", "pool_tohpe_size", "pool_tohpeprefix_size", "pool_todd_size"):
                 value = self._safe_float_attr(cand, attr_name)
                 if value is not None:
                     group[attr_name].append(value)
             accepted_tohpe = float(stats.accepted_tohpe)
+            accepted_tohpeprefix = float(stats.accepted_tohpeprefix)
             accepted_todd = float(stats.accepted_todd)
             group["accepted_tohpe"].append(accepted_tohpe)
+            group["accepted_tohpeprefix"].append(accepted_tohpeprefix)
             group["accepted_todd"].append(accepted_todd)
             researched_z = getattr(node.incoming, "total", None)
             if researched_z is None:
@@ -839,6 +880,19 @@ def _as_tohpe_search(x: Any) -> TohpeSearch:
     raise TypeError(f"expected TohpeSearch or mapping, got {type(x).__name__}")
 
 
+def _as_tohpeprefix_search(x: Any) -> TohpePrefixSearch:
+    if isinstance(x, TohpePrefixSearch):
+        return x
+    if isinstance(x, Mapping):
+        return TohpePrefixSearch(
+            sampling=_as_sampling_budget(x.get("sampling", SamplingBudget())),
+            pool=_as_source_pool(x.get("pool", SourcePool(keep=0, reserve=0))),
+            actions_per_bucket=_as_int(x.get("actions_per_bucket", 4)),
+            buckets=_as_z_bucket_search(x.get("buckets", ZBucketSearch())),
+        )
+    raise TypeError(f"expected TohpePrefixSearch or mapping, got {type(x).__name__}")
+
+
 def _as_todd_search(x: Any) -> ToddSearch:
     if isinstance(x, ToddSearch):
         return x
@@ -975,6 +1029,21 @@ def _default_tohpe_search() -> TohpeSearch:
     )
 
 
+def _default_tohpeprefix_search() -> TohpePrefixSearch:
+    return TohpePrefixSearch(
+        sampling=SamplingBudget(one_hot="all", sparse=0, dense=32, sparse_max_weight=2),
+        pool=SourcePool(keep=0, reserve=0),
+        actions_per_bucket=4,
+        buckets=ZBucketSearch(
+            min_buckets=32,
+            max_buckets=0,
+            temperature=0.0,
+            random_fraction=0.0,
+            limit_bucket=-1,
+        ),
+    )
+
+
 def _default_todd_search() -> ToddSearch:
     return ToddSearch(
         sampling=SamplingBudget(one_hot="all", sparse=0, dense=32, sparse_max_weight=2),
@@ -1000,13 +1069,16 @@ class ModeDao:
     tohpe: RankSchedule[TohpeSearch] = field(
         default_factory=lambda: RankSchedule.constant(_default_tohpe_search())
     )
+    tohpeprefix: RankSchedule[TohpePrefixSearch] = field(
+        default_factory=lambda: RankSchedule.constant(_default_tohpeprefix_search())
+    )
     todd: RankSchedule[ToddSearch] = field(
         default_factory=lambda: RankSchedule.constant(_default_todd_search())
     )
 
     @staticmethod
     def from_dict(d: Mapping[str, Any]) -> "ModeDao":
-        supported_keys = {"scores", "selection", "pool", "tohpe", "todd"}
+        supported_keys = {"scores", "selection", "pool", "tohpe", "tohpeprefix", "todd"}
         unsupported_keys = sorted(key for key in d if key not in supported_keys)
         if unsupported_keys:
             raise ValueError(
@@ -1018,6 +1090,9 @@ class ModeDao:
             selection=_converted_rank_schedule(d.get("selection", _default_action_selection()), _as_action_selection),
             pool=_converted_rank_schedule(d.get("pool", _default_action_pool()), _as_action_pool),
             tohpe=_converted_rank_schedule(d.get("tohpe", _default_tohpe_search()), _as_tohpe_search),
+            tohpeprefix=_converted_rank_schedule(
+                d.get("tohpeprefix", _default_tohpeprefix_search()), _as_tohpeprefix_search
+            ),
             todd=_converted_rank_schedule(d.get("todd", _default_todd_search()), _as_todd_search),
         )
 
@@ -1034,6 +1109,7 @@ class ModeDao:
             "selection": selection,
             "pool": _as_action_pool(self.pool.at(depth)),
             "tohpe": _as_tohpe_search(self.tohpe.at(depth)),
+            "tohpeprefix": _as_tohpeprefix_search(self.tohpeprefix.at(depth)),
             "todd": _as_todd_search(self.todd.at(depth)),
         }
 

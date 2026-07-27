@@ -11,6 +11,7 @@ from scripts.optimization_core.helper import (
     SamplingBudget,
     SourcePool,
     ToddSearch,
+    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
@@ -39,7 +40,15 @@ class Evaluator(BaseEvaluator):
         self.set_scores(ranks, [PolicyScores(exploration=w_pool[0], final=w_final[0])])
         self.set_action_selection(ActionSelection(count=1, mode="best", temperature=0.0))
         self.set_action_pool(ActionPool(final_size=1))
-        self.set_tohpe_search(TohpeSearch(sampling=sampling, pool=SourcePool(keep=1, reserve=0), z_choices=1))
+        self.set_tohpe_search(TohpeSearch(pool=SourcePool(keep=0, reserve=0)))
+        self.set_tohpeprefix_search(
+            TohpePrefixSearch(
+                sampling=sampling,
+                pool=SourcePool(keep=1, reserve=0),
+                actions_per_bucket=1,
+                buckets=ZBucketSearch(min_buckets=100000, max_buckets=100000),
+            )
+        )
         self.set_todd_search(
             ToddSearch(
                 sampling=sampling,

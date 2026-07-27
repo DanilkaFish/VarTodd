@@ -121,16 +121,35 @@ inline bool insert_into_y_basis(Row& y, Matrix& basis, PivotMap& pivY) {
 
     return false;
 }
+
+inline Matrix build_transformed_tohpe_prefix(const Matrix& tohpe, const SumEntry* ptr, index_t len, PivotMap& pivY) {
+    Matrix basis(0, tohpe.cols());
+    basis.reserve_rows(tohpe.rows());
+    pivY.reset(static_cast<std::size_t>(tohpe.cols()));
+
+    for (index_t i = 0; i < tohpe.rows(); ++i) {
+        Row y = tohpe[i];
+        apply_solution_transform(y, ptr, len);
+        insert_into_y_basis(y, basis, pivY);
+    }
+    return basis;
+}
 } // namespace detail
 
+struct GeneratedSolutionBasis {
+    Matrix  basis;
+    index_t tohpe_prefix_size = 0;
+};
+
 template <class FillRow>
-Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, index_t divider, const Matrix& tohpe,
-                                                const SumEntry* ptr, index_t len, FillRow&& fill_row) {
+GeneratedSolutionBasis solve_and_build_solution_basis_generated(index_t rows, index_t cols, index_t divider,
+                                                                const Matrix& tohpe, const SumEntry* ptr, index_t len,
+                                                                FillRow&& fill_row) {
     if (divider > cols)
         throw std::invalid_argument("solve_and_build_solution_basis_generated: divider > cols");
     const index_t nY = cols - divider;
     if (nY == 0)
-        return Matrix(0, 0);
+        return {Matrix(0, 0), 0};
     if (tohpe.rows() != 0 && tohpe.cols() != nY)
         throw std::invalid_argument("solve_and_build_solution_basis_generated: tohpe width mismatch");
 
@@ -138,16 +157,13 @@ Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, inde
     static thread_local PivotMap pivY;
 
     pivA.reset(static_cast<std::size_t>(divider));
-    pivY.reset(static_cast<std::size_t>(nY));
-
-    Matrix basis(0, nY);
+    Matrix basis = detail::build_transformed_tohpe_prefix(tohpe, ptr, len, pivY);
     Matrix pivot_rows(0, cols);
     Row    row(cols);
 
     const index_t full_rank = nY;
-    basis.reserve_rows(full_rank);
     pivot_rows.reserve_rows(std::min(rows, divider));
-
+    const index_t tohpe_prefix_size = basis.rows();
     for (index_t i = 0; i < rows && basis.rows() < full_rank; ++i) {
         row.reset();
         fill_row(i, row.view());
@@ -176,15 +192,7 @@ Matrix solve_and_build_solution_basis_generated(index_t rows, index_t cols, inde
         detail::apply_solution_transform(y, ptr, len);
         detail::insert_into_y_basis(y, basis, pivY);
     }
-
-    for (index_t i = 0; i < tohpe.rows() && basis.rows() < full_rank; ++i) {
-        Row y = tohpe[i];
-
-        detail::apply_solution_transform(y, ptr, len);
-        detail::insert_into_y_basis(y, basis, pivY);
-    }
-
-    return basis;
+    return {std::move(basis), tohpe_prefix_size};
 }
 
 struct HashKeyHash {

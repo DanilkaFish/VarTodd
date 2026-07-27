@@ -99,9 +99,7 @@ class RunStandardTests(unittest.TestCase):
                 yield future
 
         def capture_report(output_path, records):
-            self.assertEqual(yielded_names, ["second", "first"])
-            self.assertEqual(completed_names, ["second", "first"])
-            writer_calls.append((output_path, records))
+            writer_calls.append((output_path, list(records), list(completed_names)))
 
         with tempfile.TemporaryDirectory() as tmp:
             output_path = Path(tmp) / "run.json"
@@ -115,10 +113,19 @@ class RunStandardTests(unittest.TestCase):
                                 ["--output", str(output_path), "--names", "first", "second"]
                             )
 
-        self.assertEqual(len(writer_calls), 1)
-        written_path, records = writer_calls[0]
-        self.assertEqual(written_path, output_path)
-        self.assertEqual([record["problem_name"] for record in records], ["first", "second"])
+        self.assertEqual(yielded_names, ["second", "first"])
+        self.assertEqual(len(writer_calls), 2)
+        self.assertEqual(writer_calls[0][0], output_path)
+        self.assertEqual(
+            [record["problem_name"] for record in writer_calls[0][1]],
+            ["second"],
+        )
+        self.assertEqual(writer_calls[0][2], ["second"])
+        self.assertEqual(
+            [record["problem_name"] for record in writer_calls[1][1]],
+            ["first", "second"],
+        )
+        self.assertEqual(writer_calls[1][2], ["second", "first"])
 
 
 if __name__ == "__main__":

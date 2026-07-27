@@ -37,9 +37,10 @@ inline Int checked_int_double(Int value, const char* what) {
 } // namespace detail
 
 enum CandidateSource : Int {
-    CandidateSourceUnknown = 0,
-    CandidateSourceTohpe   = 1,
-    CandidateSourceTodd    = 2,
+    CandidateSourceUnknown     = 0,
+    CandidateSourceTohpe       = 1,
+    CandidateSourceTohpePrefix = 2,
+    CandidateSourceTodd        = 3,
 };
 
 struct Candidate {
@@ -61,6 +62,7 @@ struct Candidate {
     Int           num_better_pool_score  = 0;
     Int           pool_size              = 0;
     Int           pool_tohpe_size        = 0;
+    Int           pool_tohpeprefix_size  = 0;
     Int           pool_todd_size         = 0;
     Int           vec_weight             = 0;
     Int           z_weight               = 0;
@@ -119,6 +121,7 @@ struct Stats {
     index_t accepted               = 0;
     index_t rejected               = 0;
     index_t accepted_tohpe         = 0;
+    index_t accepted_tohpeprefix   = 0;
     index_t accepted_todd          = 0;
     float   mean_mr                = 0.0f;
     float   mean_basis             = 0.0f;
@@ -149,7 +152,9 @@ struct CandidateExport {
     Int   num_better_pool_score{};
     Int   pool_size{};
     Int   pool_tohpe_size{};
+    Int   pool_tohpeprefix_size{};
     Int   pool_todd_size{};
+    Int   source{CandidateSourceUnknown};
 };
 
 struct Result {
@@ -176,7 +181,9 @@ static CandidateExport export_candidate(Candidate const& c) {
         .num_better_pool_score  = c.num_better_pool_score,
         .pool_size              = c.pool_size,
         .pool_tohpe_size        = c.pool_tohpe_size,
+        .pool_tohpeprefix_size  = c.pool_tohpeprefix_size,
         .pool_todd_size         = c.pool_todd_size,
+        .source                 = c.source,
     };
 }
 
@@ -338,18 +345,25 @@ struct SourcePool {
     Int reserve = 0;
 };
 
-struct TohpeSearch {
-    SamplingBudget sampling{};
-    SourcePool     pool{2, 0};
-    Int            z_choices = 8;
-};
-
 struct ZBucketSearch {
     Int   min_buckets     = 32;
     Int   max_buckets     = 0;
     float temperature     = 0.0f;
     float random_fraction = 0.0f;
     Int   limit_bucket    = -1;
+};
+
+struct TohpeSearch {
+    SamplingBudget sampling{};
+    SourcePool     pool{2, 0};
+    Int            z_choices = 8;
+};
+
+struct TohpePrefixSearch {
+    SamplingBudget sampling{};
+    SourcePool     pool{0, 0};
+    Int            actions_per_bucket = 4;
+    ZBucketSearch  buckets{};
 };
 
 struct ToddSearch {
@@ -365,6 +379,7 @@ struct PolicyConfig {
     ActionPool      pool{};
     TohpeSearch     tohpe{};
     ToddSearch      todd{};
+    TohpePrefixSearch tohpeprefix{};
 };
 
 auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyConfig config, index_t seed = 1,

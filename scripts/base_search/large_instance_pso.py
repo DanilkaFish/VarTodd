@@ -19,6 +19,7 @@ from scripts.optimization_core.helper import (
     SamplingBudget,
     SourcePool,
     ToddSearch,
+    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
@@ -108,8 +109,9 @@ class Evaluator(BaseEvaluator):
         self.set_scores(PolicyScores(exploration=pool_score, final=final_score))
         self.set_action_selection(ActionSelection(count=1, mode="softmax", temperature=0.01 + 0.09 * temp_bias))
         self.set_action_pool(ActionPool(final_size=10 + int(30 * pool_budget)))
-        self.set_tohpe_search(
-            TohpeSearch(
+        self.set_tohpe_search(TohpeSearch(pool=SourcePool(keep=0, reserve=0)))
+        self.set_tohpeprefix_search(
+            TohpePrefixSearch(
                 sampling=SamplingBudget(
                     one_hot=80 + int(240 * sample_budget),
                     sparse=20 + int(80 * sparse_budget),
@@ -117,7 +119,13 @@ class Evaluator(BaseEvaluator):
                     sparse_max_weight=sparse_weight,
                 ),
                 pool=SourcePool(keep=5 + int(3 * sample_budget), reserve=1),
-                z_choices=4 + int(10 * breadth_budget),
+                actions_per_bucket=4 + int(12 * single_budget),
+                buckets=ZBucketSearch(
+                    min_buckets=(10000 + int(30000 * todd_budget)) if self.use_todd_stage else 0,
+                    max_buckets=(1000000 + int(6000000 * todd_budget)) if self.use_todd_stage else 0,
+                    temperature=0.02 + 0.28 * bucket_budget,
+                    random_fraction=0.05 + 0.20 * bucket_budget,
+                ),
             )
         )
         self.set_todd_search(

@@ -396,12 +396,14 @@ class MatrixWithData {
     };
 
     const FullToddData& full_todd() const;
+    bool                full_todd_ready() const noexcept { return full_todd_.has_value(); }
 
   private:
     Matrix                              P_;
     Matrix                              tohpe_basis_;
     const ToddIndex                     index_;
-    std::optional<FullToddData>         full_todd_;
+    bool                                can_build_full_todd_ = false;
+    mutable std::optional<FullToddData> full_todd_;
 };
 
 // Base witness for predicting/applying a candidate rank reduction.
@@ -449,7 +451,8 @@ class ToddWitness final : public Witness {
 
 class NullSpace {
   public:
-    NullSpace(std::shared_ptr<MatrixWithData> M, std::unique_ptr<Witness>&& w) : M_{std::move(M)}, w_{std::move(w)} {}
+    NullSpace(std::shared_ptr<MatrixWithData> M, std::unique_ptr<Witness>&& w, index_t tohpe_prefix_size = 0)
+        : M_{std::move(M)}, w_{std::move(w)}, tohpe_prefix_size_{tohpe_prefix_size} {}
 
     Matrix        apply(RowCView y) const;
     Matrix        apply(RowCView y, std::vector<std::uint8_t>& scratch_killed) const;
@@ -458,12 +461,14 @@ class NullSpace {
     const Matrix& basis() const noexcept { return w_->get_Y(); }
     const Matrix& P() const noexcept { return M_->P(); }
     const auto    vector() const noexcept { return w_->vector(); }
+    index_t       tohpe_prefix_size() const noexcept { return tohpe_prefix_size_; }
 
     NullSpace(NullSpace&&) noexcept = default;
     NullSpace& operator=(NullSpace&& other) noexcept {
         if (this != &other) {
             M_ = std::move(other.M_);
             w_ = std::move(other.w_);
+            tohpe_prefix_size_ = other.tohpe_prefix_size_;
         }
         return *this;
     }
@@ -474,6 +479,7 @@ class NullSpace {
   private:
     std::shared_ptr<MatrixWithData> M_;
     std::unique_ptr<Witness>        w_;
+    index_t                          tohpe_prefix_size_ = 0;
 };
 
 class TohpeGenerator {
@@ -501,15 +507,26 @@ class TohpeGenerator {
     mutable std::vector<TohpeZInfo> scratch_z_infos_;
 };
 
+enum class SolutionBasisRequest : std::uint8_t {
+    TohpeOnly,
+    ToddOnly,
+    Both,
+};
+
 class FullToddGenerator {
   public:
     explicit FullToddGenerator(std::shared_ptr<MatrixWithData> M);
+    auto solution_basis(RowCView z, const SumEntry* ptr, index_t len, SolutionBasisRequest request) const
+        -> GeneratedSolutionBasis;
     auto make(RowCView z) const -> NullSpace;
     auto make(RowCView z, const SumEntry* ptr, index_t len) const -> NullSpace;
+    auto make(RowCView z, const SumEntry* ptr, index_t len, SolutionBasisRequest request) const -> NullSpace;
+    auto make_tohpe_prefix(RowCView z, const SumEntry* ptr, index_t len) const -> NullSpace;
     auto make(index_t row) const -> NullSpace;
     auto make(index_t row1, index_t row2) const -> NullSpace;
-    auto full_todd_kernel(RowCView z) const -> Matrix;
-    auto full_todd_kernel(RowCView z, const SumEntry* ptr, index_t len) const -> Matrix;
+    auto full_todd_kernel(RowCView z) const -> GeneratedSolutionBasis;
+    auto full_todd_kernel(RowCView z, const SumEntry* ptr, index_t len) const -> GeneratedSolutionBasis;
+    auto tohpe_prefix_kernel(RowCView z, const SumEntry* ptr, index_t len) const -> GeneratedSolutionBasis;
 
     const Matrix& P() const noexcept { return M_->P(); }
 

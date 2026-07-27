@@ -19,6 +19,7 @@ from pyvartodd.Release.pyvartodd import (  # type: ignore
     Stats,
     ToddSearch,
     Tensor3D,
+    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
     policy_iteration,

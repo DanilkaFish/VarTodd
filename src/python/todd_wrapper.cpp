@@ -182,7 +182,7 @@ static py::tuple candidate_to_tuple(const CandidateExport& c) {
     py::object l  = (c.l == k_single_sentinel<Int>()) ? py::none() : py::object(py::int_(c.l));
     return py::make_tuple(c.pool_score, c.final_score, c.reduction, k, l, c.basis_dim, c.bucket_size, tD,
                           c.num_better_dim, c.num_better_red, c.num_better_pool_score, c.pool_size,
-                          c.pool_tohpe_size, c.pool_todd_size);
+                          c.pool_tohpe_size, c.pool_tohpeprefix_size, c.pool_todd_size, c.source);
 }
 
 struct PyTohpeGenerator {
@@ -418,7 +418,9 @@ py::class_<CandidateExport>(m, "CandidateExport")
     .def_readwrite("num_better_pool_score", &CandidateExport::num_better_pool_score)
     .def_readwrite("pool_size", &CandidateExport::pool_size)
     .def_readwrite("pool_tohpe_size", &CandidateExport::pool_tohpe_size)
+    .def_readwrite("pool_tohpeprefix_size", &CandidateExport::pool_tohpeprefix_size)
     .def_readwrite("pool_todd_size", &CandidateExport::pool_todd_size)
+    .def_readwrite("source", &CandidateExport::source)
     .def("__repr__", [](const CandidateExport& c) {
         return "CandidateExport(score=" + std::to_string(c.pool_score) +
                 ", reduction=" + int_repr(c.reduction) + ", k=" + int_repr(c.k) +
@@ -427,7 +429,9 @@ py::class_<CandidateExport>(m, "CandidateExport")
                 ", bucket_size=" + int_repr(c.bucket_size) +
                 ", pool_size=" + int_repr(c.pool_size) +
                 ", pool_tohpe_size=" + int_repr(c.pool_tohpe_size) +
-                ", pool_todd_size=" + int_repr(c.pool_todd_size) + ")";
+                ", pool_tohpeprefix_size=" + int_repr(c.pool_tohpeprefix_size) +
+                ", pool_todd_size=" + int_repr(c.pool_todd_size) +
+                ", source=" + int_repr(c.source) + ")";
     })
     .def(py::pickle(
         [](const CandidateExport& c) {
@@ -445,11 +449,13 @@ py::class_<CandidateExport>(m, "CandidateExport")
                 c.num_better_pool_score,
                 c.pool_size,
                 c.pool_tohpe_size,
-                c.pool_todd_size
+                c.pool_tohpeprefix_size,
+                c.pool_todd_size,
+                c.source
             );
         },
         [](py::tuple t) { 
-            if (t.size() != 11 && t.size() != 14)
+            if (t.size() != 11 && t.size() != 14 && t.size() != 16)
                 throw std::runtime_error("Invalid state!");
 
             CandidateExport c;
@@ -465,10 +471,16 @@ py::class_<CandidateExport>(m, "CandidateExport")
             c.num_better_dim = t[8].cast<decltype(c.num_better_dim)>();
             c.num_better_red = t[9].cast<decltype(c.num_better_red)>();
             c.num_better_pool_score = t[10].cast<decltype(c.num_better_pool_score)>();
-            if (t.size() == 14) {
+            if (t.size() == 14 || t.size() == 16) {
                 c.pool_size = t[11].cast<decltype(c.pool_size)>();
                 c.pool_tohpe_size = t[12].cast<decltype(c.pool_tohpe_size)>();
-                c.pool_todd_size = t[13].cast<decltype(c.pool_todd_size)>();
+                if (t.size() == 16) {
+                    c.pool_tohpeprefix_size = t[13].cast<decltype(c.pool_tohpeprefix_size)>();
+                    c.pool_todd_size = t[14].cast<decltype(c.pool_todd_size)>();
+                    c.source = t[15].cast<decltype(c.source)>();
+                } else {
+                    c.pool_todd_size = t[13].cast<decltype(c.pool_todd_size)>();
+                }
             }
             
             return c;
@@ -489,6 +501,7 @@ py::class_<Stats>(m, "Stats")
     .def_readwrite("mean_score", &Stats::mean_score)
     .def_readwrite("accepted", &Stats::accepted)
     .def_readwrite("accepted_tohpe", &Stats::accepted_tohpe)
+    .def_readwrite("accepted_tohpeprefix", &Stats::accepted_tohpeprefix)
     .def_readwrite("accepted_todd", &Stats::accepted_todd)
     .def_readwrite("max_tohpe_dim", &Stats::max_final_tohpe_dim)
     .def_readwrite("mean_tohpe_dim", &Stats::mean_final_tohpe_dim)
@@ -502,6 +515,7 @@ py::class_<Stats>(m, "Stats")
                 ", nonzero=" + std::to_string(s.nonzero) +
                 ", accepted=" + std::to_string(s.accepted) +
                 ", accepted_tohpe=" + std::to_string(s.accepted_tohpe) +
+                ", accepted_tohpeprefix=" + std::to_string(s.accepted_tohpeprefix) +
                 ", accepted_todd=" + std::to_string(s.accepted_todd) +
                 ", mean_score=" + std::to_string(s.mean_score) + ", max_score=" + std::to_string(s.max_pool_score) +
                 ", max_basis=" + int_repr(s.max_basis) +
@@ -525,16 +539,17 @@ py::class_<Stats>(m, "Stats")
                 s.max_pool_score,
                 s.max_basis,
                 s.max_reduction,
-                s.max_bucket
+                s.max_bucket,
+                s.accepted_tohpeprefix
             );
         },
         [](py::tuple t) {
-            if (t.size() != 14 && t.size() != 15 && t.size() != 16)
+            if (t.size() != 14 && t.size() != 15 && t.size() != 16 && t.size() != 17)
                 throw std::runtime_error("Invalid state!");
 
             Stats s;
             s.total = t[0].cast<decltype(s.total)>();
-            if (t.size() == 16) {
+            if (t.size() == 17 || t.size() == 16) {
                 s.z_researched = t[1].cast<decltype(s.z_researched)>();
                 s.nonzero = t[2].cast<decltype(s.nonzero)>();
                 s.mean_mr = t[3].cast<decltype(s.mean_mr)>();
@@ -550,6 +565,8 @@ py::class_<Stats>(m, "Stats")
                 s.max_basis = t[13].cast<decltype(s.max_basis)>();
                 s.max_reduction = t[14].cast<decltype(s.max_reduction)>();
                 s.max_bucket = t[15].cast<decltype(s.max_bucket)>();
+                if (t.size() == 17)
+                    s.accepted_tohpeprefix = t[16].cast<decltype(s.accepted_tohpeprefix)>();
             } else if (t.size() == 15 && py::isinstance<py::int_>(t[2])) {
                 s.z_researched = t[1].cast<decltype(s.z_researched)>();
                 s.nonzero = t[2].cast<decltype(s.nonzero)>();
@@ -807,26 +824,6 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
                 return SourcePool{t[0].cast<Int>(), t[1].cast<Int>()};
             }));
 
-    py::class_<TohpeSearch>(m, "TohpeSearch")
-        .def(py::init([](SamplingBudget sampling, SourcePool pool, Int z_choices) {
-                 return TohpeSearch{std::move(sampling), pool, z_choices};
-             }),
-             py::arg("sampling") = SamplingBudget(), py::arg("pool") = SourcePool{2, 0}, py::arg("z_choices") = 8)
-        .def_readwrite("sampling", &TohpeSearch::sampling)
-        .def_readwrite("pool", &TohpeSearch::pool)
-        .def_readwrite("z_choices", &TohpeSearch::z_choices)
-        .def("__repr__", [](const TohpeSearch& s) {
-            return "TohpeSearch(sampling=" + sampling_budget_repr(s.sampling) + ", pool=" +
-                   source_pool_repr(s.pool) + ", z_choices=" + int_repr(s.z_choices) + ")";
-        })
-        .def(py::pickle(
-            [](const TohpeSearch& s) { return py::make_tuple(s.sampling, s.pool, s.z_choices); },
-            [](py::tuple t) {
-                if (t.size() != 3)
-                    throw std::runtime_error("Invalid state for TohpeSearch");
-                return TohpeSearch{t[0].cast<SamplingBudget>(), t[1].cast<SourcePool>(), t[2].cast<Int>()};
-            }));
-
     py::class_<ZBucketSearch>(m, "ZBucketSearch")
         .def(py::init([](Int min_buckets, Int max_buckets, float temperature, float random_fraction,
                          Int limit_bucket) {
@@ -858,6 +855,53 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
                                      t.size() >= 5 ? t[4].cast<Int>() : static_cast<Int>(-1)};
             }));
 
+    py::class_<TohpeSearch>(m, "TohpeSearch")
+        .def(py::init([](SamplingBudget sampling, SourcePool pool, Int z_choices) {
+                 return TohpeSearch{std::move(sampling), pool, z_choices};
+             }),
+             py::arg("sampling") = SamplingBudget(), py::arg("pool") = SourcePool{2, 0},
+             py::arg("z_choices") = 8)
+        .def_readwrite("sampling", &TohpeSearch::sampling)
+        .def_readwrite("pool", &TohpeSearch::pool)
+        .def_readwrite("z_choices", &TohpeSearch::z_choices)
+        .def("__repr__", [](const TohpeSearch& s) {
+            return "TohpeSearch(sampling=" + sampling_budget_repr(s.sampling) + ", pool=" +
+                   source_pool_repr(s.pool) + ", z_choices=" + int_repr(s.z_choices) + ")";
+        })
+        .def(py::pickle(
+            [](const TohpeSearch& s) { return py::make_tuple(s.sampling, s.pool, s.z_choices); },
+            [](py::tuple t) {
+                if (t.size() != 3)
+                    throw std::runtime_error("Invalid state for TohpeSearch");
+                return TohpeSearch{t[0].cast<SamplingBudget>(), t[1].cast<SourcePool>(), t[2].cast<Int>()};
+            }));
+
+    py::class_<TohpePrefixSearch>(m, "TohpePrefixSearch")
+        .def(py::init([](SamplingBudget sampling, SourcePool pool, Int actions_per_bucket, ZBucketSearch buckets) {
+                 return TohpePrefixSearch{std::move(sampling), pool, actions_per_bucket, buckets};
+             }),
+             py::arg("sampling") = SamplingBudget(), py::arg("pool") = SourcePool{0, 0},
+             py::arg("actions_per_bucket") = 4, py::arg("buckets") = ZBucketSearch())
+        .def_readwrite("sampling", &TohpePrefixSearch::sampling)
+        .def_readwrite("pool", &TohpePrefixSearch::pool)
+        .def_readwrite("actions_per_bucket", &TohpePrefixSearch::actions_per_bucket)
+        .def_readwrite("buckets", &TohpePrefixSearch::buckets)
+        .def("__repr__", [](const TohpePrefixSearch& s) {
+            return "TohpePrefixSearch(sampling=" + sampling_budget_repr(s.sampling) + ", pool=" +
+                   source_pool_repr(s.pool) + ", actions_per_bucket=" + int_repr(s.actions_per_bucket) +
+                   ", buckets=ZBucketSearch(...))";
+        })
+        .def(py::pickle(
+            [](const TohpePrefixSearch& s) {
+                return py::make_tuple(s.sampling, s.pool, s.actions_per_bucket, s.buckets);
+            },
+            [](py::tuple t) {
+                if (t.size() != 4)
+                    throw std::runtime_error("Invalid state for TohpePrefixSearch");
+                return TohpePrefixSearch{t[0].cast<SamplingBudget>(), t[1].cast<SourcePool>(), t[2].cast<Int>(),
+                                      t[3].cast<ZBucketSearch>()};
+            }));
+
     py::class_<ToddSearch>(m, "ToddSearch")
         .def(py::init([](SamplingBudget sampling, SourcePool pool, Int actions_per_bucket, ZBucketSearch buckets) {
                  return ToddSearch{std::move(sampling), pool, actions_per_bucket, buckets};
@@ -874,11 +918,9 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
                    int_repr(s.actions_per_bucket) + ", buckets=ZBucketSearch(...))";
         })
         .def(py::pickle(
-            [](const ToddSearch& s) {
-                return py::make_tuple(s.sampling, s.pool, s.actions_per_bucket, s.buckets);
-            },
+            [](const ToddSearch& s) { return py::make_tuple(s.sampling, s.pool, s.actions_per_bucket, s.buckets); },
             [](py::tuple t) {
-                if (t.size() != 4)
+                if (t.size() != 4 && t.size() != 5)
                     throw std::runtime_error("Invalid state for ToddSearch");
                 return ToddSearch{t[0].cast<SamplingBudget>(), t[1].cast<SourcePool>(), t[2].cast<Int>(),
                                   t[3].cast<ZBucketSearch>()};
@@ -886,39 +928,45 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
 
     py::class_<PolicyConfig>(m, "PolicyConfig")
         .def(py::init([](PolicyScores scores, ActionSelection selection, ActionPool pool, TohpeSearch tohpe,
-                         ToddSearch todd) {
+                         ToddSearch todd, TohpePrefixSearch tohpeprefix) {
                  return PolicyConfig{std::move(scores), std::move(selection), pool, std::move(tohpe),
-                                     std::move(todd)};
+                                     std::move(todd), std::move(tohpeprefix)};
              }),
              py::arg("scores") = PolicyScores(), py::arg("selection") = ActionSelection(),
-             py::arg("pool") = ActionPool(), py::arg("tohpe") = TohpeSearch(), py::arg("todd") = ToddSearch())
+             py::arg("pool") = ActionPool(), py::arg("tohpe") = TohpeSearch(), py::arg("todd") = ToddSearch(),
+             py::arg("tohpeprefix") = TohpePrefixSearch())
         .def_readwrite("scores", &PolicyConfig::scores)
         .def_readwrite("selection", &PolicyConfig::selection)
         .def_readwrite("pool", &PolicyConfig::pool)
         .def_readwrite("tohpe", &PolicyConfig::tohpe)
         .def_readwrite("todd", &PolicyConfig::todd)
+        .def_readwrite("tohpeprefix", &PolicyConfig::tohpeprefix)
         .def("__repr__", [](const PolicyConfig& c) {
             return "PolicyConfig(selection=ActionSelection(count=" + int_repr(c.selection.count) +
                    ", mode='" + c.selection.mode + "'), pool=ActionPool(final_size=" +
                    int_repr(c.pool.final_size) + "), tohpe=" + source_pool_repr(c.tohpe.pool) +
-                   ", todd=" + source_pool_repr(c.todd.pool) + ")";
+                   ", todd=" + source_pool_repr(c.todd.pool) +
+                   ", tohpeprefix=" + source_pool_repr(c.tohpeprefix.pool) + ")";
         })
         .def(py::pickle(
             [](const PolicyConfig& c) {
-                return py::make_tuple(c.scores, c.selection, c.pool, c.tohpe, c.todd);
+                return py::make_tuple(c.scores, c.selection, c.pool, c.tohpe, c.todd, c.tohpeprefix);
             },
             [](py::tuple t) {
-                if (t.size() != 5)
+                if (t.size() != 5 && t.size() != 6)
                     throw std::runtime_error("Invalid state for PolicyConfig");
                 return PolicyConfig{t[0].cast<PolicyScores>(), t[1].cast<ActionSelection>(),
                                     t[2].cast<ActionPool>(), t[3].cast<TohpeSearch>(),
-                                    t[4].cast<ToddSearch>()};
+                                    t[4].cast<ToddSearch>(),
+                                    t.size() == 6 ? t[5].cast<TohpePrefixSearch>() : TohpePrefixSearch{}};
             }));
 
     m.def(
         "policy_iteration",
         [](Matrix cur_mat, PolicyConfig pcfg, index_t seed, index_t add_seed) {
             const bool build_full_todd =
+                std::max(pcfg.tohpeprefix.pool.keep, static_cast<Int>(0)) > 0 ||
+                std::max(pcfg.tohpeprefix.pool.reserve, static_cast<Int>(0)) > 0 ||
                 std::max(pcfg.todd.pool.keep, static_cast<Int>(0)) > 0 ||
                 std::max(pcfg.todd.pool.reserve, static_cast<Int>(0)) > 0;
             auto data = std::make_shared<MatrixWithData>(std::move(cur_mat), build_full_todd);

@@ -20,6 +20,7 @@ from .node import (
     SourcePool,
     Tensor3D,
     ToddSearch,
+    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
@@ -346,12 +347,27 @@ def _to_tohpe_search(x: Any) -> "TohpeSearch":
         return TohpeSearch(
             sampling=_to_sampling_budget(x.get("sampling", SamplingBudget())),
             pool=_to_source_pool(x.get("pool", SourcePool(keep=2, reserve=0)), default_keep=2),
-            z_choices=int(x.get("z_choices", 8))
+            z_choices=int(x.get("z_choices", 8)),
         )
     raise TypeError("TohpeSearch expects TohpeSearch or mapping")
 
 def _to_tohpe_search_schedule(x: Any) -> "RankSchedule":
     return _converted_rank_schedule(x, _to_tohpe_search)
+
+def _to_tohpeprefix_search(x: Any) -> "TohpePrefixSearch":
+    if isinstance(x, TohpePrefixSearch):
+        return x
+    if isinstance(x, Mapping):
+        return TohpePrefixSearch(
+            sampling=_to_sampling_budget(x.get("sampling", SamplingBudget())),
+            pool=_to_source_pool(x.get("pool", SourcePool(keep=0, reserve=0)), default_keep=0),
+            actions_per_bucket=int(x.get("actions_per_bucket", 4)),
+            buckets=_to_z_bucket_search(x.get("buckets", ZBucketSearch())),
+        )
+    raise TypeError("TohpePrefixSearch expects TohpePrefixSearch or mapping")
+
+def _to_tohpeprefix_search_schedule(x: Any) -> "RankSchedule":
+    return _converted_rank_schedule(x, _to_tohpeprefix_search)
 
 def _to_todd_search(x: Any) -> "ToddSearch":
     if isinstance(x, ToddSearch):
@@ -361,7 +377,7 @@ def _to_todd_search(x: Any) -> "ToddSearch":
             sampling=_to_sampling_budget(x.get("sampling", SamplingBudget())),
             pool=_to_source_pool(x.get("pool", SourcePool(keep=16, reserve=0)), default_keep=16),
             actions_per_bucket=int(x.get("actions_per_bucket", 4)),
-            buckets=_to_z_bucket_search(x.get("buckets", ZBucketSearch()))
+            buckets=_to_z_bucket_search(x.get("buckets", ZBucketSearch())),
         )
     raise TypeError("ToddSearch expects ToddSearch or mapping")
 
@@ -482,7 +498,17 @@ def dao_rank_to_str(daos: List[Dao], ranks: List[int]):
     out["tohpe"] = object_rank_shedule_to_str(
         [dao.mode.tohpe for dao in daos],
         ranks,
-        lambda t: f"pool:{int(t.pool.keep)}/{int(t.pool.reserve)} z:{int(t.z_choices)} sampling:{t.sampling}",
+        lambda t: (
+            f"pool:{int(t.pool.keep)}/{int(t.pool.reserve)} z_choices:{int(t.z_choices)} sampling:{t.sampling}"
+        ),
+    )
+    out["tohpeprefix"] = object_rank_shedule_to_str(
+        [dao.mode.tohpeprefix for dao in daos],
+        ranks,
+        lambda t: (
+            f"pool:{int(t.pool.keep)}/{int(t.pool.reserve)} actions:{int(t.actions_per_bucket)} "
+            f"buckets:{t.buckets} sampling:{t.sampling}"
+        ),
     )
     out["todd"] = object_rank_shedule_to_str(
         [dao.mode.todd for dao in daos],
@@ -1273,6 +1299,10 @@ class BaseEvaluator:
     def set_tohpe_search(self, x: Any = None, vals=None, *, ranks=None, values=None):
         x = _rank_args(x, vals, ranks=ranks, values=values)
         self.dao.mode.tohpe = _to_tohpe_search_schedule(x)
+
+    def set_tohpeprefix_search(self, x: Any = None, vals=None, *, ranks=None, values=None):
+        x = _rank_args(x, vals, ranks=ranks, values=values)
+        self.dao.mode.tohpeprefix = _to_tohpeprefix_search_schedule(x)
 
     def set_todd_search(self, x: Any = None, vals=None, *, ranks=None, values=None):
         x = _rank_args(x, vals, ranks=ranks, values=values)

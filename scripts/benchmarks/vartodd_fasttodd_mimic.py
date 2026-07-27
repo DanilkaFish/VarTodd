@@ -30,6 +30,7 @@ try:
         SamplingBudget,
         SourcePool,
         ToddSearch,
+        TohpePrefixSearch,
         TohpeSearch,
         ZBucketSearch,
         policy_iteration,
@@ -46,6 +47,7 @@ except ModuleNotFoundError:
         SamplingBudget,
         SourcePool,
         ToddSearch,
+        TohpePrefixSearch,
         TohpeSearch,
         ZBucketSearch,
         policy_iteration,
@@ -135,10 +137,12 @@ def _policy_config(args: argparse.Namespace, *, stage: str) -> PolicyConfig:
         ),
         selection=ActionSelection(count=1, mode="best", temperature=0.0),
         pool=ActionPool(final_size=1),
-        tohpe=TohpeSearch(
+        tohpe=TohpeSearch(pool=SourcePool(keep=0, reserve=0)),
+        tohpeprefix=TohpePrefixSearch(
             sampling=tohpe_sampling,
             pool=SourcePool(keep=pool_size, reserve=0),
-            z_choices=args.tohpe_z_choices,
+            actions_per_bucket=args.tohpe_z_choices,
+            buckets=ZBucketSearch(min_buckets=args.z_min_buckets, max_buckets=args.z_max_buckets),
         ),
         todd=ToddSearch(
             sampling=todd_sampling,

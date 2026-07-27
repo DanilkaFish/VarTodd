@@ -28,10 +28,15 @@ int main(int argc, char* argv[]){
     // Defaults mirror demos/vartodd.cpp so only the CLI-named knobs deviate
     // from the maintained reference configuration.
     PolicyConfig pcfg{};
-    pcfg.tohpe.sampling.dense = num_dense_samples;
+    // pcfg.tohpe.sampling.vector_samples = {num_dense_samples,0,0};
+    pcfg.tohpe.sampling.one_hot = num_dense_samples;
+    pcfg.tohpe.sampling.dense = 0;
     pcfg.todd.sampling.dense  = num_dense_samples;
+    pcfg.tohpe.pool.keep      = z_choices;
     pcfg.tohpe.z_choices      = z_choices;
     pcfg.todd.buckets.min_buckets = min_buckets;
+    pcfg.todd.buckets.max_buckets = min_buckets;
+    pcfg.todd.buckets.limit_bucket = min_buckets;
     // leave max_buckets = 0 (unlimited) and limit_bucket = -1 (unlimited),
     // matching demo defaults, so we don't over-constrain the search radius
 

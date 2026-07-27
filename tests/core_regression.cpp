@@ -1,5 +1,6 @@
 #include "matrix.hpp"
 #include "nullspace.hpp"
+#include "random.hpp"
 #include "todd_index.hpp"
 #include "todd_generator.hpp"
 
@@ -318,23 +319,218 @@ void check_policy_iteration_smoke() {
     PolicyConfig cfg;
     cfg.selection.count          = 1;
     cfg.pool.final_size          = 4;
-    cfg.tohpe.pool               = SourcePool{4, 0};
-    cfg.tohpe.sampling           = SamplingBudget{8, 8, 0, 2};
-    cfg.tohpe.z_choices          = 4;
-    cfg.todd.pool                = SourcePool{4, 0};
-    cfg.todd.sampling            = SamplingBudget{8, 8, 0, 2};
-    cfg.todd.actions_per_bucket  = 2;
-    cfg.todd.buckets             = ZBucketSearch{1, 8, 0.0f, 0.0f, 8};
+    cfg.tohpe = TohpeSearch{SamplingBudget{}, SourcePool{0, 0}, 1};
+    cfg.tohpeprefix = TohpePrefixSearch{SamplingBudget{8, 8, 0, 2}, SourcePool{4, 0}, 2,
+                                          ZBucketSearch{1, 8, 0.0f, 0.0f, 8}};
+    cfg.todd = ToddSearch{SamplingBudget{8, 8, 0, 2}, SourcePool{4, 0}, 2,
+                           ZBucketSearch{1, 8, 0.0f, 0.0f, 8}};
 
     auto result = policy_iteration_impl(data, cfg, 123, 0);
     require(result.chosen.size() == 1 && result.states.size() == 1, "policy iteration should choose one state");
     require(result.chosen[0].reduction > 0, "policy iteration should find a reducing candidate");
     require(result.states[0].rows() == 2 && result.states[0].cols() == 3, "policy iteration state shape mismatch");
-    require(result.stats.accepted_tohpe > 0, "policy iteration should count accepted TOHPE candidates");
+    require(result.stats.accepted_tohpe == 0, "disabled TOHPE source should not emit candidates");
+    require(result.stats.accepted_tohpeprefix > 0,
+            "policy iteration should count accepted TOHPEprefix candidates");
     require(result.stats.accepted_todd > 0, "policy iteration should count accepted Todd candidates");
-    require(result.stats.accepted == result.stats.accepted_tohpe + result.stats.accepted_todd,
-            "accepted total should match accepted TOHPE plus accepted Todd");
+    require(result.stats.accepted == result.stats.accepted_tohpe + result.stats.accepted_tohpeprefix +
+                                       result.stats.accepted_todd,
+            "accepted total should match all three sources");
     require(result.stats.accepted == result.stats.nonzero, "accepted total should match nonzero candidate count");
+    require(result.chosen[0].pool_tohpe_size + result.chosen[0].pool_tohpeprefix_size +
+                result.chosen[0].pool_todd_size == result.chosen[0].pool_size,
+            "final pool composition should contain all three sources");
+}
+
+void check_tohpe_only_policy_continues_after_todd_stops() {
+    Matrix P(4, 3);
+    P[0].set(0);
+    P[1].set(0);
+    P[2].set(1);
+    P[3].set(2);
+    auto data = std::make_shared<MatrixWithData>(std::move(P), true);
+
+    PolicyConfig cfg;
+    cfg.selection.count = 1;
+    cfg.pool.final_size = 4;
+    cfg.tohpe = TohpeSearch{SamplingBudget{}, SourcePool{0, 0}, 1};
+    cfg.tohpeprefix = TohpePrefixSearch{SamplingBudget{8, 8, 0, 2}, SourcePool{4, 0}, 2,
+                                          ZBucketSearch{1, 8, 0.0f, 0.0f, 8}};
+    cfg.todd = ToddSearch{SamplingBudget{8, 8, 0, 2}, SourcePool{0, 0}, 2,
+                           ZBucketSearch{0, 0, 0.0f, 0.0f, 0}};
+
+    auto result = policy_iteration_impl(data, cfg, 123, 0);
+    require(result.stats.accepted_tohpe == 0, "disabled TOHPE source should not emit candidates");
+    require(result.stats.accepted_tohpeprefix > 0, "TOHPEprefix traversal should retain candidates");
+    require(result.stats.accepted_todd == 0, "disabled Todd source should not emit candidates");
+}
+
+void check_tohpe_policy() {
+    Matrix P(4, 3);
+    P[0].set(0);
+    P[1].set(0);
+    P[2].set(1);
+    P[3].set(2);
+    auto data = std::make_shared<MatrixWithData>(P, false);
+
+    PolicyConfig cfg;
+    cfg.selection.count = 1;
+    cfg.pool.final_size = 4;
+    cfg.tohpe = TohpeSearch{SamplingBudget{8, 8, 0, 2}, SourcePool{4, 0}, 2};
+    cfg.tohpeprefix = TohpePrefixSearch{};
+    cfg.todd = ToddSearch{SamplingBudget{8, 8, 0, 2}, SourcePool{0, 0}, 2,
+                           ZBucketSearch{0, 0, 0.0f, 0.0f, 0}};
+
+    auto result = policy_iteration_impl(data, cfg, 123, 0);
+    require(result.stats.accepted_tohpe > 0, "TOHPE should emit candidates");
+    require(result.stats.accepted_tohpeprefix == 0, "disabled TOHPEprefix source should not emit candidates");
+    require(result.stats.accepted_todd == 0, "disabled Todd source should not emit candidates");
+}
+
+void check_tohpe_and_tohpeprefix_stats_merge() {
+    Matrix P(4, 3);
+    P[0].set(0);
+    P[1].set(0);
+    P[2].set(1);
+    P[3].set(2);
+    auto data = std::make_shared<MatrixWithData>(P, true);
+
+    const auto tohpe = TohpeSearch{SamplingBudget{8, 8, 0, 2}, SourcePool{4, 0}, 2};
+    const auto prefix = TohpePrefixSearch{SamplingBudget{8, 8, 0, 2}, SourcePool{4, 0}, 2,
+                                           ZBucketSearch{1, 8, 0.0f, 0.0f, 8}};
+    const auto todd_off = ToddSearch{SamplingBudget{}, SourcePool{0, 0}, 2,
+                                     ZBucketSearch{0, 0, 0.0f, 0.0f, 0}};
+
+    PolicyConfig tohpe_cfg;
+    tohpe_cfg.selection.count = 1;
+    tohpe_cfg.pool.final_size = 8;
+    tohpe_cfg.tohpe = tohpe;
+    tohpe_cfg.todd = todd_off;
+
+    PolicyConfig prefix_cfg = tohpe_cfg;
+    prefix_cfg.tohpe = TohpeSearch{SamplingBudget{}, SourcePool{0, 0}, 1};
+    prefix_cfg.tohpeprefix = prefix;
+
+    PolicyConfig both_cfg = tohpe_cfg;
+    both_cfg.tohpeprefix = prefix;
+
+    const auto tohpe_result = policy_iteration_impl(data, tohpe_cfg, 123, 0);
+    const auto prefix_result = policy_iteration_impl(data, prefix_cfg, 123, 0);
+    const auto both_result = policy_iteration_impl(data, both_cfg, 123, 0);
+    require(both_result.stats.accepted_tohpe == tohpe_result.stats.accepted_tohpe,
+            "TOHPE statistics should retain their source identity");
+    require(both_result.stats.accepted_tohpeprefix == prefix_result.stats.accepted_tohpeprefix,
+            "TOHPEprefix statistics should retain their source identity");
+}
+
+void check_tohpe_continues_after_todd_pool_is_filled() {
+    Matrix P(4, 3);
+    P[0].set(0);
+    P[1].set(0);
+    P[2].set(1);
+    P[3].set(2);
+    auto data = std::make_shared<MatrixWithData>(std::move(P), true);
+
+    PolicyConfig cfg;
+    cfg.selection.count = 1;
+    cfg.pool.final_size = 8;
+    cfg.tohpe = TohpeSearch{SamplingBudget{}, SourcePool{0, 0}, 1};
+    cfg.tohpeprefix = TohpePrefixSearch{SamplingBudget{0, 0, 0, 2}, SourcePool{4, 0}, 2,
+                                          ZBucketSearch{3, 3, 0.0f, 0.0f, 3}};
+    cfg.todd = ToddSearch{SamplingBudget{8, 8, 0, 2}, SourcePool{1, 0}, 2,
+                           ZBucketSearch{1, 8, 0.0f, 0.0f, 8}};
+
+    auto result = policy_iteration_impl(data, cfg, 123, 0);
+    require(result.stats.total >= 3, "TOHPE minimum should continue shared bucket traversal");
+    require(result.stats.accepted_todd > 0, "Todd source should fill its pool before TOHPE-only continuation");
+}
+
+void check_todd_tohpe_prefix() {
+    Matrix P(4, 3);
+    P[0].set(0);
+    P[1].set(0);
+    P[2].set(1);
+    P[3].set(2);
+    auto data = std::make_shared<MatrixWithData>(std::move(P), true);
+
+    FullToddGenerator generator(data);
+    auto              ns = generator.make(0);
+    require(ns.tohpe_prefix_size() > 0, "TODD basis should retain a TOHPE prefix");
+    require(ns.tohpe_prefix_size() <= ns.basis().rows(), "TOHPE prefix exceeds TODD basis");
+}
+
+void check_tohpe_only_basis_request() {
+    Matrix P(4, 3);
+    P[0].set(0);
+    P[1].set(0);
+    P[2].set(1);
+    P[3].set(2);
+    auto data = std::make_shared<MatrixWithData>(std::move(P), false);
+
+    const auto bucket_id = data->index().single_id()[0];
+    const Row  z         = data->index().key_of(bucket_id);
+    std::vector<SumEntry> entries;
+    require(data->index().materialize_bucket(bucket_id, entries) && !entries.empty(),
+            "TOHPE-only request needs a materialized bucket");
+
+    FullToddGenerator generator(data);
+    auto generated = generator.solution_basis(z.cview(), entries.data(), static_cast<index_t>(entries.size()),
+                                              SolutionBasisRequest::TohpeOnly);
+    require(generated.basis.rows() <= data->tohpe_basis().rows(), "TOHPE-only basis exceeds TOHPE dimension");
+    require(generated.tohpe_prefix_size == generated.basis.rows(),
+            "TOHPE-only basis should consist entirely of its prefix");
+}
+
+void check_tohpe_only_request_keeps_full_todd_cache_lazy() {
+    Matrix P(4, 3);
+    P[0].set(0);
+    P[1].set(0);
+    P[2].set(1);
+    P[3].set(2);
+    auto data = std::make_shared<MatrixWithData>(std::move(P), true);
+    require(!data->full_todd_ready(), "Full-Todd cache should start empty");
+
+    const auto bucket_id = data->index().single_id()[0];
+    const Row  z         = data->index().key_of(bucket_id);
+    std::vector<SumEntry> entries;
+    require(data->index().materialize_bucket(bucket_id, entries) && !entries.empty(),
+            "lazy cache check needs a materialized bucket");
+
+    FullToddGenerator generator(data);
+    (void)generator.solution_basis(z.cview(), entries.data(), static_cast<index_t>(entries.size()),
+                                   SolutionBasisRequest::TohpeOnly);
+    require(!data->full_todd_ready(), "TOHPE-only request should not build Full-Todd data");
+    auto both = generator.make(z.cview(), entries.data(), static_cast<index_t>(entries.size()),
+                               SolutionBasisRequest::Both);
+    require(both.tohpe_prefix_size() > 0 && both.tohpe_prefix_size() <= both.basis().rows(),
+            "both request should expose the compact TOHPE prefix in the full basis");
+    require(data->full_todd_ready(), "Todd request should build Full-Todd data");
+}
+
+void check_two_region_sampling() {
+    PyRNG            rng(7);
+    std::vector<Row> rows;
+    rng.for_each_capped_bitvector_regions(
+        3, 2, {2, 0, 3}, 2, {3, 0, 7}, 2, [&](RowCView coefs) { rows.emplace_back(coefs); });
+
+    std::unordered_set<Row, RowHash, RowEq> unique(rows.begin(), rows.end());
+    require(rows.size() == 7, "two-region sampler should emit the full non-zero universe once");
+    require(unique.size() == rows.size(), "two-region sampler emitted a collision");
+    require(!rows[0].test(2) && !rows[1].test(2), "prefix samples must be emitted first");
+}
+
+void check_two_region_sampling_routes_sources() {
+    PyRNG            rng(17);
+    std::vector<Row> prefix_rows;
+    std::vector<Row> full_rows;
+    rng.for_each_capped_bitvector_regions(
+        3, 2, {2, 0, 0}, 2, {3, 0, 4}, 2, [&](RowCView coefs) { prefix_rows.emplace_back(coefs); },
+        [&](RowCView coefs) { full_rows.emplace_back(coefs); });
+
+    require(prefix_rows.size() == 2, "prefix callback should receive its complete budget");
+    std::unordered_set<Row, RowHash, RowEq> seen(prefix_rows.begin(), prefix_rows.end());
+    for (const Row& row : full_rows)
+        require(seen.insert(row).second, "full callback collided with a prefix coefficient");
 }
 
 } // namespace
@@ -348,6 +544,15 @@ int main() {
         check_bucket_lengths();
         check_packed_count_storage();
         check_policy_iteration_smoke();
+        check_tohpe_only_policy_continues_after_todd_stops();
+        check_tohpe_policy();
+        check_tohpe_and_tohpeprefix_stats_merge();
+        check_tohpe_continues_after_todd_pool_is_filled();
+        check_todd_tohpe_prefix();
+        check_tohpe_only_basis_request();
+        check_tohpe_only_request_keeps_full_todd_cache_lazy();
+        check_two_region_sampling();
+        check_two_region_sampling_routes_sources();
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
