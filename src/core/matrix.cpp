@@ -263,7 +263,7 @@ void Matrix::save_npy(const std::string& npy_path) const {
             data[row_offset + static_cast<std::size_t>(p)] = 1;
     }
 
-    std::vector<std::size_t> shape = {static_cast<std::size_t>(n_rows), static_cast<std::size_t>(n_cols)};
+    std::vector<std::uint64_t> shape = {static_cast<std::uint64_t>(n_rows), static_cast<std::uint64_t>(n_cols)};
 
     cnpypp::npy_save(npy_path, data.data(), shape, "w");
 }
