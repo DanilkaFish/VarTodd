@@ -339,6 +339,24 @@ void check_portable_random_and_seed_contract() {
     require(rng.rand_int(0, 100) == 47, "portable bounded RNG stream changed");
     require(rng.rand_u64() == 9824761154233434147ULL, "portable 64-bit RNG stream changed");
 
+    if constexpr (std::numeric_limits<index_t>::digits > 32) {
+        constexpr index_t high_seed = static_cast<index_t>(0x693e4e5ad9139746ULL);
+        const auto normalized = detail::normalize_minstd_seed(high_seed);
+        require(normalized == 730870781U, "high minstd seed normalization changed");
+
+        PyRNG constructed(high_seed);
+        PyRNG canonical_constructed(static_cast<index_t>(normalized));
+        require(constructed.random_raw() == canonical_constructed.random_raw(),
+                "PyRNG construction depends on uint_fast32_t width");
+
+        PyRNG reseeded(1);
+        PyRNG canonical_reseeded(1);
+        reseeded.seed(high_seed);
+        canonical_reseeded.seed(static_cast<index_t>(normalized));
+        require(reseeded.random_raw() == canonical_reseeded.random_raw(),
+                "PyRNG reseeding depends on uint_fast32_t width");
+    }
+
     Matrix P(4, 3);
     P[0].set(0);
     P[1].set(0);

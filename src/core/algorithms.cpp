@@ -322,7 +322,7 @@ double PyRNG::rand_double(double low, double high) {
 
 index_t PyRNG::random_raw() { return rng(); }
 
-void PyRNG::seed(index_t seed_val) { rng.seed(seed_val); }
+void PyRNG::seed(index_t seed_val) { rng.seed(detail::normalize_minstd_seed(seed_val)); }
 
 std::minstd_rand& PyRNG::get_engine() { return rng; }
 

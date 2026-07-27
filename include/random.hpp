@@ -56,11 +56,16 @@ inline index_t capped_add_count(index_t a, index_t b, index_t cap) noexcept {
         return cap;
     return a + b;
 }
+
+inline std::minstd_rand::result_type normalize_minstd_seed(index_t seed) noexcept {
+    return static_cast<std::minstd_rand::result_type>(
+        seed % static_cast<index_t>(std::minstd_rand::modulus));
+}
 } // namespace detail
 
 class PyRNG {
   public:
-    PyRNG(index_t seed = std::random_device{}()) : rng(seed) {}
+    PyRNG(index_t seed = std::random_device{}()) : rng(detail::normalize_minstd_seed(seed)) {}
     std::vector<Row>      sample_special_bitvec(const Matrix& basis, index_t i, index_t j, index_t num_samples);
     Row                   sample_bitvector(index_t dim);
     void                  sample_bitvector_inplace(Row& r);
