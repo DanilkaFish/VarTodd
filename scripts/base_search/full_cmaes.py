@@ -10,6 +10,7 @@ from scripts.base_search.full_optimizer_common import (
     OPTIMIZER_WORKERS,
     PHASE_EVALUATIONS,
     initial_population,
+    reset_optimizer_random_state,
     run_two_phase,
 )
 
@@ -69,6 +70,7 @@ def run_opt(
         "verb_log": 0,
     }
 
+    reset_optimizer_random_state(CMA_RANDOM_SEED + phase)
     with BatchObjective(fun, archive, workers=OPTIMIZER_WORKERS) as objective:
         best_position, _ = cma.fmin2(
             None,

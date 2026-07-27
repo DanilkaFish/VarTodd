@@ -8,6 +8,7 @@ from scripts.base_search.full_optimizer_common import (
     Matrix,
     OPTIMIZER_WORKERS,
     initial_population,
+    reset_optimizer_random_state,
     run_two_phase,
 )
 
@@ -47,6 +48,7 @@ def run_opt(
         f"with {DE_POPULATION} candidates for {generations} generations"
     )
 
+    reset_optimizer_random_state(DE_RANDOM_SEED + phase)
     with BatchObjective(fun, archive, workers=OPTIMIZER_WORKERS) as objective:
 
         def vectorized_objective(positions):
