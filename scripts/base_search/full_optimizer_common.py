@@ -34,10 +34,10 @@ ROBUST_SPREAD_WEIGHT = 0.3
 PHASE_EVALUATIONS = 3_600
 TOTAL_EVALUATIONS = 2 * PHASE_EVALUATIONS
 Z_MAX_BUCKET_CAP = 10_000
-Z_LIMIT_BUCKET_CAP = 50_000
+Z_LIMIT_BUCKET_CAP = 30_000
 SAMPLE_COUNT_MAX = 100
 TODD_RESERVE_MAX = 6
-Z_MIN_CAP = 500
+Z_MIN_CAP = 250
 
 _seed_rng = random.Random(40)
 
@@ -195,7 +195,7 @@ class Evaluator(BaseEvaluator):
 
     def policy_mapping(self):
         ranks = [0]
-        pool_score = ExplorationScore([self.map_par(_w_tanh) for _ in range(5)], pow=1)
+        pool_score = ExplorationScore([self.map_par(_w_tanh) for _ in range(5)], [self.map_par(sigmoid) for _ in range(5)],  pow=1)
         final_weights = [self.map_par(_w_tanh) for _ in range(6)]
         final_centers = [self.map_par(sigmoid) for _ in range(6)]
         final_score = FinalizationScore(final_weights, final_centers, pow=2)
