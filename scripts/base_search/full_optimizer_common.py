@@ -28,7 +28,7 @@ NATIVE_LOWER = -1.0
 NATIVE_UPPER = 1.0
 ELITE_COUNT = 6
 ELITE_MIN_DISTANCE = 0.05
-OPTIMIZER_WORKERS = 16
+OPTIMIZER_WORKERS = 8
 SCORE_SEED_COUNT = 4
 ROBUST_SPREAD_WEIGHT = 0.3
 PHASE_EVALUATIONS = 3_600
@@ -358,7 +358,7 @@ def run_two_phase(fun: Evaluator, optimize_phase: OptimizePhase):
     best_rank = int(fun.best_paths[0].final_node.state.rows)
     first_midpoint = max(best_rank + 1, initial_rank - (initial_rank - best_rank) // 3)
     second_midpoint = max(best_rank + 1, first_midpoint - (initial_rank - best_rank) // 3)
-    print(f"path restart: set_up_new_init at rank_thr={midpoint}")
+    print(f"path restart: set_up_new_init at rank_thr={first_midpoint}")
     active = fun.set_up_new_init(0, rank_thr=first_midpoint, xopt=None)
     if active is None:
         print("path restart: no branch found")
