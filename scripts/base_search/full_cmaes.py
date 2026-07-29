@@ -65,8 +65,8 @@ def run_opt(
         "CMA_active": CMA_ACTIVE,
         "maxfevals": int(budget),
         "seed": CMA_RANDOM_SEED + phase,
-        "verbose": -9,
-        "verb_disp": 0,
+        "verbose": 1,
+        "verb_disp": 1,
         "verb_log": 0,
     }
 
