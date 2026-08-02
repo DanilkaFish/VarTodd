@@ -134,7 +134,12 @@ template <class Mean, class Value, class Count> void update_mean_value(Mean& mea
     mean += (value - mean) / denom;
 }
 
-using FinalizationPool = TopKPool<FinalizationScore>;
+struct FinalizedAction {
+    Candidate candidate;
+    Matrix    state;
+};
+
+using FinalizedActions = std::vector<FinalizedAction>;
 
 struct NormalizedSamplingBudget {
     std::array<index_t, 3> vector_samples{};
@@ -486,14 +491,15 @@ Row linear_combination_from_basis(const Matrix& basis, RowCView coefs) {
     return out;
 }
 
-std::vector<Candidate> pick_best_view(FinalizationPool& pool, std::size_t n) {
-    auto all = pool.release_unsorted();
+FinalizedActions pick_best_view(FinalizedActions& actions, std::size_t n) {
+    auto all = std::move(actions);
     if (all.empty() || n == 0)
         return {};
     if (n > all.size())
         n = all.size();
-    auto better = [&](const Candidate& a, const Candidate& b) {
-        return scored_candidate_preferred(a, a.final_score, b, b.final_score);
+    auto better = [&](const FinalizedAction& a, const FinalizedAction& b) {
+        return scored_candidate_preferred(a.candidate, a.candidate.final_score, b.candidate,
+                                          b.candidate.final_score);
     };
     if (n < all.size()) {
         std::ranges::nth_element(all, all.begin() + n, better);
@@ -503,14 +509,15 @@ std::vector<Candidate> pick_best_view(FinalizationPool& pool, std::size_t n) {
     return all;
 }
 
-std::vector<Candidate> pick_softmax_view(FinalizationPool& pool, std::size_t n, float temperature, PyRNG& rng) {
-    auto all = pool.release_unsorted();
+FinalizedActions pick_softmax_view(FinalizedActions& actions, std::size_t n, float temperature, PyRNG& rng) {
+    auto all = std::move(actions);
     if (all.empty() || n == 0)
         return {};
     if (n > all.size())
         n = all.size();
-    auto better = [&](const Candidate& a, const Candidate& b) {
-        return scored_candidate_preferred(a, a.final_score, b, b.final_score);
+    auto better = [&](const FinalizedAction& a, const FinalizedAction& b) {
+        return scored_candidate_preferred(a.candidate, a.candidate.final_score, b.candidate,
+                                          b.candidate.final_score);
     };
     if (!(temperature > 0.0f) || !std::isfinite(temperature)) {
         if (n < all.size()) {
@@ -534,7 +541,7 @@ std::vector<Candidate> pick_softmax_view(FinalizationPool& pool, std::size_t n, 
         if (u >= 1.0)
             u = 1.0 - 1e-12;
         const float g = static_cast<float>(-std::log(-std::log(u)));
-        key[i]        = static_cast<float>(all[i].final_score / temperature) + g;
+        key[i]        = static_cast<float>(all[i].candidate.final_score / temperature) + g;
         idx[i]        = i;
     }
 
@@ -552,7 +559,7 @@ std::vector<Candidate> pick_softmax_view(FinalizationPool& pool, std::size_t n, 
         return better(all[a], all[b]);
     });
 
-    std::vector<Candidate> chosen;
+    FinalizedActions chosen;
     chosen.reserve(n);
     for (auto i : idx)
         chosen.push_back(std::move(all[i]));
@@ -561,12 +568,11 @@ std::vector<Candidate> pick_softmax_view(FinalizationPool& pool, std::size_t n, 
     return chosen;
 }
 
-template <class TohpeGenProvider, class FullGenProvider>
-Result build_result(FinalizationPool& pool, bool is_best, std::size_t action_count, float temperature,
-                    PyRNG& pick_rng, SeenValues const& svs, TohpeGenProvider& get_tohpe_gen,
-                    FullGenProvider& get_full_gen, Stats const& global_stats, std::uint64_t base_seed) {
+Result build_result(FinalizedActions& actions, bool is_best, std::size_t action_count, float temperature,
+                    PyRNG& pick_rng, SeenValues const& svs, Stats const& global_stats, std::uint64_t base_seed) {
     auto chosen_view =
-        is_best ? pick_best_view(pool, action_count) : pick_softmax_view(pool, action_count, temperature, pick_rng);
+        is_best ? pick_best_view(actions, action_count)
+                : pick_softmax_view(actions, action_count, temperature, pick_rng);
 
     Result out;
     out.stats = global_stats;
@@ -575,24 +581,14 @@ Result build_result(FinalizationPool& pool, bool is_best, std::size_t action_cou
     out.chosen.reserve(chosen_view.size());
     out.states.reserve(chosen_view.size());
 
-    struct Acc {
-        Result& out;
-        void    add(Candidate const& c, decltype(out.states)::value_type state) {
-            out.chosen.push_back(export_candidate(c));
-            out.states.push_back(std::move(state));
-        }
-    } acc{out};
-
-    std::vector<std::uint8_t> scratch_killed;
-    for (Candidate& c : chosen_view) {
+    for (FinalizedAction& action : chosen_view) {
+        Candidate& c = action.candidate;
         c.num_better_dim        = svs.better_dim(c.basis_dim);
         c.num_better_red        = svs.better_red(c.reduction);
         c.num_better_pool_score = svs.better_score(c.pool_score);
 
-        auto ns    = make_candidate_nullspace(c, get_tohpe_gen, get_full_gen);
-        auto state = ns.apply(c.vec, scratch_killed);
-
-        acc.add(c, std::move(state));
+        out.chosen.push_back(export_candidate(c));
+        out.states.push_back(std::move(action.state));
     }
 
     return out;
@@ -845,7 +841,7 @@ void generate_bucket_candidates(PolicyIterationContext& ctx, const NormalizedPol
     out.stats.max_bucket = std::max(out.stats.max_bucket, stats.max_bucket);
 }
 
-FinalizationPool merge_and_finalize_candidates(PolicyIterationContext& ctx, const NormalizedPolicyConfig& config,
+FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, const NormalizedPolicyConfig& config,
                                                GenerationOutput& out) {
     auto merged_candidates =
         merge_source_candidates(out.pools.tohpe_pool.release_unsorted(), out.pools.tohpeprefix_pool.release_unsorted(),
@@ -853,65 +849,72 @@ FinalizationPool merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
                                 static_cast<std::size_t>(config.tohpe.pool.reserve),
                                 static_cast<std::size_t>(config.tohpeprefix.pool.reserve),
                                 static_cast<std::size_t>(config.todd.pool.reserve));
-    const Int pool_size =
-        detail::checked_int_from_index(merged_candidates.size(), "Candidate pool size overflow");
-    Int       pool_tohpe_size = 0;
+    const bool need_tohpe_dim = config.fscore.needs_tohpe_dim();
+    auto       score_fn       = config.fscore;
+    auto       get_tohpe_gen  = [&]() -> TohpeGenerator& { return ctx.get_tohpe_gen(); };
+    auto       get_full_gen   = [&]() -> FullToddGenerator& { return ctx.get_full_gen(); };
+
+    FinalizedActions finalized;
+    finalized.reserve(merged_candidates.size());
+    std::vector<std::uint8_t> scratch_killed;
+    for (auto& cand : merged_candidates) {
+        auto ns    = make_candidate_nullspace(cand, get_tohpe_gen, get_full_gen);
+        auto state = canonical_parity_matrix(ns.apply(cand.vec, scratch_killed));
+        if (need_tohpe_dim) {
+            cand.tohpe_dim = detail::checked_int_from_index(get_tohpe_basis(state).rows(),
+                                                            "Candidate TOHPE dimension overflow");
+        }
+        score_fn(cand);
+
+        auto same_state = std::find_if(finalized.begin(), finalized.end(),
+                                       [&](const FinalizedAction& action) { return action.state == state; });
+        if (same_state == finalized.end()) {
+            finalized.push_back(FinalizedAction{std::move(cand), std::move(state)});
+        } else if (scored_candidate_preferred(cand, cand.final_score, same_state->candidate,
+                                              same_state->candidate.final_score)) {
+            *same_state = FinalizedAction{std::move(cand), std::move(state)};
+        }
+    }
+
+    const Int pool_size = detail::checked_int_from_index(finalized.size(), "Candidate pool size overflow");
+    Int       pool_tohpe_size       = 0;
     Int       pool_tohpeprefix_size = 0;
-    Int       pool_todd_size  = 0;
-    for (const auto& cand : merged_candidates) {
-        if (cand.source == CandidateSourceTohpe)
+    Int       pool_todd_size        = 0;
+    for (const auto& action : finalized) {
+        if (action.candidate.source == CandidateSourceTohpe)
             ++pool_tohpe_size;
-        else if (cand.source == CandidateSourceTohpePrefix)
+        else if (action.candidate.source == CandidateSourceTohpePrefix)
             ++pool_tohpeprefix_size;
-        else if (cand.source == CandidateSourceTodd)
+        else if (action.candidate.source == CandidateSourceTodd)
             ++pool_todd_size;
     }
-    for (auto& cand : merged_candidates) {
-        cand.pool_size       = pool_size;
-        cand.pool_tohpe_size = pool_tohpe_size;
+
+    index_t n = 0;
+    for (auto& action : finalized) {
+        Candidate& cand = action.candidate;
+        cand.pool_size              = pool_size;
+        cand.pool_tohpe_size        = pool_tohpe_size;
         cand.pool_tohpeprefix_size = pool_tohpeprefix_size;
-        cand.pool_todd_size  = pool_todd_size;
-    }
-    const bool need_tohpe_dim = config.fscore.needs_tohpe_dim();
-    if (!merged_candidates.empty()) {
-        std::vector<std::uint8_t> scratch_killed;
-        if (need_tohpe_dim) {
-            auto get_tohpe_gen = [&]() -> TohpeGenerator& { return ctx.get_tohpe_gen(); };
-            auto get_full_gen = [&]() -> FullToddGenerator& { return ctx.get_full_gen(); };
-            for (auto& cand : merged_candidates) {
-                auto ns        = make_candidate_nullspace(cand, get_tohpe_gen, get_full_gen);
-                cand.tohpe_dim = detail::checked_int_from_index(get_tohpe_basis(ns.apply(cand.vec, scratch_killed)).rows(),
-                                                                "Candidate TOHPE dimension overflow");
-            }
-        }
-    }
+        cand.pool_todd_size         = pool_todd_size;
 
-    auto final_pool = FinalizationPool(config.pool.final_size, config.fscore);
-    if (!merged_candidates.empty()) {
-        index_t n = 0;
-        for (auto& cand : merged_candidates) {
-            auto [score, tohpe] = final_pool.push(std::move(cand));
-
-            ++n;
-            out.stats.max_final_tohpe_dim = std::max(out.stats.max_final_tohpe_dim, tohpe);
-            out.stats.max_final_score     = std::max(out.stats.max_final_score, score);
-            update_mean_value(out.stats.mean_final_tohpe_dim, tohpe, n);
-            update_mean_value(out.stats.mean_final_score, score, n);
-        }
+        ++n;
+        const float tohpe = static_cast<float>(cand.tohpe_dim);
+        out.stats.max_final_tohpe_dim = std::max(out.stats.max_final_tohpe_dim, tohpe);
+        out.stats.max_final_score     = std::max(out.stats.max_final_score, cand.final_score);
+        update_mean_value(out.stats.mean_final_tohpe_dim, tohpe, n);
+        update_mean_value(out.stats.mean_final_score, cand.final_score, n);
     }
-    return final_pool;
+    return finalized;
 }
 
 Result select_and_apply_candidates(PolicyIterationContext& ctx, const NormalizedPolicyConfig& config,
-                                   FinalizationPool& final_pool, const SeenValues& svs, const Stats& stats,
+                                   FinalizedActions& finalized, const SeenValues& svs, const Stats& stats,
                                    index_t seed) {
     PyRNG pick_rng(seed);
     bool  is_best = (config.selection.mode == "greedy" || config.selection.mode == "best");
 
-    auto get_tohpe_gen = [&]() -> TohpeGenerator& { return ctx.get_tohpe_gen(); };
-    auto get_full_gen = [&]() -> FullToddGenerator& { return ctx.get_full_gen(); };
-    return build_result(final_pool, is_best, config.selection.count, config.selection.temperature, pick_rng,
-                        svs, get_tohpe_gen, get_full_gen, stats, ctx.base_seed);
+    return build_result(finalized, is_best, config.selection.count, config.selection.temperature, pick_rng, svs,
+                        stats, ctx.base_seed);
 }
 auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyConfig config, index_t seed,
                            index_t add_seed) -> Result {
@@ -926,8 +929,8 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
     generate_bucket_candidates(ctx, config_norm, generated);
     generated.svs.finalize();
 
-    auto final_pool = merge_and_finalize_candidates(ctx, config_norm, generated);
-    auto result     = select_and_apply_candidates(ctx, config_norm, final_pool, generated.svs, generated.stats, seed);
+    auto finalized = merge_and_finalize_candidates(ctx, config_norm, generated);
+    auto result     = select_and_apply_candidates(ctx, config_norm, finalized, generated.svs, generated.stats, seed);
     ctx.full_gen.reset();
     return result;
 }

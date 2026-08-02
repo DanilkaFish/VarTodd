@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <compare>
 #include <filesystem>
 #include <iostream>
@@ -495,6 +496,48 @@ void check_policy_iteration_repeatability() {
     }
 }
 
+void check_policy_iteration_merges_equivalent_parity_states() {
+    Matrix P(4, 3);
+    P[0].set(2); // 001
+    P[1].set(0); // 100
+    P[2].set(2); // 001
+    P[3].set(0);
+    P[3].set(2); // 101
+    auto data = std::make_shared<MatrixWithData>(std::move(P), true);
+
+    PolicyConfig cfg;
+    cfg.selection = ActionSelection{16, "best", 0.0f};
+    cfg.pool = ActionPool{16};
+    cfg.tohpe = TohpeSearch{SamplingBudget{k_all_one_hot_samples, 32, 64, 3}, SourcePool{16, 0}, 8};
+    cfg.tohpeprefix = TohpePrefixSearch{
+        SamplingBudget{k_all_one_hot_samples, 32, 64, 3}, SourcePool{16, 0}, 4,
+        ZBucketSearch{32, 0, 0.0f, 0.0f, 128}};
+    cfg.todd = ToddSearch{SamplingBudget{k_all_one_hot_samples, 32, 64, 3}, SourcePool{16, 0}, 4,
+                          ZBucketSearch{32, 0, 0.0f, 0.0f, 128}};
+
+    const auto first = policy_iteration_impl(data, cfg, 123, 0);
+    require(first.chosen.size() == 1 && first.states.size() == 1,
+            "equivalent parity states should occupy one final action slot");
+
+    Matrix expected(2, 3);
+    expected[0].set(0); // 100
+    expected[1].set(0);
+    expected[1].set(2); // 101
+    require(first.states[0] == expected, "selected parity state should use canonical row ordering");
+
+    const auto& chosen = first.chosen[0];
+    require(chosen.reduction == 4 && std::abs(chosen.final_score - (2.0f / 3.0f)) < 1e-6f,
+            "equivalent parity states should retain the greatest finalization score");
+    require(chosen.pool_size == 1 && chosen.pool_tohpe_size == 1 && chosen.pool_tohpeprefix_size == 0 &&
+                chosen.pool_todd_size == 0,
+            "final pool metadata should describe unique state representatives");
+
+    const auto second = policy_iteration_impl(data, cfg, 123, 0);
+    require(second.chosen.size() == 1 && second.states.size() == 1 && second.states[0] == first.states[0] &&
+                second.chosen[0].final_score == chosen.final_score && second.chosen[0].source == chosen.source,
+            "equivalent-state finalization should remain fixed-seed repeatable");
+}
+
 void check_tohpe_only_policy_continues_after_todd_stops() {
     Matrix P(4, 3);
     P[0].set(0);
@@ -703,6 +746,7 @@ int main() {
         check_candidate_tie_order();
         check_policy_iteration_smoke();
         check_policy_iteration_repeatability();
+        check_policy_iteration_merges_equivalent_parity_states();
         check_tohpe_only_policy_continues_after_todd_stops();
         check_tohpe_policy();
         check_tohpe_and_tohpeprefix_stats_merge();
