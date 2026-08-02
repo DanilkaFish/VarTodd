@@ -490,6 +490,28 @@ bool Matrix::operator==(const Matrix& rhs) const noexcept {
     return rows_ == rhs.rows_ && cols_ == rhs.cols_ && data_ == rhs.data_;
 }
 
+Matrix canonical_parity_matrix(const Matrix& matrix) {
+    std::vector<index_t> order;
+    order.reserve(static_cast<std::size_t>(matrix.rows()));
+    for (index_t row = 0; row < matrix.rows(); ++row) {
+        if (!matrix[row].none())
+            order.push_back(row);
+    }
+    std::ranges::sort(order, [&](index_t lhs, index_t rhs) { return (matrix[lhs] <=> matrix[rhs]) < 0; });
+
+    Matrix out(0, matrix.cols());
+    out.reserve_rows(static_cast<index_t>(order.size()));
+    for (std::size_t begin = 0; begin < order.size();) {
+        std::size_t end = begin + 1;
+        while (end < order.size() && matrix[order[begin]] == matrix[order[end]])
+            ++end;
+        if (((end - begin) & 1U) != 0)
+            out.push_back(matrix[order[begin]]);
+        begin = end;
+    }
+    return out;
+}
+
 Tensor3D::Tensor3D(index_t n)
     : n_{n}, t_(checked_tensor_bits(n)) {}
 

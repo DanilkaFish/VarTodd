@@ -32,7 +32,7 @@
 
 - [ ] **Step 1: Write a failing canonicalization regression**
 
-Add a test that constructs the literal rows `000`, `101`, `011`, `101`, `110`, `110`, `110`, calls the wished-for `canonical_parity_matrix`, and asserts that the exact result is the two-row matrix `011`, `110`. Construct a second matrix with the same parity rows in a different order and assert that its canonical result is exactly equal. Also assert that a matrix containing only zero/even-duplicate rows canonicalizes to `0 x original_cols`, not `0 x 0`.
+Add a test that constructs the literal rows `000`, `101`, `011`, `101`, `110`, `110`, `110`, calls the wished-for `canonical_parity_matrix`, and asserts that the exact result is the two-row matrix `110`, `011`, matching the repository's existing `Row` comparison order. Construct a second matrix with the same parity rows in a different order and assert that its canonical result is exactly equal. Also assert that a matrix containing only zero/even-duplicate rows canonicalizes to `0 x original_cols`, not `0 x 0`.
 
 The production mutation this catches is omission of zero filtering, modulo-two cancellation, stable lexicographic ordering, or width preservation.
 

@@ -393,6 +393,8 @@ class Matrix {
     std::vector<uint64_t> data_;
 };
 
+Matrix canonical_parity_matrix(const Matrix& matrix);
+
 std::uint32_t matrix_seed(const Matrix& mat, std::uint32_t base_seed, std::uint32_t step) noexcept;
 
 class Tensor3D {

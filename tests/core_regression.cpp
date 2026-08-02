@@ -99,6 +99,43 @@ void check_matrix_basics() {
     require((Matrix::identity(5) * row.cview()) == row, "identity matvec failed");
 }
 
+void check_canonical_parity_matrix() {
+    Matrix input(7, 3);
+    input[1].set(0);
+    input[1].set(2); // 101
+    input[2].set(1);
+    input[2].set(2); // 011
+    assign(input[3], input[1]);
+    input[4].set(0);
+    input[4].set(1); // 110
+    assign(input[5], input[4]);
+    assign(input[6], input[4]);
+
+    Matrix expected(2, 3);
+    assign(expected[0], input[4]);
+    assign(expected[1], input[2]);
+    require(canonical_parity_matrix(input) == expected,
+            "parity canonicalization should remove zero/even rows and sort odd rows");
+
+    Matrix reordered(7, 3);
+    assign(reordered[0], input[6]);
+    assign(reordered[1], input[3]);
+    assign(reordered[2], input[0]);
+    assign(reordered[3], input[5]);
+    assign(reordered[4], input[2]);
+    assign(reordered[5], input[1]);
+    assign(reordered[6], input[4]);
+    require(canonical_parity_matrix(reordered) == expected,
+            "parity canonicalization should ignore input row order");
+
+    Matrix empty_parity(3, 3);
+    assign(empty_parity[1], input[1]);
+    assign(empty_parity[2], input[1]);
+    const auto empty = canonical_parity_matrix(empty_parity);
+    require(empty.rows() == 0 && empty.cols() == 3,
+            "empty canonical parity matrix should preserve its column width");
+}
+
 void check_todd_index_basics() {
     Matrix    loaded = Matrix::from_npy(data_path("init_npy/other/adder_8.qc.matrix.npy").string());
     ToddIndex index(loaded);
@@ -655,6 +692,7 @@ int main() {
     try {
         check_row_views();
         check_matrix_basics();
+        check_canonical_parity_matrix();
         check_todd_index_basics();
         check_todd_index_duplicate_order();
         check_bucket_lengths();
