@@ -1,0 +1,390 @@
+#pragma once
+
+#include "algorithms.hpp"
+#include "nullspace.hpp"
+#include "typedef.hpp"
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace todd {
+using Int = int;
+
+namespace detail {
+inline Int checked_int_from_index(index_t value, const char* what) {
+    if (value > static_cast<index_t>(std::numeric_limits<Int>::max()))
+        throw std::overflow_error(what);
+    return static_cast<Int>(value);
+}
+
+inline Int checked_int_sum(Int a, Int b, const char* what) {
+    if (b > std::numeric_limits<Int>::max() - a)
+        throw std::overflow_error(what);
+    return a + b;
+}
+
+inline Int checked_int_double(Int value, const char* what) {
+    if (value > std::numeric_limits<Int>::max() / 2 || value < std::numeric_limits<Int>::min() / 2)
+        throw std::overflow_error(what);
+    return value * 2;
+}
+} // namespace detail
+
+enum CandidateSource : Int {
+    CandidateSourceUnknown     = 0,
+    CandidateSourceTohpe       = 1,
+    CandidateSourceTohpePrefix = 2,
+    CandidateSourceTodd        = 3,
+};
+
+struct Candidate {
+    static constexpr std::uint32_t no_bucket_id = std::numeric_limits<std::uint32_t>::max();
+
+    Row           vec;
+    Row           z;
+    float         final_score            = 0.0f;
+    float         pool_score             = 0.0f;
+    Int           reduction              = 0;
+    Int           k                      = k_single_sentinel<Int>();
+    Int           l                      = k_single_sentinel<Int>();
+    Int           basis_dim              = 0;
+    Int           tohpe_dim              = 0;
+    Int           bucket_size            = 0;
+    Int           possible_max_reduction = 0;
+    Int           num_better_red         = 0;
+    Int           num_better_dim         = 0;
+    Int           num_better_pool_score  = 0;
+    Int           pool_size              = 0;
+    Int           pool_tohpe_size        = 0;
+    Int           pool_tohpeprefix_size  = 0;
+    Int           pool_todd_size         = 0;
+    Int           vec_weight             = 0;
+    Int           z_weight               = 0;
+    Int           z_size                 = 1;
+    Int           source                 = CandidateSourceUnknown;
+    std::uint32_t bucket_id              = no_bucket_id;
+
+    Candidate() = default;
+
+    Candidate(float s, Int r, Int kk, Int ll, Row v, Int basis_dim, Int bucket_size, Int z_weight, Int z_size,
+              Int source = CandidateSourceUnknown)
+        : vec(std::move(v)), pool_score(s), reduction(r), k(kk), l(ll), basis_dim(basis_dim), bucket_size(bucket_size),
+          possible_max_reduction(detail::checked_int_double(bucket_size, "Candidate possible reduction overflow")),
+          vec_weight(detail::checked_int_from_index(vec.count(), "Candidate vector weight overflow")),
+          z_weight(z_weight), z_size(std::max<Int>(1, z_size)), source(source) {}
+
+    Candidate(float s, Int r, Int kk, Int ll, Row&& v, Row&& zz, Int basis_dim, Int bucket_size,
+              std::uint32_t bucket_id = no_bucket_id, Int source = CandidateSourceUnknown)
+        : vec(std::move(v)), z(std::move(zz)), pool_score(s), reduction(r), k(kk), l(ll), basis_dim(basis_dim),
+          bucket_size(bucket_size),
+          possible_max_reduction(detail::checked_int_double(bucket_size, "Candidate possible reduction overflow")),
+          vec_weight(detail::checked_int_from_index(vec.count(), "Candidate vector weight overflow")),
+          z_weight(detail::checked_int_from_index(z.count(), "Candidate z weight overflow")),
+          z_size(detail::checked_int_from_index(std::max<index_t>(1, z.size()), "Candidate z size overflow")),
+          source(source), bucket_id(bucket_id) {}
+
+    bool at_least_single() const;
+    bool is_tohpe() const;
+};
+
+// Canonical fallback for candidates whose score and reduction are equal.
+bool candidate_tie_preferred(const Candidate& a, const Candidate& b) noexcept;
+
+struct SeenValues {
+    Int max_red = 0;
+    Int max_dim = 0;
+
+    std::vector<index_t> red_freq;
+    std::vector<index_t> dim_freq;
+    std::vector<index_t> red_suf;
+    std::vector<index_t> dim_suf;
+    std::vector<float>   pool_scores_sorted;
+    bool                 finalized = false;
+
+    void reserve(std::size_t n);
+    void observe(Int red, Int dim, float score);
+    void finalize();
+    Int  better_red(Int r) const;
+    Int  better_dim(Int d) const;
+    Int  better_score(float s) const;
+    void merge_from(const SeenValues& other);
+};
+
+struct Stats {
+    index_t total                  = 0;
+    index_t z_researched           = 0;
+    index_t nonzero                = 0;
+    index_t evaluated              = 0;
+    index_t accepted               = 0;
+    index_t rejected               = 0;
+    index_t accepted_tohpe         = 0;
+    index_t accepted_tohpeprefix   = 0;
+    index_t accepted_todd          = 0;
+    float   mean_mr                = 0.0f;
+    float   mean_basis             = 0.0f;
+    float   mean_reduction         = 0.0f;
+    float   mean_score             = 0.0f;
+    float   max_final_tohpe_dim    = 0.0f;
+    float   mean_final_tohpe_dim   = 0.0f;
+    float   mean_final_score       = 0.0f;
+    float   max_pool_score         = -static_cast<float>(1 << 10);
+    float   max_final_score        = -static_cast<float>(1 << 10);
+    Int     max_basis              = 0;
+    Int     max_reduction          = 0;
+    Int     max_bucket             = 0;
+};
+
+struct CandidateExport {
+    float final_score{};
+    float pool_score{};
+    Int   reduction{};
+    Int   k{};
+    Int   l{};
+    Int   basis_dim{};
+    Int   tohpe_dim{};
+    Int   bucket_size{};
+    Int   possible_max_reduction{};
+    Int   num_better_dim{};
+    Int   num_better_red{};
+    Int   num_better_pool_score{};
+    Int   pool_size{};
+    Int   pool_tohpe_size{};
+    Int   pool_tohpeprefix_size{};
+    Int   pool_todd_size{};
+    Int   source{CandidateSourceUnknown};
+};
+
+struct Result {
+    std::vector<CandidateExport> chosen;
+    std::vector<Matrix>          states;
+
+    Stats         stats;
+    std::uint64_t seed{};
+};
+
+static CandidateExport export_candidate(Candidate const& c) {
+    return CandidateExport{
+        .final_score            = c.final_score,
+        .pool_score             = c.pool_score,
+        .reduction              = c.reduction,
+        .k                      = c.k,
+        .l                      = c.l,
+        .basis_dim              = c.basis_dim,
+        .tohpe_dim              = c.tohpe_dim,
+        .bucket_size            = c.bucket_size,
+        .possible_max_reduction = c.possible_max_reduction,
+        .num_better_dim         = c.num_better_dim,
+        .num_better_red         = c.num_better_red,
+        .num_better_pool_score  = c.num_better_pool_score,
+        .pool_size              = c.pool_size,
+        .pool_tohpe_size        = c.pool_tohpe_size,
+        .pool_tohpeprefix_size  = c.pool_tohpeprefix_size,
+        .pool_todd_size         = c.pool_todd_size,
+        .source                 = c.source,
+    };
+}
+
+// Small scoring wrapper used by exploration/finalization pools.
+struct ScoringFunction {
+    enum Function { LINEAR, POLYNOM, DISTANCE, LOGARITHMIC, SIGMOID };
+    Function type = LINEAR;
+    float    pow  = 2.0;
+    float    evaluate(std::span<const float> weights, std::span<const float> centers, std::span<const float> x) const {
+        switch (type) {
+        case ScoringFunction::LINEAR:
+            return linear_scoring(weights, x);
+        case ScoringFunction::POLYNOM:
+            return polynom_scoring(weights, centers, x);
+        case ScoringFunction::DISTANCE:
+            return distance_scoring(weights, x);
+        case ScoringFunction::SIGMOID:
+            return sigmoid_scoring(weights, x);
+        case ScoringFunction::LOGARITHMIC:
+            return logarithmic_scoring(weights, x);
+        default:
+            throw std::runtime_error("Wrong function type for evaluation");
+        }
+    }
+
+    float linear_scoring(std::span<const float> w, std::span<const float> x) const {
+        float       sum = 0.0f;
+        std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            sum += w[i] * x[i];
+        }
+        return sum;
+    }
+
+    float polynom_scoring(std::span<const float> w, std::span<const float> c, std::span<const float> x) const {
+        float       sum = 0.0f;
+        std::size_t n   = std::min({w.size(), c.size(), x.size()});
+        if (pow >= 0) {
+            for (std::size_t i = 0; i < n; ++i) {
+                const float d = std::abs(x[i] - c[i]);
+                sum += w[i] * ((pow == 2.0f) ? d * d : std::pow(d, pow));
+            }
+        } else {
+            for (std::size_t i = 0; i < n; ++i) {
+                sum += w[i] * std::pow(1 / std::max(std::abs(x[i] - c[i]), 0.001f), -pow);
+            }
+        }
+        return sum;
+    }
+
+    float distance_scoring(std::span<const float> w, std::span<const float> x) const {
+        float       sum = 0.0f;
+        std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            sum -= (x[i] - w[i]) * (x[i] - w[i]);
+        }
+        return sum;
+    }
+
+    float sigmoid_scoring(std::span<const float> w, std::span<const float> x) const {
+        float       sum = 0.0f;
+        std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            sum += w[i] * ((pow == 2.0f) ? x[i] * x[i] : std::pow(x[i], pow));
+        }
+        float z = sum;
+        return 1.0f / (1.0f + std::exp(-z));
+    }
+
+    float logarithmic_scoring(std::span<const float> w, std::span<const float> x) const {
+        float       sum = 0.0f;
+        std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            sum += w[i] * std::log(std::max(1e-6f, x[i]));
+        }
+        return sum;
+    }
+};
+
+struct ExplorationScore {
+    std::vector<float> weights = {0, 0, 0, 0, 0};
+    std::vector<float> centers = {0, 0, 0, 0, 0};
+
+    float           bn          = 1;
+    float           wvwn        = 1;
+    float           dn          = 1;
+    ScoringFunction sc          = {};
+    explicit ExplorationScore() = default;
+    ExplorationScore(float wred, float wdim, float wbucket, float wvw, float wz)
+        : weights{wred, wdim, wbucket, wvw, wz} {}
+    ExplorationScore(std::vector<float> weights, std::vector<float> centers, ScoringFunction sc)
+        : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
+    ExplorationScore(std::vector<float> weights, std::vector<float> centers, float pow)
+        : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
+    auto operator()(Candidate& cand) {
+        std::array<float, 5> x = {cand.reduction / bn / 2, cand.basis_dim / dn, cand.bucket_size / bn,
+                                  cand.vec_weight / wvwn, cand.z_weight / static_cast<float>(cand.z_size)};
+        cand.pool_score        = sc.evaluate(weights, centers, x);
+        return std::make_pair(cand.pool_score, 0);
+    }
+};
+
+struct FinalizationScore {
+    std::vector<float> weights = {0, 0, 0, 0, 0, 0};
+    std::vector<float> centers = {0, 0, 0, 0, 0, 0};
+    float              bn      = 1;
+    float              wvwn    = 1;
+    float              dn      = 1;
+    ScoringFunction    sc      = {};
+
+    explicit FinalizationScore() = default;
+    FinalizationScore(float wred, float wdim, float wbucket, float wvw, float wz, float wtohpe_dim)
+        : weights{wred, wdim, wbucket, wvw, wz, wtohpe_dim} {}
+    FinalizationScore(std::vector<float> weights, std::vector<float> centers, ScoringFunction sc)
+        : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
+    FinalizationScore(std::vector<float> weights, std::vector<float> centers, float pow)
+        : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
+    bool needs_tohpe_dim() const { return weights.size() > 5 && weights[5] != 0.0f; }
+    auto operator()(Candidate& cand) {
+        std::array<float, 6> x = {cand.reduction / bn / 2,
+                                  cand.basis_dim / dn,
+                                  cand.bucket_size / bn,
+                                  cand.vec_weight / wvwn,
+                                  cand.z_weight / static_cast<float>(cand.z_size),
+                                  cand.tohpe_dim / dn};
+        const std::size_t    n = needs_tohpe_dim() ? 6 : 5;
+
+        cand.final_score = sc.evaluate(weights, centers, std::span<const float>(x.data(), n));
+        return std::make_pair(cand.final_score, cand.tohpe_dim);
+    }
+};
+
+constexpr Int k_all_one_hot_samples = -1;
+
+struct PolicyScores {
+    ExplorationScore  exploration{1.0, 0., 0., 0., 0.};
+    FinalizationScore final{1.0, 0., 0., 0., 0.0, 0.};
+};
+
+struct ActionSelection {
+    Int         count       = 1;
+    std::string mode        = "best";
+    float       temperature = 0.0f;
+};
+
+struct ActionPool {
+    Int final_size = 16;
+};
+
+struct SamplingBudget {
+    Int one_hot          = k_all_one_hot_samples;
+    Int sparse           = 0;
+    Int dense            = 32;
+    Int sparse_max_weight = 2;
+};
+
+struct SourcePool {
+    Int keep    = 1;
+    Int reserve = 0;
+};
+
+struct ZBucketSearch {
+    Int   min_buckets     = 32;
+    Int   max_buckets     = 0;
+    float temperature     = 0.0f;
+    float random_fraction = 0.0f;
+    Int   limit_bucket    = -1;
+};
+
+struct TohpeSearch {
+    SamplingBudget sampling{};
+    SourcePool     pool{2, 0};
+    Int            z_choices = 8;
+};
+
+struct TohpePrefixSearch {
+    SamplingBudget sampling{};
+    SourcePool     pool{0, 0};
+    Int            actions_per_bucket = 4;
+    ZBucketSearch  buckets{};
+};
+
+struct ToddSearch {
+    SamplingBudget sampling{};
+    SourcePool     pool{16, 0};
+    Int            actions_per_bucket = 4;
+    ZBucketSearch  buckets{};
+};
+
+struct PolicyConfig {
+    PolicyScores    scores{};
+    ActionSelection selection{};
+    ActionPool      pool{};
+    TohpeSearch     tohpe{};
+    ToddSearch      todd{};
+    TohpePrefixSearch tohpeprefix{};
+};
+
+auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyConfig config, index_t seed = 1,
+                           index_t add_seed = 1) -> Result;
+} // namespace todd

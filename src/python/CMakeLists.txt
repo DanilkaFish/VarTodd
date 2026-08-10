@@ -1,0 +1,68 @@
+# ---- Python extension module ----
+pybind11_add_module(pyvartodd MODULE
+    "${CMAKE_CURRENT_SOURCE_DIR}/todd_wrapper.cpp"
+)
+
+target_link_libraries(pyvartodd
+    PRIVATE
+        vartodd
+        cnpy++
+)
+
+set_target_properties(pyvartodd PROPERTIES
+    DEBUG_POSTFIX "${CMAKE_DEBUG_POSTFIX}${PYTHON_MODULE_DEBUG_POSTFIX}"
+    CXX_VISIBILITY_PRESET "hidden"
+    VISIBILITY_INLINES_HIDDEN TRUE
+    CXX_SCAN_FOR_MODULES OFF
+)
+if (DEFINED CMAKE_PYTHON_OUTPUT_DIRECTORY)
+    set_target_properties(pyvartodd PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_PYTHON_OUTPUT_DIRECTORY}"
+    )
+endif()
+
+# target_link_options(pyvartodd PRIVATE "-rdynamic")
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+    target_link_options(pyvartodd PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
+
+target_compile_definitions(pyvartodd PRIVATE
+    MODULE_NAME=$<TARGET_FILE_BASE_NAME:pyvartodd>
+    VERSION_INFO="${PY_FULL_VERSION}"
+)
+
+# ---- Stub generation ----
+set(WITH_PY_STUBS_DEFAULT ON)
+
+option(WITH_PY_STUBS
+    "Generate Python stub files (.pyi) for the Python module."
+    ${WITH_PY_STUBS_DEFAULT})
+
+if (WITH_PY_STUBS)
+    include(${CMAKE_SOURCE_DIR}/src/external/cmake/Pybind11Stubgen.cmake)
+    message(STATUS "Stubgen for ${PY_BUILD_CMAKE_IMPORT_NAME}")
+    if (NOT DEFINED Python3_EXECUTABLE)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    endif()
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c "import pybind11_stubgen"
+        RESULT_VARIABLE PYBIND11_STUBGEN_IMPORT_RESULT
+        OUTPUT_QUIET
+        ERROR_QUIET
+    )
+    if (PYBIND11_STUBGEN_IMPORT_RESULT EQUAL 0)
+        add_custom_command(
+            TARGET pyvartodd
+            POST_BUILD
+            COMMAND ${Python3_EXECUTABLE} -m pybind11_stubgen
+                    --ignore-invalid-expressions ".*"
+                    --enum-class-locations "Function:pyvartodd.Function"
+                    -o . pyvartodd
+            WORKING_DIRECTORY $<TARGET_FILE_DIR:pyvartodd>
+            COMMENT "Generating .pyi file next to pyvartodd module"
+            VERBATIM
+        )
+    else()
+        message(WARNING "WITH_PY_STUBS=ON but pybind11-stubgen is not importable; skipping stub generation")
+    endif()
+endif()

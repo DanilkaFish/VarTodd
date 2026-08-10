@@ -1,0 +1,12 @@
+# .clang-format
+BasedOnStyle: LLVM  # or Google, Chromium, Mozilla, WebKit
+ColumnLimit: 120
+IndentWidth: 4
+TabWidth: 4
+AlignAfterOpenBracket: Align
+
+AlignTrailingComments: true
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+PenaltyExcessCharacter: 120
+PointerAlignment: Left
