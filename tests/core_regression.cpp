@@ -9,6 +9,7 @@
 #include <cmath>
 #include <compare>
 #include <filesystem>
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -48,6 +49,19 @@ std::filesystem::path tmp_path(const char* filename) {
     auto dir = std::filesystem::path(VARTODD_TEST_TMP_DIR);
     std::filesystem::create_directories(dir);
     return dir / filename;
+}
+
+Matrix matrix_from_words(std::initializer_list<std::uint64_t> words, index_t cols) {
+    Matrix  out(static_cast<index_t>(words.size()), cols);
+    index_t row = 0;
+    for (const std::uint64_t word : words) {
+        for (index_t bit = 0; bit < cols; ++bit) {
+            if ((word >> bit) & 1ULL)
+                out[row].set(bit);
+        }
+        ++row;
+    }
+    return out;
 }
 
 void check_row_views() {
@@ -500,6 +514,77 @@ void check_exploration_score_feature_contract() {
             "nonlinear scoring must use exact fixed-y ranking");
 }
 
+void check_score_aware_tohpe_z_ranking() {
+    Matrix P    = matrix_from_words({1, 4, 11, 14, 16, 21, 26, 28, 31}, 5);
+    auto   data = std::make_shared<MatrixWithData>(P, false);
+    require(data->tohpe_basis().rows() == 1, "score-aware TOHPE fixture kernel changed");
+    const Row      y(data->tohpe_basis()[0]);
+    TohpeGenerator generator(data);
+
+    std::vector<TohpeZInfo> reduction_ranked;
+    generator.best_z_n_details_into(y, 8, reduction_ranked);
+    require(!reduction_ranked.empty() && reduction_ranked[0].reduction == 2 &&
+                reduction_ranked[0].z.count() == 4,
+            "score-aware TOHPE fixture greedy candidate changed");
+
+    ExplorationScore default_score(1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    default_score.bn    = static_cast<float>(data->index().max_bucket());
+    default_score.dn    = static_cast<float>(data->tohpe_basis().rows() + 5);
+    default_score.wvwn = static_cast<float>(P.rows());
+
+    std::vector<TohpeZInfo> scored_like_default;
+    generator.best_z_n_details_into(
+        y, 8,
+        [&](index_t reduction, index_t bucket_size, RowCView z) {
+            return default_score.evaluate_features(static_cast<Int>(reduction), 1, static_cast<Int>(bucket_size),
+                                                   static_cast<Int>(y.count()), static_cast<Int>(z.count()),
+                                                   static_cast<Int>(z.size()));
+        },
+        scored_like_default);
+    require(scored_like_default.size() == reduction_ranked.size(),
+            "default score-aware TOHPE result size changed");
+    for (std::size_t i = 0; i < reduction_ranked.size(); ++i) {
+        require(scored_like_default[i].bucket_id == reduction_ranked[i].bucket_id &&
+                    scored_like_default[i].reduction == reduction_ranked[i].reduction &&
+                    scored_like_default[i].bucket_size == reduction_ranked[i].bucket_size &&
+                    scored_like_default[i].z == reduction_ranked[i].z,
+                "default score-aware TOHPE order differs from reduction order");
+    }
+
+    ExplorationScore sparse_score(0.0f, 0.0f, 0.0f, 0.0f, -1.0f);
+    sparse_score.bn    = default_score.bn;
+    sparse_score.dn    = default_score.dn;
+    sparse_score.wvwn = default_score.wvwn;
+    std::vector<TohpeZInfo> sparse_ranked;
+    generator.best_z_n_details_into(
+        y, 1,
+        [&](index_t reduction, index_t bucket_size, RowCView z) {
+            return sparse_score.evaluate_features(static_cast<Int>(reduction), 1, static_cast<Int>(bucket_size),
+                                                  static_cast<Int>(y.count()), static_cast<Int>(z.count()),
+                                                  static_cast<Int>(z.size()));
+        },
+        sparse_ranked);
+    require(sparse_ranked.size() == 1 && sparse_ranked[0].reduction == 1 && sparse_ranked[0].z.count() == 1,
+            "z-density score should select the lower-reduction sparse candidate");
+
+    Candidate candidate(0, static_cast<Int>(sparse_ranked[0].reduction), k_single_sentinel<Int>(),
+                        k_single_sentinel<Int>(), Row(y), Row(sparse_ranked[0].z), 1,
+                        static_cast<Int>(sparse_ranked[0].bucket_size), sparse_ranked[0].bucket_id,
+                        CandidateSourceTohpe);
+    const float inner_score = sparse_score.evaluate_features(candidate.reduction, candidate.basis_dim,
+                                                             candidate.bucket_size, candidate.vec_weight,
+                                                             candidate.z_weight, candidate.z_size);
+    const auto [outer_score, unused] = sparse_score(candidate);
+    (void)unused;
+    require(std::abs(inner_score - outer_score) < 1e-7f,
+            "inner TOHPE z score differs from candidate pool score");
+
+    const Matrix state =
+        canonical_parity_matrix(generator.make(sparse_ranked[0].z, sparse_ranked[0].bucket_id).apply(y));
+    require(P.rows() - state.rows() == sparse_ranked[0].reduction,
+            "score-aware TOHPE reported reduction differs from applied reduction");
+}
+
 void check_policy_iteration_smoke() {
     Matrix P(4, 3);
     P[0].set(0);
@@ -819,6 +904,7 @@ int main() {
         check_portable_random_and_seed_contract();
         check_candidate_tie_order();
         check_exploration_score_feature_contract();
+        check_score_aware_tohpe_z_ranking();
         check_policy_iteration_smoke();
         check_policy_iteration_repeatability();
         check_policy_iteration_merges_equivalent_parity_states();

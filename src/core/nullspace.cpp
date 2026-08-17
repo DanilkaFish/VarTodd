@@ -505,8 +505,7 @@ void TohpeGenerator::best_z_n_into(RowCView y, index_t num_samples,
         scratch_out.emplace_back(std::move(info.z), info.reduction);
 }
 
-void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
-                                           std::vector<TohpeZInfo>& scratch_out) const {
+void TohpeGenerator::count_z_reductions_(RowCView y) const {
     assert(y.count() != 0);
     const Matrix&    P       = M_->P();
     const ToddIndex& idx     = M_->index();
@@ -544,8 +543,14 @@ void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
                 counts.add(idx.single_id()[static_cast<std::size_t>(i)], 2);
             }
         }
-        counts.argmax_n_into(num_samples, scratch_candidates_);
     });
+}
+
+void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
+                                           std::vector<TohpeZInfo>& scratch_out) const {
+    count_z_reductions_(y);
+    const ToddIndex& idx = M_->index();
+    ws_.argmax_n_into(num_samples, scratch_candidates_);
 
     scratch_out.clear();
     scratch_out.reserve(scratch_candidates_.size());
@@ -553,6 +558,30 @@ void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
         const auto bucket_id = candidate.bucket_id;
         scratch_out.push_back(TohpeZInfo{
             .z           = Row(idx.key_of(bucket_id)),
+            .reduction   = candidate.count,
+            .bucket_size = idx.bucket_size(bucket_id),
+            .bucket_id   = bucket_id,
+        });
+    }
+}
+
+void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
+                                           const TohpeZScoreFunction& score_fn,
+                                           std::vector<TohpeZInfo>& scratch_out) const {
+    count_z_reductions_(y);
+    const ToddIndex& idx = M_->index();
+    ws_.argmax_n_by_into(num_samples, scratch_ranked_candidates_,
+                         [&](std::uint32_t bucket_id, index_t reduction) {
+                             const Row z = idx.key_of(bucket_id);
+                             return score_fn(reduction, idx.bucket_size(bucket_id), z.cview());
+                         });
+
+    scratch_out.clear();
+    scratch_out.reserve(scratch_ranked_candidates_.size());
+    for (const auto& candidate : scratch_ranked_candidates_) {
+        const auto bucket_id = candidate.bucket_id;
+        scratch_out.push_back(TohpeZInfo{
+            .z           = idx.key_of(bucket_id),
             .reduction   = candidate.count,
             .bucket_size = idx.bucket_size(bucket_id),
             .bucket_id   = bucket_id,

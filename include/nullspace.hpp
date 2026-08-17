@@ -8,6 +8,7 @@
 #include <bit>
 #include <cassert>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -27,6 +28,8 @@ struct TohpeZInfo {
     index_t       bucket_size = 0;
     std::uint32_t bucket_id   = 0;
 };
+
+using TohpeZScoreFunction = std::function<float(index_t, index_t, RowCView)>;
 
 struct CountWSScore {
     std::uint32_t bucket_id = 0;
@@ -582,6 +585,8 @@ class TohpeGenerator {
     auto best_z_n(RowCView y, index_t num_samples) const -> std::vector<std::pair<Row, index_t>>;
     void best_z_n_into(RowCView y, index_t num_samples, std::vector<std::pair<Row, index_t>>& scratch_out) const;
     void best_z_n_details_into(RowCView y, index_t num_samples, std::vector<TohpeZInfo>& scratch_out) const;
+    void best_z_n_details_into(RowCView y, index_t num_samples, const TohpeZScoreFunction& score_fn,
+                               std::vector<TohpeZInfo>& scratch_out) const;
 
     auto make(RowCView z) const -> NullSpace;
     auto make(RowCView z, std::uint32_t bucket_id) const -> NullSpace;
@@ -592,13 +597,16 @@ class TohpeGenerator {
     const Matrix& P() const noexcept { return M_->P(); }
 
   private:
+    void count_z_reductions_(RowCView y) const;
+
     std::shared_ptr<MatrixWithData> M_;
 
-    mutable CountWS                 ws_;
-    mutable std::vector<index_t>    scratch_ones_;
-    mutable std::vector<index_t>    scratch_zeros_;
-    mutable std::vector<CountWSScore> scratch_candidates_;
-    mutable std::vector<TohpeZInfo> scratch_z_infos_;
+    mutable CountWS                         ws_;
+    mutable std::vector<index_t>            scratch_ones_;
+    mutable std::vector<index_t>            scratch_zeros_;
+    mutable std::vector<CountWSScore>       scratch_candidates_;
+    mutable std::vector<RankedCountWSScore> scratch_ranked_candidates_;
+    mutable std::vector<TohpeZInfo>         scratch_z_infos_;
 };
 
 enum class SolutionBasisRequest : std::uint8_t {
