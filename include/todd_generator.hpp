@@ -281,10 +281,25 @@ struct ExplorationScore {
         : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
     ExplorationScore(std::vector<float> weights, std::vector<float> centers, float pow)
         : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
-    auto operator()(Candidate& cand) {
-        std::array<float, 5> x = {cand.reduction / bn / 2, cand.basis_dim / dn, cand.bucket_size / bn,
-                                  cand.vec_weight / wvwn, cand.z_weight / static_cast<float>(cand.z_size)};
-        cand.pool_score        = sc.evaluate(weights, centers, x);
+    float evaluate_features(Int reduction, Int basis_dim, Int bucket_size, Int vec_weight, Int z_weight,
+                            Int z_size) const {
+        const std::array<float, 5> x = {
+            reduction / bn / 2.0f,
+            basis_dim / dn,
+            bucket_size / bn,
+            vec_weight / wvwn,
+            z_weight / static_cast<float>(std::max<Int>(1, z_size)),
+        };
+        return sc.evaluate(weights, centers, x);
+    }
+    bool ranks_fixed_y_by_reduction() const noexcept {
+        const auto weight = [this](std::size_t i) { return i < weights.size() ? weights[i] : 0.0f; };
+        return sc.type == ScoringFunction::LINEAR && bn > 0.0f && weight(0) >= 0.0f && weight(2) == 0.0f &&
+               weight(4) == 0.0f;
+    }
+    auto operator()(Candidate& cand) const {
+        cand.pool_score = evaluate_features(cand.reduction, cand.basis_dim, cand.bucket_size, cand.vec_weight,
+                                            cand.z_weight, cand.z_size);
         return std::make_pair(cand.pool_score, 0);
     }
 };

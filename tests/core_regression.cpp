@@ -427,6 +427,44 @@ void check_candidate_tie_order() {
     require(candidate_tie_preferred(lower_z, higher_z), "candidate ties must prefer canonical Z order");
 }
 
+void check_exploration_score_feature_contract() {
+    Candidate cand;
+    cand.reduction   = 6;
+    cand.basis_dim   = 3;
+    cand.bucket_size = 4;
+    cand.vec_weight  = 5;
+    cand.z_weight    = 2;
+    cand.z_size      = 8;
+
+    ExplorationScore score({2.0f, -1.0f, 0.5f, 3.0f, -4.0f}, {0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+                           ScoringFunction{});
+    score.bn    = 10.0f;
+    score.dn    = 12.0f;
+    score.wvwn = 20.0f;
+
+    const float direct = score.evaluate_features(6, 3, 4, 5, 2, 8);
+    require(std::abs(direct - 0.3f) < 1e-7f, "exploration feature normalization changed");
+    const auto [pooled, unused] = score(cand);
+    (void)unused;
+    require(std::abs(direct - pooled) < 1e-7f && std::abs(direct - cand.pool_score) < 1e-7f,
+            "exploration feature scoring diverged from candidate scoring");
+
+    ExplorationScore default_score(1.0f, 7.0f, 0.0f, -3.0f, 0.0f);
+    require(default_score.ranks_fixed_y_by_reduction(),
+            "fixed-y constants should not disable the reduction fast path");
+    default_score.weights[2] = 0.25f;
+    require(!default_score.ranks_fixed_y_by_reduction(),
+            "bucket scoring must disable the reduction fast path");
+    default_score.weights[2] = 0.0f;
+    default_score.weights[4] = -1.0f;
+    require(!default_score.ranks_fixed_y_by_reduction(),
+            "z-density scoring must disable the reduction fast path");
+    default_score.weights[4] = 0.0f;
+    default_score.sc.type    = ScoringFunction::POLYNOM;
+    require(!default_score.ranks_fixed_y_by_reduction(),
+            "nonlinear scoring must use exact fixed-y ranking");
+}
+
 void check_policy_iteration_smoke() {
     Matrix P(4, 3);
     P[0].set(0);
@@ -744,6 +782,7 @@ int main() {
         check_top_bucket_tie_order();
         check_portable_random_and_seed_contract();
         check_candidate_tie_order();
+        check_exploration_score_feature_contract();
         check_policy_iteration_smoke();
         check_policy_iteration_repeatability();
         check_policy_iteration_merges_equivalent_parity_states();
