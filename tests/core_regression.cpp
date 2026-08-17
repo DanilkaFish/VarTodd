@@ -358,6 +358,41 @@ void check_count_selection_tie_order() {
             "equal-count Z choices must use ascending bucket ID");
 }
 
+void require_scored_count_selection(index_t max_bucket) {
+    CountWS ws;
+    ws.reset(16, max_bucket, false);
+    ws.add(5, 4);
+    ws.add(2, 4);
+    ws.add(7, 2);
+    ws.add(1, 0);
+
+    std::array<int, 16>                calls{};
+    std::vector<RankedCountWSScore> selected;
+    ws.argmax_n_by_into(3, selected, [&](std::uint32_t id, index_t reduction) {
+        ++calls[id];
+        return id == 7 ? 10.0f : 0.0f;
+    });
+
+    require(selected.size() == 3, "score-ranked CountWS lost a positive bucket");
+    require(selected[0].bucket_id == 7 && selected[0].count == 2,
+            "score-ranked CountWS must allow a lower reduction to win");
+    require(selected[1].bucket_id == 2 && selected[2].bucket_id == 5,
+            "score-ranked CountWS tie order must be reduction then bucket ID");
+    require(calls[1] == 0, "score-ranked CountWS evaluated a zero reduction");
+    require(calls[2] == 1 && calls[5] == 1 && calls[7] == 1,
+            "score-ranked CountWS callback must run once per positive bucket");
+
+    ws.argmax_n_by_into(1, selected,
+                        [](std::uint32_t, index_t reduction) { return -static_cast<float>(reduction); });
+    require(selected.size() == 1 && selected[0].bucket_id == 7,
+            "negative reduction weight must not make a zero reduction eligible");
+}
+
+void check_scored_count_selection() {
+    require_scored_count_selection(8);
+    require_scored_count_selection(std::numeric_limits<std::uint32_t>::max());
+}
+
 void check_top_bucket_tie_order() {
     Matrix P(6, 3);
     P[2].set(0);
@@ -779,6 +814,7 @@ int main() {
         check_bucket_lengths();
         check_packed_count_storage();
         check_count_selection_tie_order();
+        check_scored_count_selection();
         check_top_bucket_tie_order();
         check_portable_random_and_seed_contract();
         check_candidate_tie_order();
