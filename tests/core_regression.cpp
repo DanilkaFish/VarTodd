@@ -741,6 +741,37 @@ void check_tohpe_policy() {
     require(result.stats.accepted_todd == 0, "disabled Todd source should not emit candidates");
 }
 
+void check_tohpe_policy_scores_inner_z_choices() {
+    const Matrix P    = matrix_from_words({1, 4, 11, 14, 16, 21, 26, 28, 31}, 5);
+    auto         data = std::make_shared<MatrixWithData>(P, false);
+
+    const auto run = [&](ExplorationScore exploration) {
+        PolicyConfig cfg;
+        cfg.scores.exploration = std::move(exploration);
+        cfg.selection          = ActionSelection{1, "best", 0.0f};
+        cfg.pool               = ActionPool{4};
+        cfg.tohpe =
+            TohpeSearch{SamplingBudget{k_all_one_hot_samples, 0, 0, 2}, SourcePool{4, 0}, 1};
+        cfg.tohpeprefix = TohpePrefixSearch{SamplingBudget{}, SourcePool{0, 0}, 1,
+                                             ZBucketSearch{0, 0, 0.0f, 0.0f, 0}};
+        cfg.todd = ToddSearch{SamplingBudget{}, SourcePool{0, 0}, 1,
+                              ZBucketSearch{0, 0, 0.0f, 0.0f, 0}};
+        return policy_iteration_impl(data, cfg, 123, 0);
+    };
+
+    const auto greedy = run(ExplorationScore(1.0f, 0.0f, 0.0f, 0.0f, 0.0f));
+    require(greedy.chosen.size() == 1 && greedy.chosen[0].reduction == 2,
+            "default standalone TOHPE choice changed");
+
+    const auto sparse = run(ExplorationScore(0.0f, 0.0f, 0.0f, 0.0f, -1.0f));
+    require(sparse.chosen.size() == 1 && sparse.chosen[0].reduction == 1,
+            "standalone TOHPE did not use exploration score for inner z choice");
+    require(std::abs(sparse.chosen[0].pool_score + 0.2f) < 1e-6f,
+            "standalone TOHPE persisted a different outer score than its inner z score");
+    require(sparse.stats.accepted_tohpe == 1 && sparse.stats.rejected == 0,
+            "standalone TOHPE positive-only accounting changed");
+}
+
 void check_tohpe_and_tohpeprefix_stats_merge() {
     Matrix P(4, 3);
     P[0].set(0);
@@ -910,6 +941,7 @@ int main() {
         check_policy_iteration_merges_equivalent_parity_states();
         check_tohpe_only_policy_continues_after_todd_stops();
         check_tohpe_policy();
+        check_tohpe_policy_scores_inner_z_choices();
         check_tohpe_and_tohpeprefix_stats_merge();
         check_tohpe_continues_after_todd_pool_is_filled();
         check_todd_tohpe_prefix();

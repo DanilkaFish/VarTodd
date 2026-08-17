@@ -600,9 +600,10 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
         return;
 
     auto local_pool = TopKPool<ExplorationScore>(config.tohpe.pool.keep, config.escore);
-    const index_t dim     = ctx.tohpe_dim;
-    const Int     dim_int = detail::checked_int_from_index(dim, "TOHPE basis dimension overflow");
-    out.stats.max_basis   = std::max(out.stats.max_basis, dim_int);
+    const index_t dim                 = ctx.tohpe_dim;
+    const Int     dim_int             = detail::checked_int_from_index(dim, "TOHPE basis dimension overflow");
+    const bool    reduction_fast_path = config.escore.ranks_fixed_y_by_reduction();
+    out.stats.max_basis               = std::max(out.stats.max_basis, dim_int);
 
     PyRNG local_rng(mixed_seed(ctx.base_seed, 0, 0, 0, CandidateSourceTohpe));
     std::vector<TohpeZInfo> scratch_best_z;
@@ -611,14 +612,27 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
         assert(coefs.count() != 0);
         out.stats.evaluated++;
         auto vec = linear_combination_from_basis(ctx.data->tohpe_basis(), coefs);
-        ctx.get_tohpe_gen().best_z_n_details_into(vec, config.tohpe.z_choices, scratch_best_z);
+        const Int vec_weight = detail::checked_int_from_index(vec.count(), "Candidate vector weight overflow");
+        if (reduction_fast_path) {
+            ctx.get_tohpe_gen().best_z_n_details_into(vec, config.tohpe.z_choices, scratch_best_z);
+            std::erase_if(scratch_best_z, [](const TohpeZInfo& info) { return info.reduction <= 0; });
+        } else {
+            ctx.get_tohpe_gen().best_z_n_details_into(
+                vec, config.tohpe.z_choices,
+                [&](index_t reduction, index_t bucket_size, RowCView z) {
+                    return config.escore.evaluate_features(
+                        detail::checked_int_from_index(reduction, "Candidate reduction overflow"), dim_int,
+                        detail::checked_int_from_index(bucket_size, "Candidate bucket size overflow"), vec_weight,
+                        detail::checked_int_from_index(z.count(), "Candidate z weight overflow"),
+                        detail::checked_int_from_index(std::max<index_t>(1, z.size()),
+                                                       "Candidate z size overflow"));
+                },
+                scratch_best_z);
+        }
         for (std::size_t zi = 0; zi < scratch_best_z.size(); ++zi) {
             auto&      info = scratch_best_z[zi];
             const auto red  = info.reduction;
-            if (red <= 0) {
-                out.stats.rejected++;
-                continue;
-            }
+            assert(red > 0);
             Row cand_vec = (zi + 1 == scratch_best_z.size()) ? std::move(vec) : Row(vec);
             Candidate candidate(0, detail::checked_int_from_index(red, "Candidate reduction overflow"),
                                 k_single_sentinel<Int>(), k_single_sentinel<Int>(), std::move(cand_vec),
