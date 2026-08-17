@@ -209,10 +209,8 @@ fn pure_score_matches_existing_mutate_restore_score() {
     let z = bits(8, &[0, 1]);
     let y = bits(table.len(), &[0, 1, 3]);
 
-    assert_eq!(
-        super::score_candidate(&table, &key_to_index, &z, &y),
-        mutating_reference_score(table, &key_to_index, &z, &y),
-    );
+    assert_eq!(mutating_reference_score(table.clone(), &key_to_index, &z, &y), 1);
+    assert_eq!(super::score_candidate(&table, &key_to_index, &z, &y), 1);
 }
 ```
 
@@ -736,7 +734,7 @@ Delete the old normal loop only after the one-worker and 12-worker paths share t
 - [ ] **Step 4: Run exactness tests and verify GREEN repeatedly**
 
 ```bash
-cargo test twelve_workers_match_one_worker_exactly progress_line_has_stable_shape -- --nocapture
+cargo test t_opt::tests -- --nocapture
 cargo test twelve_workers_match_one_worker_exactly -- --nocapture
 cargo test twelve_workers_match_one_worker_exactly -- --nocapture
 ```
