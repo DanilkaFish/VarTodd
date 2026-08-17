@@ -70,6 +70,20 @@ CSV_FIELDS = [
     "phase_polynomials",
 ]
 
+VANDAELE_TOHPE_SAMPLING = ("1", "0", "0", "2")
+VANDAELE_FASTTODD_SAMPLING = ("all", "0", "0", "2")
+
+
+class _TCountReporter:
+    def __init__(self) -> None:
+        self._last: int | None = None
+
+    def emit(self, t_count: int, label: str) -> None:
+        if self._last == t_count:
+            return
+        self._last = t_count
+        print(f"T-count {t_count}: {label}", file=sys.stderr, flush=True)
+
 
 def _sampling_budget(values: Iterable[str]) -> list[object]:
     raw = list(values)
@@ -169,6 +183,8 @@ def run_mimic(matrix_path: Path, args: argparse.Namespace) -> dict[str, object]:
     deadline = start + limit_seconds if limit_seconds is not None else None
     state = _load_matrix(matrix_path)
     initial_rows = int(state.rows)
+    progress = _TCountReporter()
+    progress.emit(initial_rows, "initial")
     tohpe_cfg = _policy_config(args, stage="tohpe")
     todd_cfg = _policy_config(args, stage="todd")
 
@@ -203,6 +219,7 @@ def run_mimic(matrix_path: Path, args: argparse.Namespace) -> dict[str, object]:
             state = next_state
             tohpe_actions += 1
             action_in_stage += 1
+            progress.emit(int(state.rows), f"TOHPE stage {stages}, action {action_in_stage}")
         if deadline is not None and time.perf_counter() >= deadline:
             break
 
@@ -214,6 +231,7 @@ def run_mimic(matrix_path: Path, args: argparse.Namespace) -> dict[str, object]:
             break
         state = next_state
         todd_actions += 1
+        progress.emit(int(state.rows), f"FastTODD stage {stages}, action {todd_actions}")
     else:
         raise RuntimeError(f"max stages exceeded: {args.max_stages}")
 
@@ -275,13 +293,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tohpe-sampling",
         nargs=4,
-        default=["all", "0", "0", "2"],
+        default=list(VANDAELE_TOHPE_SAMPLING),
         metavar=("ONE_HOT", "SPARSE", "DENSE", "SPARSE_MAX_WEIGHT"),
     )
     parser.add_argument(
         "--todd-sampling",
         nargs=4,
-        default=["all", "0", "0", "2"],
+        default=list(VANDAELE_FASTTODD_SAMPLING),
         metavar=("ONE_HOT", "SPARSE", "DENSE", "SPARSE_MAX_WEIGHT"),
     )
     args = parser.parse_args()
