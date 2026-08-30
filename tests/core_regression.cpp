@@ -41,6 +41,109 @@ void require_same_entries(const std::vector<SumEntry>& actual, const std::vector
         require(same_entry(actual[i], expected[i]), message);
 }
 
+// --- policy program builders -------------------------------------------------
+//
+// The scoring structs these checks used were replaced by compiled expression
+// programs. These helpers assemble the equivalent programs so the checks keep
+// asserting the same numbers against the same inputs.
+
+// sum_i w[i] * feature_i, over the canonical feature order.
+PolicyProgram linear_program(const std::vector<float>& weights,
+                             PolicySite                site = PolicySite::ExplorationPool) {
+    static constexpr Knob k_features[] = {Knob::nred, Knob::ndim,  Knob::nbucket,
+                                          Knob::nyw,  Knob::nzw,   Knob::ntohpe};
+    std::vector<Instr>    code;
+    bool                  first = true;
+    for (std::uint16_t i = 0; i < weights.size(); ++i) {
+        if (weights[i] == 0.0f)
+            continue; // a zero weight contributes no term, as in the old sum
+        code.push_back(Instr{Op::LoadKnob, static_cast<std::uint16_t>(k_features[i])});
+        code.push_back(Instr{Op::LoadConst, i});
+        code.push_back(Instr{Op::Mul, 0});
+        if (!first)
+            code.push_back(Instr{Op::Add, 0});
+        first = false;
+    }
+    if (code.empty()) { // all-zero weights: a constant zero score
+        code.push_back(Instr{Op::LoadConst, 0});
+    }
+    return PolicyProgram(std::move(code), weights, 0, site);
+}
+
+// sum_i w[i] * |feature_i - c[i]| ** pow, with the first center scaled by
+// 1/bn/2 so a raw reduction center lands in normalized space -- the
+// `first_center_scale` rule of the replaced polynomial scoring.
+PolicyProgram polynom_program(const std::vector<float>& weights, const std::vector<float>& centers, float pow,
+                              PolicySite site = PolicySite::ExplorationPool) {
+    static constexpr Knob k_features[] = {Knob::nred, Knob::ndim,  Knob::nbucket,
+                                          Knob::nyw,  Knob::nzw,   Knob::ntohpe};
+    std::vector<float>    consts       = weights;
+    consts.insert(consts.end(), centers.begin(), centers.end());
+    const auto center_index = static_cast<std::uint16_t>(weights.size());
+    consts.push_back(2.0f);
+    const auto two_index = static_cast<std::uint16_t>(consts.size() - 1);
+    consts.push_back(pow);
+    const auto pow_index = static_cast<std::uint16_t>(consts.size() - 1);
+
+    std::vector<Instr> code;
+    bool               first = true;
+    const std::size_t  n     = std::min(weights.size(), centers.size());
+    for (std::uint16_t i = 0; i < n; ++i) {
+        if (weights[i] == 0.0f)
+            continue;
+        const auto center_slot = static_cast<std::uint16_t>(center_index + i);
+        // |feature - center|, with feature 0's center divided by bn then by 2
+        code.push_back(Instr{Op::LoadKnob, static_cast<std::uint16_t>(k_features[i])});
+        code.push_back(Instr{Op::LoadConst, center_slot});
+        if (i == 0) {
+            code.push_back(Instr{Op::LoadKnob, static_cast<std::uint16_t>(Knob::bn)});
+            code.push_back(Instr{Op::Div, 0});
+            code.push_back(Instr{Op::LoadConst, two_index});
+            code.push_back(Instr{Op::Div, 0});
+        }
+        code.push_back(Instr{Op::Sub, 0});
+        code.push_back(Instr{Op::Abs, 0});
+        code.push_back(Instr{Op::LoadConst, pow_index});
+        code.push_back(Instr{Op::Pow, 0});
+        code.push_back(Instr{Op::LoadConst, i});
+        code.push_back(Instr{Op::Mul, 0});
+        if (!first)
+            code.push_back(Instr{Op::Add, 0});
+        first = false;
+    }
+    if (code.empty())
+        code.push_back(Instr{Op::LoadConst, 0});
+    return PolicyProgram(std::move(code), consts, 0, site);
+}
+
+// A PolicyScores holding the given exploration program and a reduction-greedy
+// finalization, matching what the old default-constructed scores did.
+PolicyScores scores_with_exploration(PolicyProgram exploration) {
+    return PolicyScores{std::move(exploration), linear_program({1.0f}, PolicySite::Finalization), {}};
+}
+
+// Evaluates a program the way the engine does for one candidate.
+float score_candidate(const PolicyProgram& program, const Candidate& cand, float bn, float dn, float wvwn) {
+    KnobFrame frame{};
+    frame.bn   = bn;
+    frame.dn   = dn;
+    frame.wvwn = wvwn;
+    PolicyScorer scorer{&program, {}, &frame};
+    return scorer.evaluate(cand);
+}
+
+float score_features(const PolicyProgram& program, Int reduction, Int basis_dim, Int bucket_size, Int vec_weight,
+                     Int z_weight, Int z_size, float bn, float dn, float wvwn) {
+    Candidate cand;
+    cand.reduction   = reduction;
+    cand.basis_dim   = basis_dim;
+    cand.bucket_size = bucket_size;
+    cand.vec_weight  = vec_weight;
+    cand.z_weight    = z_weight;
+    cand.z_size      = z_size;
+    return score_candidate(program, cand, bn, dn, wvwn);
+}
+
 std::filesystem::path data_path(const char* relative) {
     return std::filesystem::path(VARTODD_TEST_DATA_DIR) / relative;
 }
@@ -485,33 +588,54 @@ void check_exploration_score_feature_contract() {
     cand.z_weight    = 2;
     cand.z_size      = 8;
 
-    ExplorationScore score({2.0f, -1.0f, 0.5f, 3.0f, -4.0f}, {0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
-                           ScoringFunction{});
-    score.bn    = 10.0f;
-    score.dn    = 12.0f;
-    score.wvwn = 20.0f;
+    // The knob normalization these constants pin is the contract; only the
+    // mechanism that evaluates it changed.
+    const PolicyProgram score = linear_program({2.0f, -1.0f, 0.5f, 3.0f, -4.0f});
 
-    const float direct = score.evaluate_features(6, 3, 4, 5, 2, 8);
+    const float direct = score_features(score, 6, 3, 4, 5, 2, 8, 10.0f, 12.0f, 20.0f);
     require(std::abs(direct - 0.3f) < 1e-7f, "exploration feature normalization changed");
-    const auto [pooled, unused] = score(cand);
+
+    ExplorationScorer scorer;
+    KnobFrame         frame{};
+    frame.bn      = 10.0f;
+    frame.dn      = 12.0f;
+    frame.wvwn    = 20.0f;
+    scorer.program = &score;
+    scorer.frame   = &frame;
+    const auto [pooled, unused] = scorer(cand);
     (void)unused;
     require(std::abs(direct - pooled) < 1e-7f && std::abs(direct - cand.pool_score) < 1e-7f,
             "exploration feature scoring diverged from candidate scoring");
 
-    ExplorationScore default_score(1.0f, 7.0f, 0.0f, -3.0f, 0.0f);
-    require(default_score.ranks_fixed_y_by_reduction(),
+    // Fast-path conditions. The predicate is now structural rather than a check
+    // on weight slots, but it must accept and reject the same policies.
+    require(linear_program({1.0f, 7.0f, 0.0f, -3.0f, 0.0f}).ranks_fixed_y_by_reduction(),
             "fixed-y constants should not disable the reduction fast path");
-    default_score.weights[2] = 0.25f;
-    require(!default_score.ranks_fixed_y_by_reduction(),
+    require(!linear_program({1.0f, 7.0f, 0.25f, -3.0f, 0.0f}).ranks_fixed_y_by_reduction(),
             "bucket scoring must disable the reduction fast path");
-    default_score.weights[2] = 0.0f;
-    default_score.weights[4] = -1.0f;
-    require(!default_score.ranks_fixed_y_by_reduction(),
+    require(!linear_program({1.0f, 7.0f, 0.0f, -3.0f, -1.0f}).ranks_fixed_y_by_reduction(),
             "z-density scoring must disable the reduction fast path");
-    default_score.weights[4] = 0.0f;
-    default_score.sc.type    = ScoringFunction::POLYNOM;
-    require(!default_score.ranks_fixed_y_by_reduction(),
+    require(!polynom_program({1.0f, 7.0f, 0.0f, -3.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}, 2.0f)
+                 .ranks_fixed_y_by_reduction(),
             "nonlinear scoring must use exact fixed-y ranking");
+
+    // A raw reduction center is divided by bn and 2 before being subtracted, so
+    // centers are expressed in exact rank-reduction counts.
+    const PolicyProgram raw_reduction_center =
+        polynom_program({-4.0f, 0.0f, 0.0f, 0.0f, 0.0f}, {0.8f, 0.0f, 0.0f, 0.0f, 0.0f}, 1.0f);
+    const float raw_center_score = score_features(raw_reduction_center, 16, 0, 0, 0, 0, 1, 10.0f, 1.0f, 1.0f);
+    require(std::abs(raw_center_score - (-3.04f)) < 1e-6f,
+            "polynomial reduction center must be subtracted before normalization");
+
+    Candidate final_candidate;
+    final_candidate.reduction = 16;
+    final_candidate.z_size    = 1;
+    const PolicyProgram raw_final_center =
+        polynom_program({-4.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}, {0.8f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}, 1.0f,
+                        PolicySite::Finalization);
+    const float raw_final_score = score_candidate(raw_final_center, final_candidate, 10.0f, 1.0f, 1.0f);
+    require(std::abs(raw_final_score - (-3.04f)) < 1e-6f,
+            "final polynomial reduction center must be subtracted before normalization");
 }
 
 void check_score_aware_tohpe_z_ranking() {
@@ -527,18 +651,18 @@ void check_score_aware_tohpe_z_ranking() {
                 reduction_ranked[0].z.count() == 4,
             "score-aware TOHPE fixture greedy candidate changed");
 
-    ExplorationScore default_score(1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-    default_score.bn    = static_cast<float>(data->index().max_bucket());
-    default_score.dn    = static_cast<float>(data->tohpe_basis().rows() + 5);
-    default_score.wvwn = static_cast<float>(P.rows());
+    const PolicyProgram default_score = linear_program({1.0f, 0.0f, 0.0f, 0.0f, 0.0f});
+    const float         bn             = static_cast<float>(data->index().max_bucket());
+    const float         dn             = static_cast<float>(data->tohpe_basis().rows() + 5);
+    const float         wvwn           = static_cast<float>(P.rows());
 
     std::vector<TohpeZInfo> scored_like_default;
     generator.best_z_n_details_into(
         y, 8,
         [&](index_t reduction, index_t bucket_size, RowCView z) {
-            return default_score.evaluate_features(static_cast<Int>(reduction), 1, static_cast<Int>(bucket_size),
-                                                   static_cast<Int>(y.count()), static_cast<Int>(z.count()),
-                                                   static_cast<Int>(z.size()));
+            return score_features(default_score, static_cast<Int>(reduction), 1, static_cast<Int>(bucket_size),
+                                  static_cast<Int>(y.count()), static_cast<Int>(z.count()),
+                                  static_cast<Int>(z.size()), bn, dn, wvwn);
         },
         scored_like_default);
     require(scored_like_default.size() == reduction_ranked.size(),
@@ -551,17 +675,14 @@ void check_score_aware_tohpe_z_ranking() {
                 "default score-aware TOHPE order differs from reduction order");
     }
 
-    ExplorationScore sparse_score(0.0f, 0.0f, 0.0f, 0.0f, -1.0f);
-    sparse_score.bn    = default_score.bn;
-    sparse_score.dn    = default_score.dn;
-    sparse_score.wvwn = default_score.wvwn;
+    const PolicyProgram sparse_score = linear_program({0.0f, 0.0f, 0.0f, 0.0f, -1.0f});
     std::vector<TohpeZInfo> sparse_ranked;
     generator.best_z_n_details_into(
         y, 1,
         [&](index_t reduction, index_t bucket_size, RowCView z) {
-            return sparse_score.evaluate_features(static_cast<Int>(reduction), 1, static_cast<Int>(bucket_size),
-                                                  static_cast<Int>(y.count()), static_cast<Int>(z.count()),
-                                                  static_cast<Int>(z.size()));
+            return score_features(sparse_score, static_cast<Int>(reduction), 1, static_cast<Int>(bucket_size),
+                                  static_cast<Int>(y.count()), static_cast<Int>(z.count()),
+                                  static_cast<Int>(z.size()), bn, dn, wvwn);
         },
         sparse_ranked);
     require(sparse_ranked.size() == 1 && sparse_ranked[0].reduction == 1 && sparse_ranked[0].z.count() == 1,
@@ -571,11 +692,10 @@ void check_score_aware_tohpe_z_ranking() {
                         k_single_sentinel<Int>(), Row(y), Row(sparse_ranked[0].z), 1,
                         static_cast<Int>(sparse_ranked[0].bucket_size), sparse_ranked[0].bucket_id,
                         CandidateSourceTohpe);
-    const float inner_score = sparse_score.evaluate_features(candidate.reduction, candidate.basis_dim,
-                                                             candidate.bucket_size, candidate.vec_weight,
-                                                             candidate.z_weight, candidate.z_size);
-    const auto [outer_score, unused] = sparse_score(candidate);
-    (void)unused;
+    const float inner_score = score_features(sparse_score, candidate.reduction, candidate.basis_dim,
+                                             candidate.bucket_size, candidate.vec_weight, candidate.z_weight,
+                                             candidate.z_size, bn, dn, wvwn);
+    const float outer_score = score_candidate(sparse_score, candidate, bn, dn, wvwn);
     require(std::abs(inner_score - outer_score) < 1e-7f,
             "inner TOHPE z score differs from candidate pool score");
 
@@ -745,9 +865,9 @@ void check_tohpe_policy_scores_inner_z_choices() {
     const Matrix P    = matrix_from_words({1, 4, 11, 14, 16, 21, 26, 28, 31}, 5);
     auto         data = std::make_shared<MatrixWithData>(P, false);
 
-    const auto run = [&](ExplorationScore exploration) {
+    const auto run = [&](PolicyProgram exploration) {
         PolicyConfig cfg;
-        cfg.scores.exploration = std::move(exploration);
+        cfg.scores = scores_with_exploration(std::move(exploration));
         cfg.selection          = ActionSelection{1, "best", 0.0f};
         cfg.pool               = ActionPool{4};
         cfg.tohpe =
@@ -759,11 +879,11 @@ void check_tohpe_policy_scores_inner_z_choices() {
         return policy_iteration_impl(data, cfg, 123, 0);
     };
 
-    const auto greedy = run(ExplorationScore(1.0f, 0.0f, 0.0f, 0.0f, 0.0f));
+    const auto greedy = run(linear_program({1.0f, 0.0f, 0.0f, 0.0f, 0.0f}));
     require(greedy.chosen.size() == 1 && greedy.chosen[0].reduction == 2,
             "default standalone TOHPE choice changed");
 
-    const auto sparse = run(ExplorationScore(0.0f, 0.0f, 0.0f, 0.0f, -1.0f));
+    const auto sparse = run(linear_program({0.0f, 0.0f, 0.0f, 0.0f, -1.0f}));
     require(sparse.chosen.size() == 1 && sparse.chosen[0].reduction == 1,
             "standalone TOHPE did not use exploration score for inner z choice");
     require(std::abs(sparse.chosen[0].pool_score + 0.2f) < 1e-6f,

@@ -180,8 +180,14 @@ struct NormalizedToddSearch {
 };
 
 struct NormalizedPolicyConfig {
-    ExplorationScore      escore{};
-    FinalizationScore     fscore{};
+    PolicyProgram         exploration{};
+    PolicyProgram         final{};
+    std::vector<float>    params{};
+    KnobFrame             frame{}; // per-iteration normalizers, filled in make_policy_context
+
+    ExplorationScorer  escore() const noexcept { return ExplorationScorer{{&exploration, params, &frame}}; }
+    FinalizationScorer fscore() const noexcept { return FinalizationScorer{{&final, params, &frame}}; }
+
     ActionSelection       selection{};
     ActionPool            pool{};
     NormalizedTohpeSearch       tohpe{};
@@ -225,8 +231,9 @@ NormalizedZBucketSearch normalize_bucket_search(ZBucketSearch search) {
 
 NormalizedPolicyConfig normalize_policy_config(PolicyConfig config) {
     NormalizedPolicyConfig out{
-        .escore    = std::move(config.scores.exploration),
-        .fscore    = std::move(config.scores.final),
+        .exploration = std::move(config.scores.exploration),
+        .final       = std::move(config.scores.final),
+        .params      = std::move(config.scores.params),
         .selection = std::move(config.selection),
         .pool      = config.pool,
         .tohpe =
@@ -288,24 +295,21 @@ PolicyIterationContext make_policy_context(const std::shared_ptr<MatrixWithData>
     const auto             bucket_normalization = data->index().max_bucket();
     const auto             wvw_normalization    = data->P().rows();
     const auto             dim_normalization    = ctx.tohpe_dim + 5;
-    config.escore.bn                         = bucket_normalization;
-    config.escore.wvwn                       = wvw_normalization;
-    config.escore.dn                         = dim_normalization;
-    config.fscore.bn                         = bucket_normalization;
-    config.fscore.wvwn                       = wvw_normalization;
-    config.fscore.dn                         = dim_normalization;
+    config.frame.bn                          = static_cast<float>(bucket_normalization);
+    config.frame.wvwn                        = static_cast<float>(wvw_normalization);
+    config.frame.dn                          = static_cast<float>(dim_normalization);
     return ctx;
 }
 
 struct CandidatePools {
-    TopKPool<ExplorationScore> tohpe_pool;
-    TopKPool<ExplorationScore> tohpeprefix_pool;
-    TopKPool<ExplorationScore> todd_pool;
+    TopKPool<ExplorationScorer> tohpe_pool;
+    TopKPool<ExplorationScorer> tohpeprefix_pool;
+    TopKPool<ExplorationScorer> todd_pool;
 
     explicit CandidatePools(const NormalizedPolicyConfig& config)
-        : tohpe_pool(config.tohpe.pool.keep, config.escore),
-          tohpeprefix_pool(config.tohpeprefix.pool.keep, config.escore),
-          todd_pool(config.todd.pool.keep, config.escore) {}
+        : tohpe_pool(config.tohpe.pool.keep, config.escore()),
+          tohpeprefix_pool(config.tohpeprefix.pool.keep, config.escore()),
+          todd_pool(config.todd.pool.keep, config.escore()) {}
 };
 
 struct GenerationOutput {
@@ -583,9 +587,9 @@ Result build_result(FinalizedActions& actions, bool is_best, std::size_t action_
 
     for (FinalizedAction& action : chosen_view) {
         Candidate& c = action.candidate;
-        c.num_better_dim        = svs.better_dim(c.basis_dim);
-        c.num_better_red        = svs.better_red(c.reduction);
-        c.num_better_pool_score = svs.better_score(c.pool_score);
+        // num_better_* are filled during finalization so the policy can score
+        // on them; they are already set here.
+        (void)svs;
 
         out.chosen.push_back(export_candidate(c));
         out.states.push_back(std::move(action.state));
@@ -599,10 +603,10 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
     if (config.tohpe.pool.keep <= 0)
         return;
 
-    auto local_pool = TopKPool<ExplorationScore>(config.tohpe.pool.keep, config.escore);
+    auto local_pool = TopKPool<ExplorationScorer>(config.tohpe.pool.keep, config.escore());
     const index_t dim                 = ctx.tohpe_dim;
     const Int     dim_int             = detail::checked_int_from_index(dim, "TOHPE basis dimension overflow");
-    const bool    reduction_fast_path = config.escore.ranks_fixed_y_by_reduction();
+    const bool    reduction_fast_path = config.exploration.ranks_fixed_y_by_reduction();
     out.stats.max_basis               = std::max(out.stats.max_basis, dim_int);
 
     PyRNG local_rng(mixed_seed(ctx.base_seed, 0, 0, 0, CandidateSourceTohpe));
@@ -620,12 +624,19 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
             ctx.get_tohpe_gen().best_z_n_details_into(
                 vec, config.tohpe.z_choices,
                 [&](index_t reduction, index_t bucket_size, RowCView z) {
-                    return config.escore.evaluate_features(
-                        detail::checked_int_from_index(reduction, "Candidate reduction overflow"), dim_int,
-                        detail::checked_int_from_index(bucket_size, "Candidate bucket size overflow"), vec_weight,
-                        detail::checked_int_from_index(z.count(), "Candidate z weight overflow"),
-                        detail::checked_int_from_index(std::max<index_t>(1, z.size()),
-                                                       "Candidate z size overflow"));
+                    // Only the z-dependent knobs vary here; dim and the y
+                    // weight are fixed for this y, and the rest of the frame
+                    // carries the per-iteration normalizers.
+                    KnobFrame f = config.frame;
+                    f.red       = static_cast<float>(reduction);
+                    f.dim       = static_cast<float>(dim_int);
+                    f.bucket    = static_cast<float>(bucket_size);
+                    f.yw        = static_cast<float>(vec_weight);
+                    f.zw        = static_cast<float>(z.count());
+                    f.zsize     = static_cast<float>(std::max<index_t>(1, z.size()));
+                    f.max_red   = static_cast<float>(2 * bucket_size);
+                    f.source    = static_cast<float>(CandidateSourceTohpe);
+                    return config.exploration.eval(f, config.params);
                 },
                 scratch_best_z);
         }
@@ -707,8 +718,8 @@ void generate_bucket_candidates(PolicyIterationContext& ctx, const NormalizedPol
         return;
 
     auto& buckets = index.top_sum_bucket_id_sizes_scratch(traversal_limit);
-    auto  local_prefix_pool = TopKPool<ExplorationScore>(config.tohpeprefix.pool.keep, config.escore);
-    auto  local_todd_pool  = TopKPool<ExplorationScore>(config.todd.pool.keep, config.escore);
+    auto  local_prefix_pool = TopKPool<ExplorationScorer>(config.tohpeprefix.pool.keep, config.escore());
+    auto  local_todd_pool  = TopKPool<ExplorationScorer>(config.todd.pool.keep, config.escore());
     auto  local_svs        = SeenValues{};
     Stats stats;
     local_prefix_pool.reserve(config.tohpeprefix.pool.keep);
@@ -753,12 +764,12 @@ void generate_bucket_candidates(PolicyIterationContext& ctx, const NormalizedPol
             continue;
 
         PyRNG local_rng(mixed_seed(ctx.base_seed, k, is_single ? 0 : l, i, CandidateSourceTodd));
-        auto  bucket_prefix_pool = TopKPool<ExplorationScore>(config.tohpeprefix.actions_per_bucket, config.escore);
-        auto  bucket_todd_pool  = TopKPool<ExplorationScore>(config.todd.actions_per_bucket, config.escore);
+        auto  bucket_prefix_pool = TopKPool<ExplorationScorer>(config.tohpeprefix.actions_per_bucket, config.escore());
+        auto  bucket_todd_pool  = TopKPool<ExplorationScorer>(config.todd.actions_per_bucket, config.escore());
         const Int cand_l =
             is_single ? k_single_sentinel<Int>() : detail::checked_int_from_index(l, "Candidate l overflow");
 
-        auto sample_into = [&](TopKPool<ExplorationScore>& target, CandidateSource source, Int basis_dim,
+        auto sample_into = [&](TopKPool<ExplorationScorer>& target, CandidateSource source, Int basis_dim,
                                RowCView coefs) {
             stats.evaluated++;
             auto       vec = ns.linear_combination(coefs);
@@ -863,11 +874,24 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
                                 static_cast<std::size_t>(config.tohpe.pool.reserve),
                                 static_cast<std::size_t>(config.tohpeprefix.pool.reserve),
                                 static_cast<std::size_t>(config.todd.pool.reserve));
-    const bool need_tohpe_dim = config.fscore.needs_tohpe_dim();
-    auto       score_fn       = config.fscore;
+    const auto score_fn        = config.fscore();
+    const bool need_tohpe_dim  = score_fn.needs_tohpe_dim();
     auto       get_tohpe_gen  = [&]() -> TohpeGenerator& { return ctx.get_tohpe_gen(); };
     auto       get_full_gen   = [&]() -> FullToddGenerator& { return ctx.get_full_gen(); };
 
+    // The population ranks come from SeenValues, finalized before this call, so
+    // they are available while candidates are still being scored. The pool
+    // composition is not: it is only known once deduplication has settled the
+    // pool, so a policy reading it needs a second scoring pass.
+    const bool needs_pool_composition =
+        config.final.uses(Knob::pool_size) || config.final.uses(Knob::pool_tohpe) ||
+        config.final.uses(Knob::pool_prefix) || config.final.uses(Knob::pool_todd) ||
+        config.final.uses(Knob::f_tohpe) || config.final.uses(Knob::f_prefix) ||
+        config.final.uses(Knob::f_todd) || config.final.uses(Knob::nrank_red) ||
+        config.final.uses(Knob::nrank_dim) || config.final.uses(Knob::nrank_score);
+
+    // Pass 1: realize each candidate's state, score it, and deduplicate
+    // equivalent parity states keeping the greatest finalization score.
     FinalizedActions finalized;
     finalized.reserve(merged_candidates.size());
     std::vector<std::uint8_t> scratch_killed;
@@ -878,6 +902,9 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
             cand.tohpe_dim = detail::checked_int_from_index(get_tohpe_basis(state).rows(),
                                                             "Candidate TOHPE dimension overflow");
         }
+        cand.num_better_dim        = out.svs.better_dim(cand.basis_dim);
+        cand.num_better_red        = out.svs.better_red(cand.reduction);
+        cand.num_better_pool_score = out.svs.better_score(cand.pool_score);
         score_fn(cand);
 
         auto same_state = std::find_if(finalized.begin(), finalized.end(),
@@ -903,6 +930,9 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
             ++pool_todd_size;
     }
 
+    // Pass 2: record the settled pool composition. A policy that reads any of
+    // those knobs is re-scored now that they are known; one that does not keeps
+    // the score from pass 1 unchanged.
     index_t n = 0;
     for (auto& action : finalized) {
         Candidate& cand = action.candidate;
@@ -910,6 +940,16 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
         cand.pool_tohpe_size        = pool_tohpe_size;
         cand.pool_tohpeprefix_size = pool_tohpeprefix_size;
         cand.pool_todd_size         = pool_todd_size;
+
+        if (needs_pool_composition)
+            score_fn(cand);
+        if (!std::isfinite(cand.final_score)) {
+            // A non-finite score sorts unpredictably, so it would silently
+            // corrupt the ordering rather than fail. Count it, and neutralize
+            // it so selection stays deterministic.
+            ++out.stats.nonfinite_score_count;
+            cand.final_score = -std::numeric_limits<float>::max();
+        }
 
         ++n;
         const float tohpe = static_cast<float>(cand.tohpe_dim);

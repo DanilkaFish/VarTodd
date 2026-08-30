@@ -1,5 +1,6 @@
 #include "matrix.hpp"
 #include "nullspace.hpp"
+#include "policy_expr.hpp"
 #include "random.hpp"
 #include "todd_generator.hpp"
 #include "typedef.hpp"
@@ -509,6 +510,11 @@ py::class_<Stats>(m, "Stats")
     .def_readwrite("max_basis", &Stats::max_basis)
     .def_readwrite("max_reduction", &Stats::max_reduction)
     .def_readwrite("max_bucket", &Stats::max_bucket)
+    // Candidates whose policy score came out NaN or infinite. Non-zero means
+    // the policy is producing meaningless orderings, not that the run failed --
+    // such scores are neutralized so selection stays deterministic. Kept out of
+    // the pickle tuple so existing serialized Stats still load.
+    .def_readwrite("nonfinite_score_count", &Stats::nonfinite_score_count)
     .def("__repr__", [](const Stats& s) {
         return "Stats(total=" + std::to_string(s.total) +
                 ", z_researched=" + std::to_string(s.z_researched) +
@@ -617,115 +623,6 @@ py::class_<Stats>(m, "Stats")
         }
     ));
     // ---------------- Result ----------------
-    py::enum_<ScoringFunction::Function>(m, "Function")
-        .value("LINEAR", ScoringFunction::LINEAR)
-        .value("POLYNOM", ScoringFunction::POLYNOM)
-        .value("DISTANCE", ScoringFunction::DISTANCE)
-        .value("LOGARITHMIC", ScoringFunction::LOGARITHMIC)
-        .value("SIGMOID", ScoringFunction::SIGMOID)
-        .export_values();
-
-    // ScoringFunction class
-    py::class_<ScoringFunction>(m, "ScoringFunction")
-        .def(py::init<>())
-        .def(py::init([](ScoringFunction::Function type, float pow) {
-            ScoringFunction sf;
-            sf.type = type;
-            sf.pow = pow;
-            return sf;
-        }), py::arg("type") = ScoringFunction::LINEAR, py::arg("pow") = 2.0f)
-        .def_readwrite("type", &ScoringFunction::type)
-        .def_readwrite("pow", &ScoringFunction::pow)
-
-        .def(py::pickle(
-            [](const ScoringFunction& sf) { return py::make_tuple(static_cast<int>(sf.type), sf.pow); },
-            [](py::tuple t) { 
-                if (t.size() != 2) {
-                    throw std::runtime_error("Invalid state!");
-                }
-                ScoringFunction sf;
-                sf.type = static_cast<ScoringFunction::Function>(t[0].cast<int>());
-                sf.pow = t[1].cast<float>();
-                return sf; }
-            ));
-
-py::class_<ExplorationScore>(m, "ExplorationScore")
-    .def(py::init<const std::vector<float>&, const std::vector<float>&, const ScoringFunction&>(),
-             py::arg("weights") = std::vector<float>{0,0,0,0,0},
-             py::arg("centers") = std::vector<float>{0,0,0,0,0},
-             py::arg("sc") = ScoringFunction())
-    .def(py::init<const std::vector<float>&, const std::vector<float>&,float>(),
-        py::arg("weights") = std::vector<float>{0,0,0,0,0},
-        py::arg("centers") = std::vector<float>{0,0,0,0,0},
-        py::arg("pow")=1.0f)
-    .def("__len__", [](const ExplorationScore&) { return 5; })
-    .def("pow", [](const ExplorationScore& es) { return es.sc.pow; })
-    
-    .def("__getitem__",
-         [](const ExplorationScore& r, py::ssize_t index) {
-             if (index < 0 || index >= 10) {
-                 throw py::index_error("ExplorationScore weights index out of range");
-             }
-             if (index <= 4)
-                return py::float_(r.weights[index]);
-             return py::float_(r.centers[index - 5]);
-         })
-    
-    .def(py::pickle(
-        [](const ExplorationScore& r) { 
-            return py::make_tuple(r.weights, r.centers, r.sc);
-        },
-        [](py::tuple t) {
-            if (t.size() != 3)
-                throw std::runtime_error("Invalid state for ExplorationScore! Expected 6 elements.");
-            ExplorationScore es(
-                t[0].cast<std::vector<float>>(),
-                t[1].cast<std::vector<float>>(),
-                t[2].cast<ScoringFunction>()
-            );
-            return es;
-        }
-    ));
-
-py::class_<FinalizationScore>(m, "FinalizationScore")
-    .def(py::init<const std::vector<float>&, const std::vector<float>&, const ScoringFunction&>(),
-             py::arg("weights") = std::vector<float>{0,0,0,0,0,0},
-             py::arg("centers") = std::vector<float>{0,0,0,0,0,0},
-             py::arg("sc") = ScoringFunction())
-    .def(py::init<const std::vector<float>&, const std::vector<float>&,float>(),
-            py::arg("weights") = std::vector<float>{0,0,0,0,0,0},
-            py::arg("centers") = std::vector<float>{0,0,0,0,0,0},
-            py::arg("pow")=1.0f)
-    .def("pow", [](const FinalizationScore& fs) { return fs.sc.pow; })
-    .def("__len__", [](const FinalizationScore&) { return 6; })
-    
-    .def("__getitem__",
-         [](const FinalizationScore& r, py::ssize_t index) {
-             if (index < 0 || index >= 12) {
-                 throw py::index_error("FinalizationScore index out of range");
-             }
-             if (index <= 5)
-                return py::float_(r.weights[index]);
-             return py::float_(r.centers[index - 6]);
-         })
-    
-    .def(py::pickle(
-        [](const FinalizationScore& r) { 
-            return py::make_tuple(r.weights, r.centers, r.sc);
-        },
-        [](py::tuple t) {
-            if (t.size() != 3) {
-                throw std::runtime_error("Invalid state for FinalizationScore Expected 3 elements.");
-            }
-            FinalizationScore fs(
-                t[0].cast<std::vector<float>>(),
-                t[1].cast<std::vector<float>>(),
-                t[2].cast<ScoringFunction>()
-            );
-            return fs;
-        }
-    ));
-    // ---------------- Result ----------------
     py::class_<Result>(m, "Result")
         .def(py::init<>())
         .def_readwrite("chosen", &Result::chosen)
@@ -737,20 +634,166 @@ py::class_<FinalizationScore>(m, "FinalizationScore")
                    ", seed=" + std::to_string(static_cast<unsigned long long>(r.seed)) + ")";
         });
 
-    py::class_<PolicyScores>(m, "PolicyScores")
-        .def(py::init([](ExplorationScore exploration, FinalizationScore final) {
-                 return PolicyScores{std::move(exploration), std::move(final)};
+    // Compiled policy expression. Constructed from the flat program the Python
+    // authoring layer emits: parallel opcode/argument arrays, the literal pool,
+    // the free-scalar count, and the site whose knob set it is validated
+    // against. Structural validation happens in the constructor, so an
+    // instance that exists is safe to evaluate.
+    py::class_<PolicyProgram>(m, "PolicyProgram")
+        .def(py::init([](const std::vector<int>& ops, const std::vector<int>& args,
+                         const std::vector<float>& consts, std::size_t n_params, int site) {
+                 if (ops.size() != args.size())
+                     throw std::runtime_error("PolicyProgram: ops and args must have equal length");
+                 std::vector<Instr> code;
+                 code.reserve(ops.size());
+                 for (std::size_t i = 0; i < ops.size(); ++i) {
+                     if (ops[i] < 0 || args[i] < 0 || args[i] > 0xFFFF)
+                         throw std::runtime_error("PolicyProgram: opcode or argument out of range");
+                     code.push_back(Instr{static_cast<Op>(ops[i]), static_cast<std::uint16_t>(args[i])});
+                 }
+                 return PolicyProgram(std::move(code), consts, n_params, static_cast<PolicySite>(site));
              }),
-             py::arg("exploration") = ExplorationScore(), py::arg("final") = FinalizationScore())
+             py::arg("ops"), py::arg("args"), py::arg("consts"), py::arg("n_params") = 0,
+             py::arg("site") = static_cast<int>(PolicySite::Finalization))
+        .def_property_readonly("n_params", &PolicyProgram::n_params)
+        .def_property_readonly("site", [](const PolicyProgram& p) { return static_cast<int>(p.site()); })
+        .def_property_readonly("ranks_fixed_y_by_reduction", &PolicyProgram::ranks_fixed_y_by_reduction)
+        .def_property_readonly("used_knobs",
+                               [](const PolicyProgram& p) {
+                                   std::vector<std::string> names;
+                                   for (std::size_t i = 0; i < k_knob_count; ++i)
+                                       if (p.uses(static_cast<Knob>(i)))
+                                           names.emplace_back(knob_name(static_cast<Knob>(i)));
+                                   return names;
+                               })
+        .def_property_readonly("ops",
+                               [](const PolicyProgram& p) {
+                                   std::vector<int> ops;
+                                   for (const Instr& in : p.code())
+                                       ops.push_back(static_cast<int>(in.op));
+                                   return ops;
+                               })
+        .def_property_readonly("args",
+                               [](const PolicyProgram& p) {
+                                   std::vector<int> args;
+                                   for (const Instr& in : p.code())
+                                       args.push_back(static_cast<int>(in.arg));
+                                   return args;
+                               })
+        .def_property_readonly("consts",
+                               [](const PolicyProgram& p) {
+                                   return std::vector<float>(p.consts().begin(), p.consts().end());
+                               })
+        // Evaluate on explicit knob values -- used by tests and by the
+        // load-time probe pass to check a policy stays finite.
+        .def(
+            "evaluate",
+            [](const PolicyProgram& p, const py::kwargs& kwargs) {
+                KnobFrame f{};
+                const auto get = [&](const char* name, float fallback) {
+                    return kwargs.contains(name) ? kwargs[name].cast<float>() : fallback;
+                };
+                f.red = get("red", 0.0f);
+                f.dim = get("dim", 0.0f);
+                f.bucket = get("bucket", 0.0f);
+                f.yw = get("yw", 0.0f);
+                f.zw = get("zw", 0.0f);
+                f.zsize = get("zsize", 1.0f);
+                f.max_red = get("max_red", 0.0f);
+                f.tohpe = get("tohpe", 0.0f);
+                f.rank_red = get("rank_red", 0.0f);
+                f.rank_dim = get("rank_dim", 0.0f);
+                f.rank_score = get("rank_score", 0.0f);
+                f.pool_size = get("pool_size", 0.0f);
+                f.pool_tohpe = get("pool_tohpe", 0.0f);
+                f.pool_prefix = get("pool_prefix", 0.0f);
+                f.pool_todd = get("pool_todd", 0.0f);
+                f.source = get("source", 0.0f);
+                f.bucket_id = get("bucket_id", 0.0f);
+                f.k_idx = get("k_idx", 0.0f);
+                f.l_idx = get("l_idx", 0.0f);
+                f.bn = get("bn", 1.0f);
+                f.dn = get("dn", 1.0f);
+                f.wvwn = get("wvwn", 1.0f);
+                std::vector<float> params;
+                if (kwargs.contains("params"))
+                    params = kwargs["params"].cast<std::vector<float>>();
+                return p.eval(f, params);
+            })
+        .def("__repr__",
+             [](const PolicyProgram& p) {
+                 return "PolicyProgram(len=" + std::to_string(p.code().size()) +
+                        ", n_params=" + std::to_string(p.n_params()) + ")";
+             })
+        .def(py::pickle(
+            [](const PolicyProgram& p) {
+                std::vector<int> ops, args;
+                for (const Instr& in : p.code()) {
+                    ops.push_back(static_cast<int>(in.op));
+                    args.push_back(static_cast<int>(in.arg));
+                }
+                return py::make_tuple(ops, args, std::vector<float>(p.consts().begin(), p.consts().end()),
+                                      p.n_params(), static_cast<int>(p.site()));
+            },
+            [](py::tuple t) {
+                if (t.size() != 5)
+                    throw std::runtime_error("Invalid state for PolicyProgram");
+                const auto ops    = t[0].cast<std::vector<int>>();
+                const auto args   = t[1].cast<std::vector<int>>();
+                const auto consts = t[2].cast<std::vector<float>>();
+                std::vector<Instr> code;
+                code.reserve(ops.size());
+                for (std::size_t i = 0; i < ops.size(); ++i)
+                    code.push_back(
+                        Instr{static_cast<Op>(ops[i]), static_cast<std::uint16_t>(args[i])});
+                return PolicyProgram(std::move(code), consts, t[3].cast<std::size_t>(),
+                                     static_cast<PolicySite>(t[4].cast<int>()));
+            }));
+
+    // Knob metadata, so the Python layer and any generated documentation read
+    // the availability table from the engine rather than a second copy.
+    m.def("policy_knob_names", []() {
+        std::vector<std::string> names;
+        for (std::size_t i = 0; i < k_knob_count; ++i)
+            names.emplace_back(knob_name(static_cast<Knob>(i)));
+        return names;
+    });
+    m.def(
+        "policy_site_knobs",
+        [](int site) {
+            const KnobMask           mask = site_available_knobs(static_cast<PolicySite>(site));
+            std::vector<std::string> names;
+            for (std::size_t i = 0; i < k_knob_count; ++i)
+                if (mask.test(i))
+                    names.emplace_back(knob_name(static_cast<Knob>(i)));
+            return names;
+        },
+        py::arg("site"));
+
+    // Holds the two compiled expressions plus the free scalars they share.
+    // `params` is indexed by the p.w(i) slots of both programs, so a policy
+    // binds its exploration and finalization scores against one vector.
+    py::class_<PolicyScores>(m, "PolicyScores")
+        .def(py::init([](PolicyProgram exploration, PolicyProgram final, std::vector<float> params) {
+                 return PolicyScores{std::move(exploration), std::move(final), std::move(params)};
+             }),
+             py::arg("exploration") = greedy_reduction_program(PolicySite::ExplorationZ),
+             py::arg("final")       = greedy_reduction_program(PolicySite::Finalization),
+             py::arg("params")      = std::vector<float>{})
         .def_readwrite("exploration", &PolicyScores::exploration)
         .def_readwrite("final", &PolicyScores::final)
-        .def("__repr__", [](const PolicyScores&) { return "PolicyScores(...)"; })
+        .def_readwrite("params", &PolicyScores::params)
+        .def("__repr__",
+             [](const PolicyScores& s) {
+                 return "PolicyScores(params=" + std::to_string(s.params.size()) + ")";
+             })
         .def(py::pickle(
-            [](const PolicyScores& s) { return py::make_tuple(s.exploration, s.final); },
+            [](const PolicyScores& s) { return py::make_tuple(s.exploration, s.final, s.params); },
             [](py::tuple t) {
-                if (t.size() != 2)
+                if (t.size() != 3)
                     throw std::runtime_error("Invalid state for PolicyScores");
-                return PolicyScores{t[0].cast<ExplorationScore>(), t[1].cast<FinalizationScore>()};
+                return PolicyScores{t[0].cast<PolicyProgram>(), t[1].cast<PolicyProgram>(),
+                                    t[2].cast<std::vector<float>>()};
             }));
 
     py::class_<ActionSelection>(m, "ActionSelection")

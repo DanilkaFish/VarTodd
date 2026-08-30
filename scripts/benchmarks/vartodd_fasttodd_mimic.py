@@ -151,7 +151,7 @@ def _policy_config(args: argparse.Namespace, *, stage: str) -> PolicyConfig:
         ),
         selection=ActionSelection(count=1, mode="best", temperature=0.0),
         pool=ActionPool(final_size=1),
-        tohpe=TohpeSearch(pool=SourcePool(keep=0, reserve=0)),
+        tohpe=TohpeSearch(pool=SourcePool(keep=1, reserve=0)),
         tohpeprefix=TohpePrefixSearch(
             sampling=tohpe_sampling,
             pool=SourcePool(keep=pool_size, reserve=0),
@@ -286,7 +286,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--time-limit", default=None, help="optional cooperative time limit, e.g. 4h, 30m, 60s")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--max-stages", type=int, default=10000)
-    parser.add_argument("--z-min-buckets", type=int, default=1_000_000_000)
+    parser.add_argument("--z-min-buckets", type=int, default=0)
     parser.add_argument("--z-max-buckets", type=int, default=1_000_000_000)
     parser.add_argument("--tohpe-z-choices", type=int, default=1)
     parser.add_argument("--todd-actions-per-bucket", type=int, default=1)

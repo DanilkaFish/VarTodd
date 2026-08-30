@@ -28,7 +28,7 @@ NATIVE_LOWER = -1.0
 NATIVE_UPPER = 1.0
 ELITE_COUNT = 6
 ELITE_MIN_DISTANCE = 0.05
-OPTIMIZER_WORKERS = 8
+OPTIMIZER_WORKERS = 12
 SCORE_SEED_COUNT = 4
 ROBUST_SPREAD_WEIGHT = 0.3
 PHASE_EVALUATIONS = 3_600
@@ -36,8 +36,8 @@ TOTAL_EVALUATIONS = 2 * PHASE_EVALUATIONS
 Z_MAX_BUCKET_CAP = 50_000
 Z_LIMIT_BUCKET_CAP = 200_000
 SAMPLE_COUNT_MAX = 100
-TODD_RESERVE_MAX = 6
-Z_MIN_CAP = 300
+TODD_RESERVE_MAX = 0
+Z_MIN_CAP = 0
 
 _seed_rng = random.Random(40)
 
@@ -195,7 +195,7 @@ class Evaluator(BaseEvaluator):
 
     def policy_mapping(self):
         ranks = [0]
-        pool_score = ExplorationScore([self.map_par(_w_tanh) for _ in range(5)], [self.map_par(sigmoid) for _ in range(5)],  pow=1)
+        pool_score = ExplorationScore([self.map_par(_w_tanh) for _ in range(5)],  pow=1)
         final_weights = [self.map_par(_w_tanh) for _ in range(6)]
         final_centers = [self.map_par(sigmoid) for _ in range(6)]
         final_score = FinalizationScore(final_weights, final_centers, pow=2)
@@ -232,18 +232,18 @@ class Evaluator(BaseEvaluator):
         self.set_action_selection(
             ActionSelection(count=2, mode="softmax", temperature=0.2)
         )
-        self.set_action_pool(ActionPool(final_size=18))
+        self.set_action_pool(ActionPool(final_size=30))
         self.set_tohpe_search(
             TohpeSearch(
                 sampling=sampling,
-                pool=SourcePool(keep=12, reserve=0),
-                z_choices=4,
+                pool=SourcePool(keep=24, reserve=0),
+                z_choices=2,
             )
         )
         self.set_todd_search(
             ToddSearch(
                 sampling=sampling,
-                pool=SourcePool(keep=12, reserve=todd_reserve),
+                pool=SourcePool(keep=24, reserve=todd_reserve),
                 actions_per_bucket=2,
                 buckets=ZBucketSearch(
                     min_buckets=z_min,

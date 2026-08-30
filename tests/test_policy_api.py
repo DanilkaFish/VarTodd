@@ -528,6 +528,100 @@ class TestCppCrossCheck(unittest.TestCase):
                 )
 
 
+def _native_module():
+    """The newest built extension exposing PolicyProgram, or None.
+
+    Several build configurations write their own .so under pyvartodd/. Only one
+    may be imported per process -- pybind11 refuses a second registration of the
+    same types -- so the freshest one is tried first and the search stops at the
+    first successful import.
+    """
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+    candidates = []
+    for module, relative in (
+        ("pyvartodd.Release.pyvartodd", "pyvartodd/Release/pyvartodd.cpython-312-x86_64-linux-gnu.so"),
+        ("pyvartodd.Debug.pyvartodd", "pyvartodd/Debug/pyvartodd.cpython-312-x86_64-linux-gnu.so"),
+        ("pyvartodd.pyvartodd", "pyvartodd/pyvartodd.cpython-312-x86_64-linux-gnu.so"),
+    ):
+        path = os.path.join(root, relative)
+        if os.path.isfile(path):
+            candidates.append((os.path.getmtime(path), module))
+
+    for _, module in sorted(candidates, reverse=True):
+        try:
+            imported = __import__(module, fromlist=["PolicyProgram"])
+        except Exception:
+            continue
+        # A stale build imports fine but predates PolicyProgram; it has already
+        # registered its types, so no other candidate can load in this process.
+        return imported if hasattr(imported, "PolicyProgram") else None
+    return None
+
+
+class TestNativeBinding(unittest.TestCase):
+    """The compiled program must agree with the Python side that produced it."""
+
+    def setUp(self):
+        self.native = _native_module()
+        if self.native is None or not hasattr(self.native, "PolicyProgram"):
+            self.skipTest("pyvartodd with PolicyProgram not built")
+
+    def test_knob_tables_match_the_engine(self):
+        # The Python knob list exists so errors arrive at authoring time; the
+        # engine's table is authoritative. If they drift, a policy could pass
+        # Python validation and be rejected by C++ (or worse, read a different
+        # knob than the author named).
+        from policy_expr.expr import KNOB_NAMES
+
+        self.assertEqual(list(self.native.policy_knob_names()), list(KNOB_NAMES))
+
+    def test_site_availability_matches_the_engine(self):
+        from policy_expr.expr import SITE_CODE, SITE_KNOBS
+
+        for site, code in SITE_CODE.items():
+            self.assertEqual(
+                set(self.native.policy_site_knobs(code)),
+                set(SITE_KNOBS[site]),
+                f"site knob sets differ for {site}",
+            )
+
+    def test_native_evaluation_matches_the_reference(self):
+        bound = branchy_final.bind([2.0, 3.0])
+        program = bound.native()
+        frame = dict(red=10, bn=5, dn=4, rank_red=2, pool_size=20)
+        for dim in (3, 7, 12):
+            self.assertAlmostEqual(
+                program.evaluate(dim=dim, params=bound.params, **frame),
+                bound.evaluate(dim=dim, **frame),
+                places=5,
+            )
+
+    def test_native_reports_the_fast_path(self):
+        @policy.exploration
+        def greedy_expr(k, p, fn):
+            return k.nred * 2.0
+
+        self.assertTrue(greedy_expr.bind([]).native().ranks_fixed_y_by_reduction)
+        # ratio_explore reads nbucket, so it must give the fast path up
+        self.assertFalse(ratio_explore.bind([1.0]).native().ranks_fixed_y_by_reduction)
+
+    def test_native_program_pickles(self):
+        program = branchy_final.bind([2.0, 3.0]).native()
+        restored = pickle.loads(pickle.dumps(program))
+        frame = dict(red=10, dim=7, bn=5, dn=4, rank_red=2, pool_size=20, params=[2.0, 3.0])
+        self.assertAlmostEqual(restored.evaluate(**frame), program.evaluate(**frame), places=6)
+
+    def test_native_rejects_site_violations(self):
+        from policy_expr.expr import KNOB_INDEX
+
+        with self.assertRaises(Exception) as ctx:
+            self.native.PolicyProgram([0], [KNOB_INDEX["tohpe"]], [], 0, 0)
+        self.assertIn("tohpe", str(ctx.exception))
+
+
 class TestDiscoverability(unittest.TestCase):
     def test_describe_knobs_covers_both_sites(self):
         text = describe_knobs()

@@ -1,8 +1,8 @@
 // Unit checks for the policy expression VM.
 //
-// The equivalence checks below compare compiled programs against the legacy
-// ScoringFunction forms in todd_generator.hpp. They are the gate for the
-// cutover: they must pass while both implementations still exist.
+// The equivalence checks compare compiled programs against a frozen copy of
+// the scoring functions the VM replaced (see namespace legacy below), pinning
+// the new implementation to the old behaviour permanently.
 
 #include "policy_expr.hpp"
 #include "todd_generator.hpp"
@@ -18,6 +18,153 @@
 namespace {
 
 using namespace todd;
+
+// --- frozen copy of the replaced scoring implementation ----------------------
+//
+// These reproduce ScoringFunction / ExplorationScore / FinalizationScore as
+// they stood before the expression VM replaced them (todd_generator.hpp,
+// commit 9027cb6). They are the reference the compiled programs are checked
+// against, kept here verbatim so the equivalence gate survives the cutover
+// rather than disappearing with the code it validated. Do not "fix" them --
+// their whole value is being an unchanged record of the old behaviour.
+namespace legacy {
+
+struct ScoringFunction {
+    enum Function { LINEAR, POLYNOM, DISTANCE, LOGARITHMIC, SIGMOID };
+    Function type = LINEAR;
+    float    pow  = 2.0;
+
+    float evaluate(std::span<const float> weights, std::span<const float> centers, std::span<const float> x,
+                   float first_center_scale = 1.0f) const {
+        switch (type) {
+        case LINEAR:
+            return linear_scoring(weights, x);
+        case POLYNOM:
+            return polynom_scoring(weights, centers, x, first_center_scale);
+        case DISTANCE:
+            return distance_scoring(weights, x);
+        case SIGMOID:
+            return sigmoid_scoring(weights, x);
+        case LOGARITHMIC:
+            return logarithmic_scoring(weights, x);
+        }
+        throw std::runtime_error("Wrong function type for evaluation");
+    }
+
+    float linear_scoring(std::span<const float> w, std::span<const float> x) const {
+        float             sum = 0.0f;
+        const std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i)
+            sum += w[i] * x[i];
+        return sum;
+    }
+
+    float polynom_scoring(std::span<const float> w, std::span<const float> c, std::span<const float> x,
+                          float first_center_scale = 1.0f) const {
+        float             sum = 0.0f;
+        const std::size_t n   = std::min({w.size(), c.size(), x.size()});
+        if (pow >= 0) {
+            for (std::size_t i = 0; i < n; ++i) {
+                const float center = i == 0 ? c[i] * first_center_scale : c[i];
+                const float d      = std::abs(x[i] - center);
+                sum += w[i] * ((pow == 2.0f) ? d * d : std::pow(d, pow));
+            }
+        } else {
+            for (std::size_t i = 0; i < n; ++i) {
+                const float center = i == 0 ? c[i] * first_center_scale : c[i];
+                sum += w[i] * std::pow(1 / std::max(std::abs(x[i] - center), 0.001f), -pow);
+            }
+        }
+        return sum;
+    }
+
+    float distance_scoring(std::span<const float> w, std::span<const float> x) const {
+        float             sum = 0.0f;
+        const std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i)
+            sum -= (x[i] - w[i]) * (x[i] - w[i]);
+        return sum;
+    }
+
+    float sigmoid_scoring(std::span<const float> w, std::span<const float> x) const {
+        float             sum = 0.0f;
+        const std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i)
+            sum += w[i] * ((pow == 2.0f) ? x[i] * x[i] : std::pow(x[i], pow));
+        return 1.0f / (1.0f + std::exp(-sum));
+    }
+
+    float logarithmic_scoring(std::span<const float> w, std::span<const float> x) const {
+        float             sum = 0.0f;
+        const std::size_t n   = std::min(w.size(), x.size());
+        for (std::size_t i = 0; i < n; ++i)
+            sum += w[i] * std::log(std::max(1e-6f, x[i]));
+        return sum;
+    }
+};
+
+struct ExplorationScore {
+    std::vector<float> weights = {0, 0, 0, 0, 0};
+    std::vector<float> centers = {0, 0, 0, 0, 0};
+    float              bn      = 1;
+    float              wvwn    = 1;
+    float              dn      = 1;
+    ScoringFunction    sc      = {};
+
+    ExplorationScore() = default;
+    ExplorationScore(float wred, float wdim, float wbucket, float wvw, float wz)
+        : weights{wred, wdim, wbucket, wvw, wz} {}
+    ExplorationScore(std::vector<float> w, std::vector<float> c, ScoringFunction s)
+        : weights{std::move(w)}, centers{std::move(c)}, sc{s} {}
+    ExplorationScore(std::vector<float> w, std::vector<float> c, float pow)
+        : weights{std::move(w)}, centers{std::move(c)}, sc{ScoringFunction::POLYNOM, pow} {}
+
+    float evaluate_features(Int reduction, Int basis_dim, Int bucket_size, Int vec_weight, Int z_weight,
+                            Int z_size) const {
+        const std::array<float, 5> x = {
+            reduction / bn / 2.0f,
+            basis_dim / dn,
+            bucket_size / bn,
+            vec_weight / wvwn,
+            z_weight / static_cast<float>(std::max<Int>(1, z_size)),
+        };
+        return sc.evaluate(weights, centers, x, 1.0f / bn / 2.0f);
+    }
+
+    bool ranks_fixed_y_by_reduction() const noexcept {
+        const auto weight = [this](std::size_t i) { return i < weights.size() ? weights[i] : 0.0f; };
+        return sc.type == ScoringFunction::LINEAR && bn > 0.0f && weight(0) >= 0.0f && weight(2) == 0.0f &&
+               weight(4) == 0.0f;
+    }
+};
+
+struct FinalizationScore {
+    std::vector<float> weights = {0, 0, 0, 0, 0, 0};
+    std::vector<float> centers = {0, 0, 0, 0, 0, 0};
+    float              bn      = 1;
+    float              wvwn    = 1;
+    float              dn      = 1;
+    ScoringFunction    sc      = {};
+
+    FinalizationScore() = default;
+    FinalizationScore(std::vector<float> w, std::vector<float> c, ScoringFunction s)
+        : weights{std::move(w)}, centers{std::move(c)}, sc{s} {}
+
+    bool needs_tohpe_dim() const { return weights.size() > 5 && weights[5] != 0.0f; }
+
+    float evaluate(const Candidate& cand) const {
+        const std::array<float, 6> x = {cand.reduction / bn / 2,
+                                        cand.basis_dim / dn,
+                                        cand.bucket_size / bn,
+                                        cand.vec_weight / wvwn,
+                                        cand.z_weight / static_cast<float>(cand.z_size),
+                                        cand.tohpe_dim / dn};
+        const std::size_t          n = needs_tohpe_dim() ? 6 : 5;
+        return sc.evaluate(weights, centers, std::span<const float>(x.data(), n), 1.0f / bn / 2.0f);
+    }
+};
+
+} // namespace legacy
 
 void require(bool ok, const char* message) {
     if (!ok)
@@ -240,7 +387,7 @@ void check_fast_path_matches_legacy_predicate() {
     };
 
     for (const Case& c : cases) {
-        ExplorationScore legacy(c.w0, c.w1, c.w2, c.w3, c.w4);
+        legacy::ExplorationScore legacy(c.w0, c.w1, c.w2, c.w3, c.w4);
         legacy.bn = 4.0f;
         legacy.dn = 4.0f;
         legacy.wvwn = 4.0f;
@@ -315,7 +462,8 @@ void check_linear_score_equivalence() {
         const float dn        = 1.0f + static_cast<float>(v_dist(rng));
         const float wvwn      = 1.0f + static_cast<float>(v_dist(rng));
 
-        ExplorationScore legacy(weights, {0, 0, 0, 0, 0}, ScoringFunction{ScoringFunction::LINEAR, 1.0f});
+        legacy::ExplorationScore legacy(weights, {0, 0, 0, 0, 0},
+                                        legacy::ScoringFunction{legacy::ScoringFunction::LINEAR, 1.0f});
         legacy.bn   = bn;
         legacy.dn   = dn;
         legacy.wvwn = wvwn;
@@ -366,7 +514,7 @@ void check_polynom_score_equivalence() {
         const float dn        = 1.0f + static_cast<float>(v_dist(rng));
         const float wvwn      = 1.0f + static_cast<float>(v_dist(rng));
 
-        ExplorationScore legacy(weights, centers, 2.0f);
+        legacy::ExplorationScore legacy(weights, centers, 2.0f);
         legacy.bn   = bn;
         legacy.dn   = dn;
         legacy.wvwn = wvwn;
@@ -448,12 +596,12 @@ void check_finalization_six_feature_equivalence() {
         const float dn   = 1.0f + static_cast<float>(v_dist(rng));
         const float wvwn = 1.0f + static_cast<float>(v_dist(rng));
 
-        FinalizationScore legacy(weights, {0, 0, 0, 0, 0, 0}, ScoringFunction{ScoringFunction::LINEAR, 1.0f});
+        legacy::FinalizationScore legacy(weights, {0, 0, 0, 0, 0, 0},
+                                         legacy::ScoringFunction{legacy::ScoringFunction::LINEAR, 1.0f});
         legacy.bn   = bn;
         legacy.dn   = dn;
         legacy.wvwn = wvwn;
-        legacy(cand);
-        const float expected = cand.final_score;
+        const float expected = legacy.evaluate(cand);
 
         auto      prog = PolicyProgram(linear_sum_code(weights, knobs), weights, 0, PolicySite::Finalization);
         KnobFrame f{};

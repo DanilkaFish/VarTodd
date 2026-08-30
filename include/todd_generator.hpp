@@ -2,6 +2,7 @@
 
 #include "algorithms.hpp"
 #include "nullspace.hpp"
+#include "policy_expr.hpp"
 #include "typedef.hpp"
 #include <array>
 #include <cmath>
@@ -138,6 +139,7 @@ struct Stats {
     Int     max_basis              = 0;
     Int     max_reduction          = 0;
     Int     max_bucket             = 0;
+    index_t nonfinite_score_count  = 0;
 };
 
 struct CandidateExport {
@@ -190,155 +192,75 @@ static CandidateExport export_candidate(Candidate const& c) {
     };
 }
 
-// Small scoring wrapper used by exploration/finalization pools.
-struct ScoringFunction {
-    enum Function { LINEAR, POLYNOM, DISTANCE, LOGARITHMIC, SIGMOID };
-    Function type = LINEAR;
-    float    pow  = 2.0;
-    float    evaluate(std::span<const float> weights, std::span<const float> centers, std::span<const float> x) const {
-        switch (type) {
-        case ScoringFunction::LINEAR:
-            return linear_scoring(weights, x);
-        case ScoringFunction::POLYNOM:
-            return polynom_scoring(weights, centers, x);
-        case ScoringFunction::DISTANCE:
-            return distance_scoring(weights, x);
-        case ScoringFunction::SIGMOID:
-            return sigmoid_scoring(weights, x);
-        case ScoringFunction::LOGARITHMIC:
-            return logarithmic_scoring(weights, x);
-        default:
-            throw std::runtime_error("Wrong function type for evaluation");
-        }
-    }
-
-    float linear_scoring(std::span<const float> w, std::span<const float> x) const {
-        float       sum = 0.0f;
-        std::size_t n   = std::min(w.size(), x.size());
-        for (std::size_t i = 0; i < n; ++i) {
-            sum += w[i] * x[i];
-        }
-        return sum;
-    }
-
-    float polynom_scoring(std::span<const float> w, std::span<const float> c, std::span<const float> x) const {
-        float       sum = 0.0f;
-        std::size_t n   = std::min({w.size(), c.size(), x.size()});
-        if (pow >= 0) {
-            for (std::size_t i = 0; i < n; ++i) {
-                const float d = std::abs(x[i] - c[i]);
-                sum += w[i] * ((pow == 2.0f) ? d * d : std::pow(d, pow));
-            }
-        } else {
-            for (std::size_t i = 0; i < n; ++i) {
-                sum += w[i] * std::pow(1 / std::max(std::abs(x[i] - c[i]), 0.001f), -pow);
-            }
-        }
-        return sum;
-    }
-
-    float distance_scoring(std::span<const float> w, std::span<const float> x) const {
-        float       sum = 0.0f;
-        std::size_t n   = std::min(w.size(), x.size());
-        for (std::size_t i = 0; i < n; ++i) {
-            sum -= (x[i] - w[i]) * (x[i] - w[i]);
-        }
-        return sum;
-    }
-
-    float sigmoid_scoring(std::span<const float> w, std::span<const float> x) const {
-        float       sum = 0.0f;
-        std::size_t n   = std::min(w.size(), x.size());
-        for (std::size_t i = 0; i < n; ++i) {
-            sum += w[i] * ((pow == 2.0f) ? x[i] * x[i] : std::pow(x[i], pow));
-        }
-        float z = sum;
-        return 1.0f / (1.0f + std::exp(-z));
-    }
-
-    float logarithmic_scoring(std::span<const float> w, std::span<const float> x) const {
-        float       sum = 0.0f;
-        std::size_t n   = std::min(w.size(), x.size());
-        for (std::size_t i = 0; i < n; ++i) {
-            sum += w[i] * std::log(std::max(1e-6f, x[i]));
-        }
-        return sum;
-    }
-};
-
-struct ExplorationScore {
-    std::vector<float> weights = {0, 0, 0, 0, 0};
-    std::vector<float> centers = {0, 0, 0, 0, 0};
-
-    float           bn          = 1;
-    float           wvwn        = 1;
-    float           dn          = 1;
-    ScoringFunction sc          = {};
-    explicit ExplorationScore() = default;
-    ExplorationScore(float wred, float wdim, float wbucket, float wvw, float wz)
-        : weights{wred, wdim, wbucket, wvw, wz} {}
-    ExplorationScore(std::vector<float> weights, std::vector<float> centers, ScoringFunction sc)
-        : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
-    ExplorationScore(std::vector<float> weights, std::vector<float> centers, float pow)
-        : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
-    float evaluate_features(Int reduction, Int basis_dim, Int bucket_size, Int vec_weight, Int z_weight,
-                            Int z_size) const {
-        const std::array<float, 5> x = {
-            reduction / bn / 2.0f,
-            basis_dim / dn,
-            bucket_size / bn,
-            vec_weight / wvwn,
-            z_weight / static_cast<float>(std::max<Int>(1, z_size)),
-        };
-        return sc.evaluate(weights, centers, x);
-    }
-    bool ranks_fixed_y_by_reduction() const noexcept {
-        const auto weight = [this](std::size_t i) { return i < weights.size() ? weights[i] : 0.0f; };
-        return sc.type == ScoringFunction::LINEAR && bn > 0.0f && weight(0) >= 0.0f && weight(2) == 0.0f &&
-               weight(4) == 0.0f;
-    }
-    auto operator()(Candidate& cand) const {
-        cand.pool_score = evaluate_features(cand.reduction, cand.basis_dim, cand.bucket_size, cand.vec_weight,
-                                            cand.z_weight, cand.z_size);
-        return std::make_pair(cand.pool_score, 0);
-    }
-};
-
-struct FinalizationScore {
-    std::vector<float> weights = {0, 0, 0, 0, 0, 0};
-    std::vector<float> centers = {0, 0, 0, 0, 0, 0};
-    float              bn      = 1;
-    float              wvwn    = 1;
-    float              dn      = 1;
-    ScoringFunction    sc      = {};
-
-    explicit FinalizationScore() = default;
-    FinalizationScore(float wred, float wdim, float wbucket, float wvw, float wz, float wtohpe_dim)
-        : weights{wred, wdim, wbucket, wvw, wz, wtohpe_dim} {}
-    FinalizationScore(std::vector<float> weights, std::vector<float> centers, ScoringFunction sc)
-        : weights{std::move(weights)}, centers{std::move(centers)}, sc{sc} {}
-    FinalizationScore(std::vector<float> weights, std::vector<float> centers, float pow)
-        : weights{std::move(weights)}, centers{std::move(centers)}, sc{ScoringFunction::POLYNOM, pow} {}
-    bool needs_tohpe_dim() const { return weights.size() > 5 && weights[5] != 0.0f; }
-    auto operator()(Candidate& cand) {
-        std::array<float, 6> x = {cand.reduction / bn / 2,
-                                  cand.basis_dim / dn,
-                                  cand.bucket_size / bn,
-                                  cand.vec_weight / wvwn,
-                                  cand.z_weight / static_cast<float>(cand.z_size),
-                                  cand.tohpe_dim / dn};
-        const std::size_t    n = needs_tohpe_dim() ? 6 : 5;
-
-        cand.final_score = sc.evaluate(weights, centers, std::span<const float>(x.data(), n));
-        return std::make_pair(cand.final_score, cand.tohpe_dim);
-    }
-};
-
 constexpr Int k_all_one_hot_samples = -1;
 
+// Scoring functor over a compiled policy expression. Holds the program and the
+// bound free scalars by reference; both outlive the pools that score with them,
+// which live for one policy iteration.
+struct PolicyScorer {
+    const PolicyProgram*   program = nullptr;
+    std::span<const float> params{};
+    const KnobFrame*       frame = nullptr; // per-iteration normalizers
+
+    float evaluate(const Candidate& cand) const noexcept {
+        KnobFrame f = *frame;
+        f.red       = static_cast<float>(cand.reduction);
+        f.dim       = static_cast<float>(cand.basis_dim);
+        f.bucket    = static_cast<float>(cand.bucket_size);
+        f.yw        = static_cast<float>(cand.vec_weight);
+        f.zw        = static_cast<float>(cand.z_weight);
+        f.zsize     = static_cast<float>(cand.z_size);
+        f.max_red   = static_cast<float>(cand.possible_max_reduction);
+        f.tohpe     = static_cast<float>(cand.tohpe_dim);
+        f.rank_red  = static_cast<float>(cand.num_better_red);
+        f.rank_dim  = static_cast<float>(cand.num_better_dim);
+        f.rank_score = static_cast<float>(cand.num_better_pool_score);
+        f.pool_size  = static_cast<float>(cand.pool_size);
+        f.pool_tohpe = static_cast<float>(cand.pool_tohpe_size);
+        f.pool_prefix = static_cast<float>(cand.pool_tohpeprefix_size);
+        f.pool_todd  = static_cast<float>(cand.pool_todd_size);
+        f.source     = static_cast<float>(cand.source);
+        f.bucket_id  = static_cast<float>(cand.bucket_id);
+        f.k_idx      = static_cast<float>(cand.k);
+        f.l_idx      = static_cast<float>(cand.l);
+        return program->eval(f, params);
+    }
+};
+
+// Ranks candidates as each source pool is filled.
+struct ExplorationScorer : PolicyScorer {
+    auto operator()(Candidate& cand) const noexcept {
+        cand.pool_score = evaluate(cand);
+        return std::make_pair(cand.pool_score, 0);
+    }
+    bool ranks_fixed_y_by_reduction() const noexcept {
+        return program->ranks_fixed_y_by_reduction();
+    }
+};
+
+// Ranks the merged pool before selection.
+struct FinalizationScorer : PolicyScorer {
+    auto operator()(Candidate& cand) const noexcept {
+        cand.final_score = evaluate(cand);
+        return std::make_pair(cand.final_score, cand.tohpe_dim);
+    }
+    bool needs_tohpe_dim() const noexcept {
+        return program->uses(Knob::tohpe) || program->uses(Knob::ntohpe);
+    }
+};
+
+// A single `nred` instruction: score = reduction / bn / 2. This is the
+// reduction-greedy default the previous ExplorationScore{1,0,0,0,0} and
+// FinalizationScore{1,0,0,0,0,0} expressed, kept as the default so an
+// unconfigured PolicyConfig still behaves as it always did.
+inline PolicyProgram greedy_reduction_program(PolicySite site) {
+    return PolicyProgram({Instr{Op::LoadKnob, static_cast<std::uint16_t>(Knob::nred)}}, {}, 0, site);
+}
+
 struct PolicyScores {
-    ExplorationScore  exploration{1.0, 0., 0., 0., 0.};
-    FinalizationScore final{1.0, 0., 0., 0., 0.0, 0.};
+    PolicyProgram      exploration = greedy_reduction_program(PolicySite::ExplorationZ);
+    PolicyProgram      final       = greedy_reduction_program(PolicySite::Finalization);
+    std::vector<float> params;
 };
 
 struct ActionSelection {
