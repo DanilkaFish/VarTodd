@@ -622,6 +622,37 @@ class TestNativeBinding(unittest.TestCase):
         self.assertIn("tohpe", str(ctx.exception))
 
 
+class TestKnobRedundancy(unittest.TestCase):
+    """Pin identities between knobs that look independent but are not."""
+
+    def test_nmax_red_equals_nbucket(self):
+        # max_red is always 2 * bucket_size and both normalize by the same
+        # per-iteration bn, so nmax_red carries no information beyond nbucket.
+        # Documented in KNOB_DOC; pinned here so a normalizer change cannot
+        # silently make the documentation wrong in either direction.
+        @policy.exploration
+        def a(k, p, fn):
+            return k.nmax_red
+
+        @policy.exploration
+        def b(k, p, fn):
+            return k.nbucket
+
+        for bucket, bn, red in ((3, 10, 4), (7, 10, 5), (10, 10, 9), (2, 40, 1)):
+            frame = dict(red=red, bucket=bucket, max_red=2 * bucket, bn=bn, dn=1, wvwn=1)
+            self.assertAlmostEqual(
+                a.bind([]).evaluate(**frame),
+                b.bind([]).evaluate(**frame),
+                places=9,
+                msg=f"nmax_red and nbucket diverged at bucket={bucket}, bn={bn}",
+            )
+
+    def test_knob_doc_records_the_identity(self):
+        from policy_expr.expr import KNOB_DOC
+
+        self.assertIn("nbucket", KNOB_DOC["nmax_red"])
+
+
 class TestReportRendering(unittest.TestCase):
     """A converged policy must read back as the expression it was written as.
 

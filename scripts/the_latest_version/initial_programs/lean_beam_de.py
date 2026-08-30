@@ -42,14 +42,14 @@ def explore_score(k, p, fn):
 
 @policy.final
 def final_score(k, p, fn):
-    """Reduction traded against how much of the bucket's ceiling it realized.
+    """Reduction traded against the size of the bucket that produced it.
 
-    max_red is the bucket's theoretical ceiling (2 * bucket_size). The ratio
-    nred/nmax_red says how much of the available reduction this action actually
-    took -- a signal no weighted sum over the two can express, since it is
-    their quotient rather than their difference.
+    The ratio is reduction per unit of bucket, a quotient no weighted sum over
+    the two can express. Note this is *not* "fraction of the bucket's ceiling":
+    nred and nbucket share the same per-iteration normalizer bn, so it reduces
+    to red / (2 * bucket_size) only because the bn factors cancel.
     """
-    realized = k.nred / fn.max(k.nmax_red, 0.02)
+    realized = k.nred / fn.max(k.nbucket, 0.02)
     return (k.nred * p.w(0)
             + realized * p.w(1)
             + fn.sqrt(fn.max(k.ndim, 0.0)) * p.w(2)
