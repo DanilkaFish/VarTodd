@@ -278,27 +278,46 @@ _BINARY_FN = {OP_MIN: "fn.min", OP_MAX: "fn.max", OP_POW: "fn.pow",
               OP_AND: "fn.and_", OP_OR: "fn.or_"}
 
 
-def _render(node: Node) -> str:
+def render_with_params(node: "Node", params: Sequence[float], precision: int = 3) -> str:
+    """Render an expression with p.w(i) replaced by the bound values.
+
+    Used for run reports: a converged policy shows the actual coefficients it
+    settled on, in the same syntax it was written in.
+    """
+    return _render(node, params, precision)
+
+
+def _render(node: Node, params: Sequence[float] = None, precision: int = 3) -> str:
+    def sub(child: Node) -> str:
+        return _render(child, params, precision)
+
     op = node.op
     if op == OP_LOAD_KNOB:
         return f"k.{KNOB_NAMES[int(node.arg)]}"
     if op == OP_LOAD_CONST:
         value = node.arg
-        return repr(int(value)) if value == int(value) else repr(value)
+        if value == int(value):
+            return repr(int(value))
+        # A literal that has been through float32 prints as 0.05000000074505806
+        # otherwise, which buries the value the author actually wrote.
+        return repr(round(value, 6))
     if op == OP_LOAD_PARAM:
-        return f"p.w({int(node.arg)})"
+        index = int(node.arg)
+        if params is not None and index < len(params):
+            return f"{params[index]:+.{precision}f}".rstrip("0").rstrip(".")
+        return f"p.w({index})"
     if op == OP_NEG:
-        return f"(-{_render(node.children[0])})"
+        return f"(-{sub(node.children[0])})"
     if op in _UNARY_FN:
-        return f"{_UNARY_FN[op]}({_render(node.children[0])})"
+        return f"{_UNARY_FN[op]}({sub(node.children[0])})"
     if op in _BINARY_SYMBOL:
-        left, right = (_render(c) for c in node.children)
+        left, right = (sub(c) for c in node.children)
         return f"({left} {_BINARY_SYMBOL[op]} {right})"
     if op in _BINARY_FN:
-        left, right = (_render(c) for c in node.children)
+        left, right = (sub(c) for c in node.children)
         return f"{_BINARY_FN[op]}({left}, {right})"
     if op == OP_SELECT:
-        cond, a, b = (_render(c) for c in node.children)
+        cond, a, b = (sub(c) for c in node.children)
         return f"fn.where({cond}, {a}, {b})"
     return f"<op {op}>"
 

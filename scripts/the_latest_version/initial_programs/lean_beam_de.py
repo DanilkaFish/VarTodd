@@ -23,16 +23,38 @@ N_EVAL = 288
 
 @policy.exploration
 def explore_score(k, p, fn):
-    """Linear in the five exploration knobs."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
-            + k.nyw * p.w(3) + k.nzw * p.w(4))
+    """Saturating reduction reward, plus a sparsity preference.
+
+    tanh(nred * gain) flattens once a candidate is clearly good, so the pool
+    stops spending its capacity separating two large reductions and keeps
+    discriminating among the many small ones -- which is where a beam of two
+    actually has a choice to make. p.w(1) is inside the tanh, so the optimizer
+    controls where saturation sets in rather than only how much it is worth.
+
+    Sparse y and z vectors are preferred multiplicatively: a dense candidate is
+    damped rather than merely penalized by an additive term it can outweigh
+    with a large reduction.
+    """
+    saturating = fn.tanh(k.nred * fn.abs(p.w(1)) + 0.01) * p.w(0)
+    sparsity = fn.sigmoid(p.w(2) - (k.nyw + k.nzw) * fn.abs(p.w(3)))
+    return saturating * sparsity + k.ndim * p.w(4)
 
 
 @policy.final
 def final_score(k, p, fn):
-    """Linear in the six finalization knobs."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
-            + k.nyw * p.w(3) + k.nzw * p.w(4) + k.ntohpe * p.w(5))
+    """Reduction traded against how much of the bucket's ceiling it realized.
+
+    max_red is the bucket's theoretical ceiling (2 * bucket_size). The ratio
+    nred/nmax_red says how much of the available reduction this action actually
+    took -- a signal no weighted sum over the two can express, since it is
+    their quotient rather than their difference.
+    """
+    realized = k.nred / fn.max(k.nmax_red, 0.02)
+    return (k.nred * p.w(0)
+            + realized * p.w(1)
+            + fn.sqrt(fn.max(k.ndim, 0.0)) * p.w(2)
+            + k.ntohpe * p.w(3)
+            - k.nzw * fn.abs(p.w(4)))
 
 
 class Evaluator(BaseEvaluator):
@@ -47,8 +69,12 @@ class Evaluator(BaseEvaluator):
     def policy_mapping(self):
         self.set_scores(
             PolicyScores(
-                exploration=explore_score.bind([self.float_range(-4, 4) for _ in range(5)]),
-                final=final_score.bind([self.float_range(-4, 4) for _ in range(6)]),
+                exploration=explore_score.bind(
+                    [self.float_range(-4, 4) for _ in range(explore_score.n_params)]
+                ),
+                final=final_score.bind(
+                    [self.float_range(-4, 4) for _ in range(final_score.n_params)]
+                ),
             )
         )
         samples = SamplingBudget(one_hot="all", sparse=8, dense=self.int_range(8, 40), sparse_max_weight=2)

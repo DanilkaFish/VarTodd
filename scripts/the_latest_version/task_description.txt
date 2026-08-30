@@ -418,13 +418,17 @@ gN <start>-><end> red=<N> <profile> sN
   it was written as, with its bound parameters substituted, so it can be read
   back and edited in the same form it was authored:
 ```text
-pool=((k.nred * 1.83) + (k.ndim * -0.41))
-final=((k.nred * 2.10) - (k.nrank_red * 0.77))
+pool=((k.nred * +1.83) + (k.ndim * -0.41))
+final=(((k.nred * +2.1) * fn.max((1 - k.nrank_red), 0.05)) + (k.ntohpe * -0.77))
 ```
+Non-linear forms print the same way, so a converged `fn.tanh`, `fn.exp`,
+`fn.where` or ratio is readable and directly editable.
 
 Converged coefficients are the ranking tendency the run settled on in that rank
 region: a positive coefficient is a tendency to reward the term, a negative one
-to penalize it.
+to penalize it. Read a coefficient in the context of the term it multiplies --
+inside `fn.exp(-x * abs(w))` a larger `w` means a sharper decay, not a stronger
+reward.
 
 Always compare configured against actual: `pool=final` vs `pool:<total>`,
 `z_buckets` vs `z:<...>`, keep/reserve vs `src=H/T`.

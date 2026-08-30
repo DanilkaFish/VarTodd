@@ -622,6 +622,60 @@ class TestNativeBinding(unittest.TestCase):
         self.assertIn("tohpe", str(ctx.exception))
 
 
+class TestReportRendering(unittest.TestCase):
+    """A converged policy must read back as the expression it was written as.
+
+    Run reports are what the mutation loop reads to decide the next change, so
+    an opaque rendering (a program id, or a weight vector for an expression
+    that is not a weighted sum) would break that loop.
+    """
+
+    def test_bound_policy_substitutes_its_parameters(self):
+        rendered = branchy_final.bind([1.83, -0.41]).rendered()
+        self.assertIn("k.nred", rendered)
+        self.assertIn("+1.83", rendered)
+        self.assertIn("-0.41", rendered)
+        self.assertNotIn("p.w(", rendered)
+
+    def test_nonlinear_forms_survive_rendering(self):
+        @policy.final
+        def nonlinear(k, p, fn):
+            return (fn.tanh(k.nred * p.w(0))
+                    + k.nred / fn.max(k.nbucket, 0.05) * p.w(1)
+                    + fn.where(k.dim > 3, k.ndim, 0.0) * p.w(2))
+
+        rendered = nonlinear.bind([1.0, 2.0, 3.0]).rendered()
+        for fragment in ("fn.tanh", "fn.max", "fn.where", "k.nbucket"):
+            self.assertIn(fragment, rendered)
+
+    def test_float32_literals_render_readably(self):
+        # A literal that has round-tripped through float32 must not print as
+        # 0.05000000074505806.
+        @policy.exploration
+        def ratio(k, p, fn):
+            return k.nred / fn.max(k.nbucket, 0.05)
+
+        self.assertIn("0.05", ratio.bind([]).rendered())
+        self.assertNotIn("0.0500000", ratio.bind([]).rendered())
+
+    def test_report_renders_a_compiled_program(self):
+        # The reporting path receives the compiled program plus its parameters,
+        # not the Python expression, so it must reconstruct the source form.
+        native = _native_module()
+        if native is None or not hasattr(native, "PolicyProgram"):
+            self.skipTest("pyvartodd with PolicyProgram not built")
+        try:
+            from mcts_dao import Path
+        except Exception:
+            self.skipTest("mcts_dao requires the harness-supplied variant module")
+
+        bound = branchy_final.bind([1.83, -0.41])
+        rendered = Path._format_score(bound.native(), bound.params)
+        self.assertIn("k.nred", rendered)
+        self.assertIn("+1.83", rendered)
+        self.assertNotIn("PolicyProgram(", rendered)
+
+
 class TestDiscoverability(unittest.TestCase):
     def test_describe_knobs_covers_both_sites(self):
         text = describe_knobs()

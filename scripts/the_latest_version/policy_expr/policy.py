@@ -125,8 +125,18 @@ class BoundPolicy:
         """Evaluate on explicit knob values. For tests and the probe pass."""
         return _reference_eval(self._expr, self._params, knob_values)
 
+    def rendered(self, precision: int = 3) -> str:
+        """The expression with its bound parameters substituted.
+
+        This is what run reports show, so a converged policy reads back as the
+        expression it was authored as rather than as an opaque weight vector.
+        """
+        from .expr import render_with_params
+
+        return render_with_params(self._expr._expr._node, self._params, precision)
+
     def __repr__(self) -> str:
-        return f"{self._expr.name}({', '.join(f'{v:.4g}' for v in self._params)})"
+        return f"{self._expr.name}: {self.rendered()}"
 
     def __reduce__(self):
         return (_rebuild_bound, (self._expr, self._params))

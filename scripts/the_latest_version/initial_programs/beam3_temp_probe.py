@@ -25,16 +25,34 @@ MID_REOPEN_MARGIN = 96
 
 @policy.exploration
 def explore_score(k, p, fn):
-    """Linear in the five exploration knobs."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
-            + k.nyw * p.w(3) + k.nzw * p.w(4))
+    """Reduction gated on the basis having room to sample.
+
+    A binary null space of dimension d holds only 2**d - 1 distinct y vectors,
+    so a high-reduction candidate from a dim-1 basis is a dead end: nothing
+    else can be drawn from it. The gate multiplies the reduction reward by a
+    smooth ramp on dim, which a weighted sum cannot do -- it can only add a
+    dim term that a large reduction outweighs.
+    """
+    room = fn.sigmoid((k.ndim - fn.abs(p.w(2))) * 4.0)
+    return k.nred * p.w(0) * room + k.ndim * p.w(1) - k.nzw * fn.abs(p.w(3))
 
 
 @policy.final
 def final_score(k, p, fn):
-    """Linear in the six finalization knobs."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
-            + k.nyw * p.w(3) + k.nzw * p.w(4) + k.ntohpe * p.w(5))
+    """Rewards being distinct from the rest of the pool, not just being best.
+
+    With beamwidth 3 at temperature 0.35 the selection is stochastic across the
+    top of the pool, so three near-identical actions waste two of the three
+    branches. nrank_score is this candidate's position in the population by
+    pool score; the log term is flat near the top and falls away slowly, which
+    keeps several genuinely different candidates in contention instead of
+    concentrating all the mass on one.
+    """
+    spread = fn.log(k.nrank_score + 0.05) * p.w(1)
+    return (k.nred * p.w(0)
+            + spread
+            + k.ntohpe * p.w(2)
+            + fn.where(k.dim > 3, k.ndim * p.w(3), k.nred * p.w(4)))
 
 
 class Evaluator(BaseEvaluator):
@@ -51,8 +69,12 @@ class Evaluator(BaseEvaluator):
     def policy_mapping(self):
         self.set_scores(
             PolicyScores(
-                exploration=explore_score.bind([self.float_range(-4, 4) for _ in range(5)]),
-                final=final_score.bind([self.float_range(-4, 4) for _ in range(6)]),
+                exploration=explore_score.bind(
+                    [self.float_range(-4, 4) for _ in range(explore_score.n_params)]
+                ),
+                final=final_score.bind(
+                    [self.float_range(-4, 4) for _ in range(final_score.n_params)]
+                ),
             )
         )
         todd_samples = SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2)

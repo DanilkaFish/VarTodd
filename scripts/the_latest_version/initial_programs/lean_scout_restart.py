@@ -34,17 +34,36 @@ def objective(ranks: list[int]) -> float:
 
 @policy.exploration
 def explore_score(k, p, fn):
-    """Linear in the five exploration knobs."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
-            + k.nyw * p.w(3) + k.nzw * p.w(4))
+    """Reduction on a compressed scale, with a tuned y-weight band.
+
+    sqrt flattens the reduction scale so a rank-9 action does not swamp three
+    rank-3 ones while the descent is still cheap; the restarts then re-tune
+    around whatever band the scout found. The y-weight term is a soft band
+    rather than a monotone preference: exp of a negative square peaks at the
+    center and falls off either side, so the policy can prefer a *particular*
+    y weight instead of only "more" or "less".
+    """
+    compressed = fn.sqrt(fn.max(k.nred, 0.0)) * p.w(0)
+    offset = k.nyw - p.w(2)
+    band = fn.exp(-(offset * offset) * fn.abs(p.w(3)))
+    return compressed + band * p.w(1) + k.ndim * p.w(4)
 
 
 @policy.final
 def final_score(k, p, fn):
-    """Linear, but y weight is scored by distance from a tuned center."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
-            + fn.abs(k.nyw - p.w(6)) * p.w(3) + k.nzw * p.w(4)
-            + k.ntohpe * p.w(5))
+    """Reduction, discounted by how much of the pool already beats it.
+
+    (1 - nrank_red) is 1 for the population's best candidate and falls toward 0
+    for the worst, so multiplying by it makes a mediocre reduction worth
+    strictly less than the same reduction in a weak pool. That is a product of
+    two knobs; an additive rank term would let a large reduction buy its way
+    back regardless of the company it is in.
+    """
+    standing = 1.0 - k.nrank_red
+    return (k.nred * p.w(0) * fn.max(standing, 0.05)
+            + k.ndim * p.w(1)
+            + k.ntohpe * p.w(2)
+            + fn.abs(k.nyw - p.w(4)) * p.w(3))
 
 
 class Evaluator(BaseEvaluator):
@@ -55,10 +74,10 @@ class Evaluator(BaseEvaluator):
         return self.map_par(lambda x: int(round(low + (high - low) * np.clip((float(x) + 1.0) / 2.0, 0.0, 1.0))))
 
     def policy_mapping(self):
-        # map_par order is unchanged: five exploration weights, six final
-        # weights, then the y-weight center.
-        explore_w = [self.float_range(-4, 4) for _ in range(5)]
-        final_w = [self.float_range(-4, 4) for _ in range(6)]
+        # The last final parameter is a y-weight center, so it is mapped to
+        # [0, 1] rather than the symmetric coefficient range.
+        explore_w = [self.float_range(-4, 4) for _ in range(explore_score.n_params)]
+        final_w = [self.float_range(-4, 4) for _ in range(final_score.n_params - 1)]
         final_w.append(self.float_range(0.0, 1.0))
         self.set_scores(
             PolicyScores(

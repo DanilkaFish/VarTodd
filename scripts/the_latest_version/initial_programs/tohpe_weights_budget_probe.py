@@ -35,17 +35,40 @@ def objective(ranks: list[int]) -> float:
 
 @policy.exploration
 def explore_score(k, p, fn):
-    """Linear in the five exploration knobs."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
-            + k.nyw * p.w(3) + k.nzw * p.w(4))
+    """Reduction weighted by how cheap the bucket it came from was.
+
+    This is TOHPE's stage, where candidates are cheap and plentiful, so the
+    pool can afford to prefer reduction that did not require a large bucket.
+    The exponential decay in nbucket is a multiplicative discount: unlike a
+    negative bucket weight, it cannot be cancelled by simply finding a larger
+    reduction, so expensive buckets stay expensive at every reduction scale.
+
+    Cost: reading nbucket here gives up the inner z search's reduction-only
+    fast path. Deliberate -- with a light TODD budget this stage is the cheap
+    one, and bucket cost is exactly what it should be discriminating on.
+    """
+    cheapness = fn.exp(-k.nbucket * fn.abs(p.w(1)))
+    return k.nred * p.w(0) * cheapness + k.ndim * p.w(2) - k.nzw * fn.abs(p.w(3))
 
 
 @policy.final
 def final_score(k, p, fn):
-    """Linear, but z density is scored by distance from a tuned center."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
-            + k.nyw * p.w(3) + fn.abs(k.nzw - p.w(6)) * p.w(4)
-            + k.ntohpe * p.w(5))
+    """Reduction, plus a source preference that follows the pool's composition.
+
+    f_tohpe is the fraction of the merged pool that TOHPE supplied. When TOHPE
+    is still productive the term is large and p.w(2) tilts selection toward or
+    away from it; once TOHPE dries up the fraction collapses and the term
+    fades on its own, without a rank threshold having to predict when that
+    happens. The z-density band is kept as a tuned center.
+    """
+    tohpe_share = k.f_tohpe * p.w(2)
+    offset = k.nzw - p.w(5)
+    band = fn.exp(-(offset * offset) * 4.0) * p.w(3)
+    return (k.nred * p.w(0)
+            + k.ndim * p.w(1)
+            + tohpe_share
+            + band
+            + k.ntohpe * p.w(4))
 
 
 class Evaluator(BaseEvaluator):
@@ -60,10 +83,15 @@ class Evaluator(BaseEvaluator):
         )
 
     def policy_mapping(self):
-        # map_par order is unchanged: five exploration weights, six final
-        # weights, then the z-density center.
-        explore_w = [self.float_range(-4.0, 4.0, group="scores") for _ in range(5)]
-        final_w = [self.float_range(-4.0, 4.0, group="scores") for _ in range(6)]
+        # The last final parameter is a z-density center, so it is mapped to
+        # [0, 1] rather than the symmetric coefficient range.
+        explore_w = [
+            self.float_range(-4.0, 4.0, group="scores") for _ in range(explore_score.n_params)
+        ]
+        final_w = [
+            self.float_range(-4.0, 4.0, group="scores")
+            for _ in range(final_score.n_params - 1)
+        ]
         final_w.append(self.float_range(0.0, 1.0, group="scores"))
         self.set_scores(
             PolicyScores(
