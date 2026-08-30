@@ -770,30 +770,37 @@ py::class_<Stats>(m, "Stats")
         },
         py::arg("site"));
 
-    // Holds the two compiled expressions plus the free scalars they share.
-    // `params` is indexed by the p.w(i) slots of both programs, so a policy
-    // binds its exploration and finalization scores against one vector.
+    // The two compiled expressions, each with its own free scalars, so p.w(0)
+    // means "this expression's first parameter" in both and the scores can be
+    // written and tuned independently.
     py::class_<PolicyScores>(m, "PolicyScores")
-        .def(py::init([](PolicyProgram exploration, PolicyProgram final, std::vector<float> params) {
-                 return PolicyScores{std::move(exploration), std::move(final), std::move(params)};
+        .def(py::init([](PolicyProgram exploration, PolicyProgram final,
+                         std::vector<float> exploration_params, std::vector<float> final_params) {
+                 return PolicyScores{std::move(exploration), std::move(final),
+                                     std::move(exploration_params), std::move(final_params)};
              }),
-             py::arg("exploration") = greedy_reduction_program(PolicySite::ExplorationZ),
-             py::arg("final")       = greedy_reduction_program(PolicySite::Finalization),
-             py::arg("params")      = std::vector<float>{})
+             py::arg("exploration")        = greedy_reduction_program(PolicySite::ExplorationZ),
+             py::arg("final")              = greedy_reduction_program(PolicySite::Finalization),
+             py::arg("exploration_params") = std::vector<float>{},
+             py::arg("final_params")       = std::vector<float>{})
         .def_readwrite("exploration", &PolicyScores::exploration)
         .def_readwrite("final", &PolicyScores::final)
-        .def_readwrite("params", &PolicyScores::params)
+        .def_readwrite("exploration_params", &PolicyScores::exploration_params)
+        .def_readwrite("final_params", &PolicyScores::final_params)
         .def("__repr__",
              [](const PolicyScores& s) {
-                 return "PolicyScores(params=" + std::to_string(s.params.size()) + ")";
+                 return "PolicyScores(exploration_params=" + std::to_string(s.exploration_params.size()) +
+                        ", final_params=" + std::to_string(s.final_params.size()) + ")";
              })
         .def(py::pickle(
-            [](const PolicyScores& s) { return py::make_tuple(s.exploration, s.final, s.params); },
+            [](const PolicyScores& s) {
+                return py::make_tuple(s.exploration, s.final, s.exploration_params, s.final_params);
+            },
             [](py::tuple t) {
-                if (t.size() != 3)
+                if (t.size() != 4)
                     throw std::runtime_error("Invalid state for PolicyScores");
                 return PolicyScores{t[0].cast<PolicyProgram>(), t[1].cast<PolicyProgram>(),
-                                    t[2].cast<std::vector<float>>()};
+                                    t[2].cast<std::vector<float>>(), t[3].cast<std::vector<float>>()};
             }));
 
     py::class_<ActionSelection>(m, "ActionSelection")

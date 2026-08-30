@@ -58,14 +58,21 @@ from .rewrite import rewrite_policy_function
 
 def _load_native():
     """The compiled PolicyProgram type, or None before the bindings are built."""
-    try:
-        from node import PolicyProgram  # type: ignore
-    except Exception:
+    for loader in (
+        lambda: __import__("node", fromlist=["PolicyProgram"]).PolicyProgram,
+        lambda: __import__(
+            "pyvartodd.Release.pyvartodd", fromlist=["PolicyProgram"]
+        ).PolicyProgram,
+        lambda: __import__(
+            "pyvartodd.Debug.pyvartodd", fromlist=["PolicyProgram"]
+        ).PolicyProgram,
+        lambda: __import__("pyvartodd.pyvartodd", fromlist=["PolicyProgram"]).PolicyProgram,
+    ):
         try:
-            from pyvartodd.Release.pyvartodd import PolicyProgram  # type: ignore
+            return loader()
         except Exception:
-            return None
-    return PolicyProgram
+            continue
+    return None
 
 
 class BoundPolicy:

@@ -1,0 +1,76 @@
+from collections.abc import Iterable
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
+import numpy as np
+from pymoo.algorithms.soo.nonconvex.de import DE
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
+
+OPTIMIZER_FAMILY = "pymoo_de"
+SEEDS = [17, 18]
+N_EVAL = 288
+
+
+class Evaluator(BaseEvaluator):
+    def float_range(self, low: float, high: float) -> float:
+        return self.map_par(lambda x: low + (high - low) * np.clip((float(x) + 1.5) / 3.0, 0.0, 1.0))
+
+    def int_range(self, low: int, high: int) -> int:
+        return self.map_par(
+            lambda x: min(high, low + int((high - low + 1) * np.clip((float(x) + 1.5) / 3.0, 0.0, 1.0)))
+        )
+
+    def policy_mapping(self):
+        self.set_scores(
+            PolicyScores(
+                ExplorationScore([self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1),
+                FinalizationScore(
+                    [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], pow=1
+                ),
+            )
+        )
+        samples = SamplingBudget(one_hot="all", sparse=8, dense=self.int_range(8, 40), sparse_max_weight=2)
+        todd_cap = self.int_range(512, 6000)
+        self.set_action_selection(ActionSelection(beamwidth=2, mode="softmax", temperature=0.16))
+        self.set_action_pool(ActionPool(final_size=self.int_range(12, 28)))
+        self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=6, reserve=1), z_choices=4))
+        self.set_todd_search(
+            ToddSearch(
+                SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2),
+                SourcePool(keep=self.int_range(2, 5), reserve=1),
+                actions_per_bucket=2,
+                buckets=ZBucketSearch(min_buckets=16, max_buckets=todd_cap, limit_bucket=todd_cap),
+            )
+        )
+
+    def __call__(self, params: Iterable[float]) -> float:
+        values = np.asarray(self.run(params, SEEDS), dtype=float)
+        return float(values.min() + 0.02 * values.std())
+
+
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        n = len(evaluator.extract_active())
+        super().__init__(n_var=n, n_obj=1, xl=np.full(n, -1.5), xu=np.full(n, 1.5))
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out["F"] = self.evaluator(np.asarray(x, dtype=float))
+
+
+def entrypoint():
+    evaluator = Evaluator(path_name="init", max_depth=500)
+    algorithm = DE(pop_size=16, variant="DE/rand/1/bin", CR=0.9, F=0.6)
+    minimize(Problem(evaluator), algorithm, termination=("n_eval", N_EVAL), seed=17, verbose=False)
+    return evaluator.get_best()

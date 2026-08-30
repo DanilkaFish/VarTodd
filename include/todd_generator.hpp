@@ -260,7 +260,11 @@ inline PolicyProgram greedy_reduction_program(PolicySite site) {
 struct PolicyScores {
     PolicyProgram      exploration = greedy_reduction_program(PolicySite::ExplorationZ);
     PolicyProgram      final       = greedy_reduction_program(PolicySite::Finalization);
-    std::vector<float> params;
+    // Each program indexes its own free scalars, so p.w(0) means "this
+    // expression's first parameter" and the two scores can be written and
+    // tuned independently.
+    std::vector<float> exploration_params;
+    std::vector<float> final_params;
 };
 
 struct ActionSelection {

@@ -182,11 +182,16 @@ struct NormalizedToddSearch {
 struct NormalizedPolicyConfig {
     PolicyProgram         exploration{};
     PolicyProgram         final{};
-    std::vector<float>    params{};
+    std::vector<float>    exploration_params{};
+    std::vector<float>    final_params{};
     KnobFrame             frame{}; // per-iteration normalizers, filled in make_policy_context
 
-    ExplorationScorer  escore() const noexcept { return ExplorationScorer{{&exploration, params, &frame}}; }
-    FinalizationScorer fscore() const noexcept { return FinalizationScorer{{&final, params, &frame}}; }
+    ExplorationScorer escore() const noexcept {
+        return ExplorationScorer{{&exploration, exploration_params, &frame}};
+    }
+    FinalizationScorer fscore() const noexcept {
+        return FinalizationScorer{{&final, final_params, &frame}};
+    }
 
     ActionSelection       selection{};
     ActionPool            pool{};
@@ -233,7 +238,8 @@ NormalizedPolicyConfig normalize_policy_config(PolicyConfig config) {
     NormalizedPolicyConfig out{
         .exploration = std::move(config.scores.exploration),
         .final       = std::move(config.scores.final),
-        .params      = std::move(config.scores.params),
+        .exploration_params = std::move(config.scores.exploration_params),
+        .final_params       = std::move(config.scores.final_params),
         .selection = std::move(config.selection),
         .pool      = config.pool,
         .tohpe =
@@ -636,7 +642,7 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
                     f.zsize     = static_cast<float>(std::max<index_t>(1, z.size()));
                     f.max_red   = static_cast<float>(2 * bucket_size);
                     f.source    = static_cast<float>(CandidateSourceTohpe);
-                    return config.exploration.eval(f, config.params);
+                    return config.exploration.eval(f, config.exploration_params);
                 },
                 scratch_best_z);
         }
