@@ -5,14 +5,13 @@ from helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
     TohpeSearch,
     ZBucketSearch,
+    policy,
 )
 import numpy as np
 from pymoo.algorithms.soo.nonconvex.cmaes import CMAES
@@ -34,6 +33,21 @@ def objective(ranks: list[int]) -> float:
     return float(values.min() + 0.015 * values.std())
 
 
+@policy.exploration
+def explore_score(k, p, fn):
+    """Linear in the five exploration knobs."""
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + k.nzw * p.w(4))
+
+
+@policy.final
+def final_score(k, p, fn):
+    """Linear, but z density is scored by distance from a tuned center."""
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + fn.abs(k.nzw - p.w(6)) * p.w(4)
+            + k.ntohpe * p.w(5))
+
+
 class Evaluator(BaseEvaluator):
     """TOHPE supplies most candidates; light TODD is an escape path."""
 
@@ -46,17 +60,17 @@ class Evaluator(BaseEvaluator):
         )
 
     def policy_mapping(self):
-        explore = ExplorationScore(
-            [self.float_range(-4.0, 4.0, group="scores") for _ in range(5)],
-            centers=[0.0, 0.0, 0.0, 0.0, 0.0],
-            pow=1,
+        # map_par order is unchanged: five exploration weights, six final
+        # weights, then the z-density center.
+        explore_w = [self.float_range(-4.0, 4.0, group="scores") for _ in range(5)]
+        final_w = [self.float_range(-4.0, 4.0, group="scores") for _ in range(6)]
+        final_w.append(self.float_range(0.0, 1.0, group="scores"))
+        self.set_scores(
+            PolicyScores(
+                exploration=explore_score.bind(explore_w),
+                final=final_score.bind(final_w),
+            )
         )
-        final = FinalizationScore(
-            [self.float_range(-4.0, 4.0, group="scores") for _ in range(6)],
-            centers=[0.0, 0.0, 0.0, 0.0, self.float_range(0.0, 1.0, group="scores"), 0.0],
-            pow=1,
-        )
-        self.set_scores(PolicyScores(exploration=explore, final=final))
         tohpe_sampling = SamplingBudget(
             one_hot="all",
             sparse=self.int_range(16, 96, group="search"),

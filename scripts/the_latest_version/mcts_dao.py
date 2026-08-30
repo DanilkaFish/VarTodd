@@ -912,7 +912,8 @@ def _as_policy_scores(x: Any) -> PolicyScores:
         return PolicyScores(
             exploration=x.get("exploration", defaults.exploration),
             final=x.get("final", defaults.final),
-            params=x.get("params", []),
+            exploration_params=x.get("exploration_params", []),
+            final_params=x.get("final_params", []),
         )
     raise TypeError(f"expected PolicyScores or mapping, got {type(x).__name__}")
 
@@ -1016,7 +1017,6 @@ def _default_policy_scores() -> PolicyScores:
     return PolicyScores(
         exploration=linear_score([0.5, 0.5, 0.0, 0.0, 0.0], site=SITE_EXPLORATION).bind([]).native(),
         final=linear_score([0.5, 0.5, 0.0, 0.0, 0.0, 0.0], site=SITE_FINAL).bind([]).native(),
-        params=[],
     )
 
 

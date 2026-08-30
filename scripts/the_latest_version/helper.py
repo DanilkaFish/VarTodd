@@ -38,6 +38,27 @@ from policy_expr import (
 from todd import Todd
 from variant import resolve_variant
 
+_PyPolicyScores = PolicyScores
+
+
+def PolicyScores(exploration=None, final=None, **kwargs):
+    """Public helper API: accepts bound policies as well as compiled programs.
+
+    A seed program writes `PolicyScores(exploration=explore.bind(w), ...)`, so
+    the bound form has to be accepted here rather than only inside set_scores.
+    Weight lists remain accepted for unchanged callers.
+    """
+    if kwargs:
+        unknown = ", ".join(sorted(kwargs))
+        raise TypeError(f"unknown PolicyScores arguments: {unknown}")
+    return _to_policy_scores(
+        {
+            "exploration": exploration if exploration is not None else [1.0, 0.0, 0.0, 0.0, 0.0],
+            "final": final if final is not None else [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        }
+    )
+
+
 _PyActionSelection = ActionSelection
 
 
@@ -287,7 +308,7 @@ def _score_program(x: Any, site: str):
 
 
 def _to_policy_scores(x: Any) -> "PolicyScores":
-    if isinstance(x, PolicyScores):
+    if isinstance(x, _PyPolicyScores):
         return x
     if isinstance(x, Mapping):
         exploration = x.get("exploration", [1.0, 0.0, 0.0, 0.0, 0.0])
@@ -300,7 +321,7 @@ def _to_policy_scores(x: Any) -> "PolicyScores":
 
     exploration_program, exploration_params = _score_program(exploration, SITE_EXPLORATION)
     final_program, final_params = _score_program(final, SITE_FINAL)
-    return PolicyScores(
+    return _PyPolicyScores(
         exploration=exploration_program,
         final=final_program,
         exploration_params=exploration_params,

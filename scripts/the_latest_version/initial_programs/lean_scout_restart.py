@@ -5,14 +5,13 @@ from helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
     TohpeSearch,
     ZBucketSearch,
+    policy,
 )
 import numpy as np
 from pymoo.algorithms.soo.nonconvex.cmaes import CMAES
@@ -33,6 +32,21 @@ def objective(ranks: list[int]) -> float:
     return float(values.min() + 0.02 * values.std())
 
 
+@policy.exploration
+def explore_score(k, p, fn):
+    """Linear in the five exploration knobs."""
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + k.nzw * p.w(4))
+
+
+@policy.final
+def final_score(k, p, fn):
+    """Linear, but y weight is scored by distance from a tuned center."""
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + fn.abs(k.nyw - p.w(6)) * p.w(3) + k.nzw * p.w(4)
+            + k.ntohpe * p.w(5))
+
+
 class Evaluator(BaseEvaluator):
     def float_range(self, low: float, high: float) -> float:
         return self.map_par(lambda x: low + (high - low) * np.clip((float(x) + 1.0) / 2.0, 0.0, 1.0))
@@ -41,15 +55,17 @@ class Evaluator(BaseEvaluator):
         return self.map_par(lambda x: int(round(low + (high - low) * np.clip((float(x) + 1.0) / 2.0, 0.0, 1.0))))
 
     def policy_mapping(self):
-        exploration = ExplorationScore(
-            [self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1
+        # map_par order is unchanged: five exploration weights, six final
+        # weights, then the y-weight center.
+        explore_w = [self.float_range(-4, 4) for _ in range(5)]
+        final_w = [self.float_range(-4, 4) for _ in range(6)]
+        final_w.append(self.float_range(0.0, 1.0))
+        self.set_scores(
+            PolicyScores(
+                exploration=explore_score.bind(explore_w),
+                final=final_score.bind(final_w),
+            )
         )
-        finalization = FinalizationScore(
-            [self.float_range(-4, 4) for _ in range(6)],
-            centers=[0.0, 0.0, 0.0, self.float_range(0.0, 1.0), 0.0, 0.0],
-            pow=1,
-        )
-        self.set_scores(PolicyScores(exploration=exploration, final=finalization))
         samples = SamplingBudget(
             one_hot=20, sparse=self.int_range(4, 20), dense=self.int_range(4, 20), sparse_max_weight=3
         )

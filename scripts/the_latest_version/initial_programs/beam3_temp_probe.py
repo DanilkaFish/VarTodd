@@ -3,14 +3,13 @@ from helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
     TohpeSearch,
     ZBucketSearch,
+    policy,
 )
 import numpy as np
 from pymoo.algorithms.soo.nonconvex.pso import PSO
@@ -22,6 +21,20 @@ SEEDS = [23, 24, 25]
 SCOUT_EVALS = 144
 MID_REFINE_EVALS = 48
 MID_REOPEN_MARGIN = 96
+
+
+@policy.exploration
+def explore_score(k, p, fn):
+    """Linear in the five exploration knobs."""
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + k.nzw * p.w(4))
+
+
+@policy.final
+def final_score(k, p, fn):
+    """Linear in the six finalization knobs."""
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + k.nzw * p.w(4) + k.ntohpe * p.w(5))
 
 
 class Evaluator(BaseEvaluator):
@@ -38,10 +51,8 @@ class Evaluator(BaseEvaluator):
     def policy_mapping(self):
         self.set_scores(
             PolicyScores(
-                ExplorationScore([self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1),
-                FinalizationScore(
-                    [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], pow=1
-                ),
+                exploration=explore_score.bind([self.float_range(-4, 4) for _ in range(5)]),
+                final=final_score.bind([self.float_range(-4, 4) for _ in range(6)]),
             )
         )
         todd_samples = SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2)

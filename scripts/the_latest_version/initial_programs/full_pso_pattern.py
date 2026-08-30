@@ -5,14 +5,13 @@ from helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
     TohpeSearch,
     ZBucketSearch,
+    policy,
 )
 import numpy as np
 from pymoo.algorithms.soo.nonconvex.pattern import PatternSearch
@@ -32,6 +31,21 @@ LOWER_BOUND = -1.0
 UPPER_BOUND = 1.0
 
 
+@policy.exploration
+def explore_score(k, p, fn):
+    """Linear in the five exploration knobs."""
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + k.nzw * p.w(4))
+
+
+@policy.final
+def final_score(k, p, fn):
+    """Linear, with tuned centers on the basis dimension and the y weight."""
+    return (k.nred * p.w(0) + fn.abs(k.ndim - p.w(6)) * p.w(1)
+            + k.nbucket * p.w(2) + fn.abs(k.nyw - p.w(7)) * p.w(3)
+            + k.nzw * p.w(4) + k.ntohpe * p.w(5))
+
+
 class Evaluator(BaseEvaluator):
     """Declare both stages permanently; the restart only selects the policy."""
 
@@ -49,25 +63,16 @@ class Evaluator(BaseEvaluator):
         )
 
     def policy_mapping(self):
+        # map_par order is unchanged: five exploration weights, six final
+        # weights, then the basis-dimension and y-weight centers.
+        explore_w = [self.float_range(-4, 4, group="scores") for _ in range(5)]
+        final_w = [self.float_range(-4, 4, group="scores") for _ in range(6)]
+        final_w.append(self.float_range(0.0, 1.0, group="scores"))
+        final_w.append(self.float_range(0.0, 1.0, group="scores"))
         self.set_scores(
             PolicyScores(
-                ExplorationScore(
-                    [self.float_range(-4, 4, group="scores") for _ in range(5)],
-                    centers=[0.0, 0.0, 0.0, 0.0, 0.0],
-                    pow=1,
-                ),
-                FinalizationScore(
-                    [self.float_range(-4, 4, group="scores") for _ in range(6)],
-                    centers=[
-                        0.0,
-                        self.float_range(0.0, 1.0, group="scores"),
-                        0.0,
-                        self.float_range(0.0, 1.0, group="scores"),
-                        0.0,
-                        0.0,
-                    ],
-                    pow=1,
-                ),
+                exploration=explore_score.bind(explore_w),
+                final=final_score.bind(final_w),
             )
         )
         scout_policy = self._build_light_scout_policy()

@@ -3,14 +3,13 @@ from helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
     TohpeSearch,
     ZBucketSearch,
+    policy,
 )
 import numpy as np
 from pymoo.algorithms.soo.nonconvex.de import DE
@@ -20,6 +19,20 @@ from pymoo.optimize import minimize
 OPTIMIZER_FAMILY = "pymoo_de"
 SEEDS = [17, 18]
 N_EVAL = 288
+
+
+@policy.exploration
+def explore_score(k, p, fn):
+    """Linear in the five exploration knobs."""
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + k.nzw * p.w(4))
+
+
+@policy.final
+def final_score(k, p, fn):
+    """Linear in the six finalization knobs."""
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + k.nzw * p.w(4) + k.ntohpe * p.w(5))
 
 
 class Evaluator(BaseEvaluator):
@@ -34,10 +47,8 @@ class Evaluator(BaseEvaluator):
     def policy_mapping(self):
         self.set_scores(
             PolicyScores(
-                ExplorationScore([self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1),
-                FinalizationScore(
-                    [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], pow=1
-                ),
+                exploration=explore_score.bind([self.float_range(-4, 4) for _ in range(5)]),
+                final=final_score.bind([self.float_range(-4, 4) for _ in range(6)]),
             )
         )
         samples = SamplingBudget(one_hot="all", sparse=8, dense=self.int_range(8, 40), sparse_max_weight=2)
