@@ -6,11 +6,15 @@ it came from. In the terminal band, where researched z counts grow huge and
 acceptance collapses, "which candidate pays for its search cost" is a different
 question from "which candidate reduces most".
 
-Cost note: the exploration score reads k.nbucket, so the inner z search cannot
-take its reduction-only fast path and must score every touched bucket instead.
-That is a real wall-clock cost, paid deliberately here. The finalization score
-is where ratios are cheapest -- it runs once per merged candidate -- so the
-exploration side stays linear and only finalization uses the ratio.
+The ratio lives in the finalization score, which runs once per merged
+candidate; exploration stays a weighted sum so the pool fills at the usual
+rate.
+
+Cost note: exploration still reads k.nbucket for its ordinary linear bucket
+term, and any z-varying knob there costs the inner z search its reduction-only
+fast path -- measured at roughly 4-5x per policy step. If that proves too
+expensive for the rank it buys, dropping the k.nbucket term from exploration
+recovers it without touching the ratio.
 """
 
 from collections.abc import Iterable
@@ -38,9 +42,9 @@ TODD_ROLE = "ratio_efficiency"
 LOWER_BOUND = -2.0
 UPPER_BOUND = 2.0
 
-# Guards the ratio denominator. nbucket is bucket_size / max_bucket, so this
-# floor corresponds to a bucket a twentieth the size of the largest one.
-MIN_NBUCKET = 0.05
+# Guards the ratio denominator. bucket is a raw count, so a floor of 1 is the
+# smallest bucket that can exist and the guard never distorts a real value.
+MIN_BUCKET = 1.0
 
 
 @policy.exploration
@@ -58,7 +62,10 @@ def final_score(k, p, fn):
     the optimizer can settle anywhere between pure greedy and pure ratio rather
     than being restricted to one of them.
     """
-    efficiency = k.nred / fn.max(k.nbucket, MIN_NBUCKET)
+    # Raw over raw: nred and nbucket both carry a 1/bn factor that would
+    # cancel, so a ratio of the normalized knobs is the same quantity with a
+    # redundant division. red/bucket is what is actually wanted.
+    efficiency = k.red / fn.max(k.bucket, MIN_BUCKET)
     return (k.nred * p.w(0)
             + efficiency * p.w(1)
             + k.ndim * p.w(2)

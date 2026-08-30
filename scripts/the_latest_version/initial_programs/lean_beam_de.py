@@ -44,12 +44,12 @@ def explore_score(k, p, fn):
 def final_score(k, p, fn):
     """Reduction traded against the size of the bucket that produced it.
 
-    The ratio is reduction per unit of bucket, a quotient no weighted sum over
-    the two can express. Note this is *not* "fraction of the bucket's ceiling":
-    nred and nbucket share the same per-iteration normalizer bn, so it reduces
-    to red / (2 * bucket_size) only because the bn factors cancel.
+    Written on the raw knobs: a ratio of two normalized knobs would carry the
+    same 1/bn factor above and below and cancel it, leaving a pointless
+    division. red/bucket is the quantity actually wanted -- reduction per unit
+    of bucket -- and it is a quotient no weighted sum over the two can express.
     """
-    realized = k.nred / fn.max(k.nbucket, 0.02)
+    realized = k.red / fn.max(k.bucket, 1.0)
     return (k.nred * p.w(0)
             + realized * p.w(1)
             + fn.sqrt(fn.max(k.ndim, 0.0)) * p.w(2)

@@ -86,7 +86,7 @@ KNOB_INDEX: Dict[str, int] = {name: i for i, name in enumerate(KNOB_NAMES)}
 # sees is generated from this file rather than maintained separately.
 KNOB_DOC: Dict[str, str] = {
     "red": "raw T-count reduction this action achieves (the primary objective signal)",
-    "nred": "reduction normalized by the max bucket size: red / bn / 2",
+    "nred": "red / bn / 2 -- reduction as a fraction of the largest reduction possible this iteration; use in sums, but see the ratio note below",
     "dim": "raw dimension of the solution basis at this bucket",
     "ndim": "basis dimension normalized: dim / dn",
     "bucket": "raw size of the collision bucket the candidate came from",
@@ -97,7 +97,7 @@ KNOB_DOC: Dict[str, str] = {
     "nzw": "density of z: zw / max(1, zsize)",
     "zsize": "length of the z vector",
     "max_red": "theoretical reduction ceiling for this bucket; always 2 * bucket",
-    "nmax_red": "max_red / bn / 2 -- ALGEBRAICALLY IDENTICAL to nbucket, prefer nbucket",
+    "nmax_red": "max_red / bn / 2 -- IDENTICAL to nbucket (both are bucket/bn), prefer nbucket",
     "tohpe": "TOHPE dimension of the resulting state (finalization only)",
     "ntohpe": "TOHPE dimension normalized: tohpe / dn (finalization only)",
     "rank_red": "how many candidates in the population beat this reduction (finalization only)",
@@ -556,4 +556,9 @@ def describe_knobs(site: str = None) -> str:
     lines.append("math: fn.exp fn.log fn.sqrt fn.tanh fn.sigmoid fn.floor fn.sign")
     lines.append("      fn.abs fn.min fn.max fn.pow fn.clip fn.where fn.not_")
     lines.append("free scalars: p.w(0), p.w(1), ... supplied by policy_mapping()")
+    lines.append("")
+    lines.append("Ratios: every n* knob divides by the same per-iteration normalizer, so a")
+    lines.append("ratio of two of them cancels it and is the raw ratio with a redundant")
+    lines.append("division -- write k.red / k.bucket, not k.nred / k.nbucket. The n* forms")
+    lines.append("are for sums, where a shared scale keeps terms comparable across ranks.")
     return "\n".join(lines)

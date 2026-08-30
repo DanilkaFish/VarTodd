@@ -652,6 +652,32 @@ class TestKnobRedundancy(unittest.TestCase):
 
         self.assertIn("nbucket", KNOB_DOC["nmax_red"])
 
+    def test_normalized_ratio_cancels_to_the_raw_ratio(self):
+        # nred and nbucket share the per-iteration normalizer bn, so their
+        # quotient equals red/bucket up to the constant 2 from nred's /2. A
+        # ratio written on n* knobs therefore carries a division that does
+        # nothing; policies should use the raw knobs for ratios.
+        @policy.exploration
+        def normalized(k, p, fn):
+            return k.nred / fn.max(k.nbucket, 1e-9)
+
+        @policy.exploration
+        def raw(k, p, fn):
+            return k.red / fn.max(k.bucket, 1e-9)
+
+        for bucket, bn, red in ((3, 10, 4), (7, 10, 5), (2, 40, 1), (5, 100, 3)):
+            frame = dict(red=red, bucket=bucket, bn=bn, dn=1, wvwn=1)
+            self.assertAlmostEqual(
+                normalized.bind([]).evaluate(**frame) * 2.0,
+                raw.bind([]).evaluate(**frame),
+                places=5,
+                msg=f"bn failed to cancel at bucket={bucket}, bn={bn}",
+            )
+
+    def test_describe_knobs_warns_about_ratios(self):
+        text = describe_knobs()
+        self.assertIn("k.red / k.bucket", text)
+
 
 class TestReportRendering(unittest.TestCase):
     """A converged policy must read back as the expression it was written as.
