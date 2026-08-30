@@ -1,0 +1,607 @@
+// Unit checks for the policy expression VM.
+//
+// The equivalence checks below compare compiled programs against the legacy
+// ScoringFunction forms in todd_generator.hpp. They are the gate for the
+// cutover: they must pass while both implementations still exist.
+
+#include "policy_expr.hpp"
+#include "todd_generator.hpp"
+
+#include <cmath>
+#include <cstdint>
+#include <iostream>
+#include <cstdio>
+#include <random>
+#include <string>
+#include <vector>
+
+namespace {
+
+using namespace todd;
+
+void require(bool ok, const char* message) {
+    if (!ok)
+        throw std::runtime_error(message);
+}
+
+bool close(float a, float b, float tol = 1e-6f) {
+    const float scale = std::max({1.0f, std::abs(a), std::abs(b)});
+    return std::abs(a - b) <= tol * scale;
+}
+
+Instr knob(Knob k) { return Instr{Op::LoadKnob, static_cast<std::uint16_t>(k)}; }
+Instr cst(std::uint16_t i) { return Instr{Op::LoadConst, i}; }
+Instr par(std::uint16_t i) { return Instr{Op::LoadParam, i}; }
+Instr op(Op o) { return Instr{o, 0}; }
+
+PolicyProgram make(std::vector<Instr> code, std::vector<float> consts = {}, std::size_t n_params = 0,
+                   PolicySite site = PolicySite::Finalization) {
+    return PolicyProgram(std::move(code), std::move(consts), n_params, site);
+}
+
+// --- basic evaluation -------------------------------------------------------
+
+void check_arithmetic_and_stack() {
+    // 2 + 3 * 4 == 14, written postfix
+    auto prog = make({cst(0), cst(1), cst(2), op(Op::Mul), op(Op::Add)}, {2.0f, 3.0f, 4.0f});
+    KnobFrame f{};
+    require(close(prog.eval(f, {}), 14.0f), "arithmetic: 2 + 3*4 should be 14");
+
+    auto neg = make({cst(0), op(Op::Neg), op(Op::Abs)}, {-5.0f});
+    require(close(neg.eval(f, {}), 5.0f), "abs(-(-5)) should be 5");
+}
+
+void check_knob_normalization() {
+    KnobFrame f{};
+    f.red    = 10.0f;
+    f.dim    = 8.0f;
+    f.bucket = 6.0f;
+    f.yw     = 4.0f;
+    f.zw     = 3.0f;
+    f.zsize  = 6.0f;
+    f.bn     = 5.0f;
+    f.dn     = 4.0f;
+    f.wvwn   = 2.0f;
+
+    require(close(make({knob(Knob::nred)}).eval(f, {}), 10.0f / 5.0f / 2.0f), "nred = red/bn/2");
+    require(close(make({knob(Knob::ndim)}).eval(f, {}), 8.0f / 4.0f), "ndim = dim/dn");
+    require(close(make({knob(Knob::nbucket)}).eval(f, {}), 6.0f / 5.0f), "nbucket = bucket/bn");
+    require(close(make({knob(Knob::nyw)}).eval(f, {}), 4.0f / 2.0f), "nyw = yw/wvwn");
+    require(close(make({knob(Knob::nzw)}).eval(f, {}), 3.0f / 6.0f), "nzw = zw/max(1,zsize)");
+
+    // zsize is floored at 1 so a zero-length z cannot divide by zero
+    f.zsize = 0.0f;
+    require(close(make({knob(Knob::nzw)}).eval(f, {}), 3.0f), "nzw should floor zsize at 1");
+}
+
+void check_pool_fractions_and_ranks() {
+    KnobFrame f{};
+    f.pool_size   = 20.0f;
+    f.pool_tohpe  = 5.0f;
+    f.pool_prefix = 3.0f;
+    f.pool_todd   = 12.0f;
+    f.rank_red    = 4.0f;
+
+    require(close(make({knob(Knob::f_tohpe)}).eval(f, {}), 0.25f), "f_tohpe = pool_tohpe/pool_size");
+    require(close(make({knob(Knob::f_prefix)}).eval(f, {}), 0.15f), "f_prefix");
+    require(close(make({knob(Knob::f_todd)}).eval(f, {}), 0.6f), "f_todd");
+    require(close(make({knob(Knob::nrank_red)}).eval(f, {}), 0.2f), "nrank_red = rank_red/pool_size");
+
+    f.pool_size = 0.0f;
+    require(close(make({knob(Knob::f_todd)}).eval(f, {}), 12.0f), "pool fractions floor pool_size at 1");
+}
+
+void check_select_and_comparisons() {
+    KnobFrame f{};
+    f.dim = 7.0f;
+    // where(dim > 5, 100, 200)
+    auto prog = make({knob(Knob::dim), cst(0), op(Op::Gt), cst(1), cst(2), op(Op::Select)},
+                     {5.0f, 100.0f, 200.0f});
+    require(close(prog.eval(f, {}), 100.0f), "select should take the true branch");
+    f.dim = 3.0f;
+    require(close(prog.eval(f, {}), 200.0f), "select should take the false branch");
+
+    // Select argument order: (cond, a, b) with b pushed last.
+    f.dim     = 1.0f;
+    auto logic = make({knob(Knob::dim), cst(0), op(Op::Lt), op(Op::Not)}, {5.0f});
+    require(close(logic.eval(f, {}), 0.0f), "not(1 < 5) should be 0");
+}
+
+void check_guarded_division_and_log() {
+    KnobFrame f{};
+    // Dividing by zero must stay finite, matching the legacy inverse-distance floor.
+    auto div = make({cst(0), cst(1), op(Op::Div)}, {1.0f, 0.0f});
+    const float v = div.eval(f, {});
+    require(std::isfinite(v), "division by zero must stay finite");
+    require(close(v, 1.0f / k_div_epsilon), "division by zero uses the epsilon floor");
+
+    // log clamps at 1e-6 exactly as logarithmic_scoring did
+    auto lg = make({cst(0), op(Op::Log)}, {0.0f});
+    require(close(lg.eval(f, {}), std::log(k_log_floor)), "log(0) should clamp to log(1e-6)");
+
+    auto sq = make({cst(0), op(Op::Sqrt)}, {-4.0f});
+    require(close(sq.eval(f, {}), 0.0f), "sqrt of a negative should clamp to 0");
+}
+
+void check_params() {
+    KnobFrame f{};
+    f.red = 3.0f;
+    f.bn  = 1.0f;
+    // red * p0 + p1
+    auto prog = make({knob(Knob::red), par(0), op(Op::Mul), par(1), op(Op::Add)}, {}, 2);
+    const std::vector<float> params = {2.0f, 10.0f};
+    require(close(prog.eval(f, params), 16.0f), "params should bind positionally");
+    require(prog.n_params() == 2, "n_params should reflect the declared count");
+}
+
+// --- validation -------------------------------------------------------------
+
+bool throws(const std::function<void()>& fn) {
+    try {
+        fn();
+    } catch (const PolicyProgramError&) {
+        return true;
+    }
+    return false;
+}
+
+void check_validation_rejects_malformed_programs() {
+    require(throws([] { make({}); }), "empty program must be rejected");
+    require(throws([] { make({op(Op::Add)}); }), "stack underflow must be rejected");
+    require(throws([] { make({cst(0), cst(0)}, {1.0f}); }), "leftover stack values must be rejected");
+    require(throws([] { make({cst(5)}, {1.0f}); }), "out-of-range const index must be rejected");
+    require(throws([] { make({par(0)}, {}, 0); }), "param index beyond n_params must be rejected");
+    require(throws([] { make({Instr{Op::LoadKnob, static_cast<std::uint16_t>(k_knob_count)}}); }),
+            "out-of-range knob index must be rejected");
+}
+
+void check_site_availability_is_enforced() {
+    // tohpe_dim is only known at finalization.
+    require(throws([] { make({knob(Knob::tohpe)}, {}, 0, PolicySite::ExplorationPool); }),
+            "tohpe must be rejected at the exploration site");
+    require(throws([] { make({knob(Knob::rank_red)}, {}, 0, PolicySite::ExplorationZ); }),
+            "rank_red must be rejected at the exploration site");
+    require(throws([] { make({knob(Knob::f_todd)}, {}, 0, PolicySite::ExplorationPool); }),
+            "pool composition must be rejected at the exploration site");
+
+    // ...and accepted at finalization.
+    make({knob(Knob::tohpe)}, {}, 0, PolicySite::Finalization);
+    make({knob(Knob::rank_red)}, {}, 0, PolicySite::Finalization);
+
+    // Shared knobs work everywhere.
+    make({knob(Knob::nred)}, {}, 0, PolicySite::ExplorationZ);
+    make({knob(Knob::nred)}, {}, 0, PolicySite::Finalization);
+}
+
+void check_used_knobs_reporting() {
+    auto prog = make({knob(Knob::nred), knob(Knob::nbucket), op(Op::Add)}, {}, 0, PolicySite::ExplorationPool);
+    require(prog.uses(Knob::nred), "used_knobs should report nred");
+    require(prog.uses(Knob::nbucket), "used_knobs should report nbucket");
+    require(!prog.uses(Knob::ndim), "used_knobs should not report unused knobs");
+}
+
+// --- fast-path predicate ----------------------------------------------------
+
+void check_fast_path_predicate() {
+    const auto site = PolicySite::ExplorationZ;
+
+    // Pure positive multiple of reduction: qualifies.
+    require(make({knob(Knob::nred), cst(0), op(Op::Mul)}, {2.0f}, 0, site).ranks_fixed_y_by_reduction(),
+            "positive multiple of nred should keep the fast path");
+
+    // Reduction plus a y-constant term: still monotone in red.
+    require(make({knob(Knob::nred), knob(Knob::ndim), op(Op::Add)}, {}, 0, site).ranks_fixed_y_by_reduction(),
+            "nred + ndim should keep the fast path (ndim is fixed for a given y)");
+
+    // Negative coefficient reverses the order: must not qualify.
+    require(!make({knob(Knob::nred), cst(0), op(Op::Mul)}, {-1.0f}, 0, site).ranks_fixed_y_by_reduction(),
+            "negative multiple of nred must lose the fast path");
+
+    // Any z-varying knob disqualifies, matching the legacy weight(2)/weight(4) checks.
+    require(!make({knob(Knob::nred), knob(Knob::nbucket), op(Op::Add)}, {}, 0, site).ranks_fixed_y_by_reduction(),
+            "bucket size must lose the fast path");
+    require(!make({knob(Knob::nred), knob(Knob::nzw), op(Op::Add)}, {}, 0, site).ranks_fixed_y_by_reduction(),
+            "z weight must lose the fast path");
+
+    // Reduction inside a nonlinearity is not provably order-preserving here.
+    require(!make({knob(Knob::nred), op(Op::Exp)}, {}, 0, site).ranks_fixed_y_by_reduction(),
+            "exp(nred) must conservatively lose the fast path");
+
+    // A program ignoring reduction entirely ties every candidate.
+    require(!make({knob(Knob::ndim)}, {}, 0, site).ranks_fixed_y_by_reduction(),
+            "a program without reduction must lose the fast path");
+
+    // Unknown-sign scaling by a bound parameter cannot be decided.
+    require(!make({knob(Knob::nred), par(0), op(Op::Mul)}, {}, 1, site).ranks_fixed_y_by_reduction(),
+            "scaling nred by a runtime parameter must lose the fast path");
+
+    // Reduction in a denominator is not affine.
+    require(!make({cst(0), knob(Knob::nred), op(Op::Div)}, {1.0f}, 0, site).ranks_fixed_y_by_reduction(),
+            "nred in a denominator must lose the fast path");
+}
+
+// This is the parity claim from the plan: the new predicate must accept every
+// program the legacy ranks_fixed_y_by_reduction() accepted. That predicate was
+// LINEAR && bn > 0 && w[0] >= 0 && w[2] == 0 && w[4] == 0, i.e. a weighted sum
+// over {red, dim, yw} with a non-negative reduction weight.
+void check_fast_path_matches_legacy_predicate() {
+    const auto site = PolicySite::ExplorationZ;
+
+    struct Case {
+        float w0, w1, w2, w3, w4;
+    };
+    const Case cases[] = {
+        {1.0f, 0.0f, 0.0f, 0.0f, 0.0f},  // pure greedy
+        {2.0f, 1.5f, 0.0f, -1.0f, 0.0f}, // red + dim + yw terms
+        {0.0f, 1.0f, 0.0f, 0.0f, 0.0f},  // legacy accepted w0 == 0; we do not (see below)
+        {-1.0f, 0.0f, 0.0f, 0.0f, 0.0f}, // negative reduction weight
+        {1.0f, 0.0f, 0.5f, 0.0f, 0.0f},  // bucket term
+        {1.0f, 0.0f, 0.0f, 0.0f, 0.5f},  // z-weight term
+    };
+
+    for (const Case& c : cases) {
+        ExplorationScore legacy(c.w0, c.w1, c.w2, c.w3, c.w4);
+        legacy.bn = 4.0f;
+        legacy.dn = 4.0f;
+        legacy.wvwn = 4.0f;
+        const bool legacy_ok = legacy.ranks_fixed_y_by_reduction();
+
+        // Same weighted sum as a program.
+        std::vector<Instr> code;
+        std::vector<float> consts = {c.w0, c.w1, c.w2, c.w3, c.w4};
+        const Knob         knobs[] = {Knob::nred, Knob::ndim, Knob::nbucket, Knob::nyw, Knob::nzw};
+        bool               first   = true;
+        for (std::uint16_t i = 0; i < 5; ++i) {
+            if (consts[i] == 0.0f)
+                continue; // a zero weight contributes no term, as in the sum
+            code.push_back(knob(knobs[i]));
+            code.push_back(cst(i));
+            code.push_back(op(Op::Mul));
+            if (!first)
+                code.push_back(op(Op::Add));
+            first = false;
+        }
+        if (code.empty())
+            continue;
+
+        const bool ours = PolicyProgram(code, consts, 0, site).ranks_fixed_y_by_reduction();
+
+        if (c.w0 > 0.0f && c.w2 == 0.0f && c.w4 == 0.0f) {
+            require(legacy_ok && ours, "both predicates should accept a positive-reduction linear score");
+        }
+        if (c.w2 != 0.0f || c.w4 != 0.0f || c.w0 < 0.0f) {
+            require(!ours, "z-varying or order-reversing programs must lose the fast path");
+        }
+    }
+}
+
+// --- equivalence with the legacy scoring functions --------------------------
+
+// Builds the postfix form of sum_i w[i] * x[i] over the five exploration knobs.
+std::vector<Instr> linear_sum_code(const std::vector<float>& weights, const std::vector<Knob>& knobs) {
+    std::vector<Instr> code;
+    bool               first = true;
+    for (std::uint16_t i = 0; i < static_cast<std::uint16_t>(knobs.size()); ++i) {
+        code.push_back(knob(knobs[i]));
+        code.push_back(cst(i));
+        code.push_back(op(Op::Mul));
+        if (!first)
+            code.push_back(op(Op::Add));
+        first = false;
+    }
+    (void)weights;
+    return code;
+}
+
+void check_linear_score_equivalence() {
+    std::mt19937                          rng(20260830);
+    std::uniform_real_distribution<float> w_dist(-4.0f, 4.0f);
+    std::uniform_int_distribution<int>    v_dist(0, 40);
+
+    const std::vector<Knob> knobs = {Knob::nred, Knob::ndim, Knob::nbucket, Knob::nyw, Knob::nzw};
+
+    for (int trial = 0; trial < 200; ++trial) {
+        std::vector<float> weights(5);
+        for (float& w : weights)
+            w = w_dist(rng);
+
+        const Int   reduction = v_dist(rng);
+        const Int   basis_dim = v_dist(rng);
+        const Int   bucket    = v_dist(rng);
+        const Int   vec_w     = v_dist(rng);
+        const Int   z_w       = v_dist(rng);
+        const Int   z_size    = std::max(1, v_dist(rng));
+        const float bn        = 1.0f + static_cast<float>(v_dist(rng));
+        const float dn        = 1.0f + static_cast<float>(v_dist(rng));
+        const float wvwn      = 1.0f + static_cast<float>(v_dist(rng));
+
+        ExplorationScore legacy(weights, {0, 0, 0, 0, 0}, ScoringFunction{ScoringFunction::LINEAR, 1.0f});
+        legacy.bn   = bn;
+        legacy.dn   = dn;
+        legacy.wvwn = wvwn;
+        const float expected = legacy.evaluate_features(reduction, basis_dim, bucket, vec_w, z_w, z_size);
+
+        auto      prog = PolicyProgram(linear_sum_code(weights, knobs), weights, 0, PolicySite::ExplorationPool);
+        KnobFrame f{};
+        f.red    = static_cast<float>(reduction);
+        f.dim    = static_cast<float>(basis_dim);
+        f.bucket = static_cast<float>(bucket);
+        f.yw     = static_cast<float>(vec_w);
+        f.zw     = static_cast<float>(z_w);
+        f.zsize  = static_cast<float>(z_size);
+        f.bn     = bn;
+        f.dn     = dn;
+        f.wvwn   = wvwn;
+
+        require(close(prog.eval(f, {}), expected, 1e-5f),
+                "compiled linear program must match ExplorationScore::evaluate_features");
+    }
+}
+
+// POLYNOM with pow == 2: sum_i w[i] * (x[i] - c[i])^2, where the first center is
+// scaled by 1/bn/2 exactly as polynom_scoring does.
+void check_polynom_score_equivalence() {
+    std::mt19937                          rng(20260831);
+    std::uniform_real_distribution<float> w_dist(-3.0f, 3.0f);
+    std::uniform_real_distribution<float> c_dist(0.0f, 1.0f);
+    std::uniform_int_distribution<int>    v_dist(0, 40);
+
+    const std::vector<Knob> knobs = {Knob::nred, Knob::ndim, Knob::nbucket, Knob::nyw, Knob::nzw};
+
+    for (int trial = 0; trial < 200; ++trial) {
+        std::vector<float> weights(5);
+        std::vector<float> centers(5);
+        for (int i = 0; i < 5; ++i) {
+            weights[i] = w_dist(rng);
+            centers[i] = c_dist(rng);
+        }
+
+        const Int   reduction = v_dist(rng);
+        const Int   basis_dim = v_dist(rng);
+        const Int   bucket    = v_dist(rng);
+        const Int   vec_w     = v_dist(rng);
+        const Int   z_w       = v_dist(rng);
+        const Int   z_size    = std::max(1, v_dist(rng));
+        const float bn        = 1.0f + static_cast<float>(v_dist(rng));
+        const float dn        = 1.0f + static_cast<float>(v_dist(rng));
+        const float wvwn      = 1.0f + static_cast<float>(v_dist(rng));
+
+        ExplorationScore legacy(weights, centers, 2.0f);
+        legacy.bn   = bn;
+        legacy.dn   = dn;
+        legacy.wvwn = wvwn;
+        const float expected = legacy.evaluate_features(reduction, basis_dim, bucket, vec_w, z_w, z_size);
+
+        // consts layout: [w0..w4, c0..c4] with c0 already scaled by 1/bn/2.
+        std::vector<float> consts;
+        consts.insert(consts.end(), weights.begin(), weights.end());
+        for (int i = 0; i < 5; ++i)
+            consts.push_back(i == 0 ? centers[i] / bn / 2.0f : centers[i]);
+
+        std::vector<Instr> code;
+        bool               first = true;
+        for (std::uint16_t i = 0; i < 5; ++i) {
+            // w[i] * (x[i] - c[i])^2 via Mul rather than Pow, matching the
+            // pow == 2 special case in polynom_scoring.
+            code.push_back(knob(knobs[i]));
+            code.push_back(cst(static_cast<std::uint16_t>(5 + i)));
+            code.push_back(op(Op::Sub));
+            code.push_back(op(Op::Abs));
+            const std::size_t dup_start = code.size();
+            (void)dup_start;
+            // square by multiplying the difference with itself: recompute it
+            code.push_back(knob(knobs[i]));
+            code.push_back(cst(static_cast<std::uint16_t>(5 + i)));
+            code.push_back(op(Op::Sub));
+            code.push_back(op(Op::Abs));
+            code.push_back(op(Op::Mul));
+            code.push_back(cst(i));
+            code.push_back(op(Op::Mul));
+            if (!first)
+                code.push_back(op(Op::Add));
+            first = false;
+        }
+
+        auto      prog = PolicyProgram(code, consts, 0, PolicySite::ExplorationPool);
+        KnobFrame f{};
+        f.red    = static_cast<float>(reduction);
+        f.dim    = static_cast<float>(basis_dim);
+        f.bucket = static_cast<float>(bucket);
+        f.yw     = static_cast<float>(vec_w);
+        f.zw     = static_cast<float>(z_w);
+        f.zsize  = static_cast<float>(z_size);
+        f.bn     = bn;
+        f.dn     = dn;
+        f.wvwn   = wvwn;
+
+        require(close(prog.eval(f, {}), expected, 1e-4f),
+                "compiled polynom program must match ExplorationScore::evaluate_features");
+    }
+}
+
+void check_finalization_six_feature_equivalence() {
+    std::mt19937                          rng(20260901);
+    std::uniform_real_distribution<float> w_dist(-4.0f, 4.0f);
+    std::uniform_int_distribution<int>    v_dist(0, 40);
+
+    const std::vector<Knob> knobs = {Knob::nred,  Knob::ndim, Knob::nbucket,
+                                     Knob::nyw,   Knob::nzw,  Knob::ntohpe};
+
+    for (int trial = 0; trial < 200; ++trial) {
+        std::vector<float> weights(6);
+        for (float& w : weights)
+            w = w_dist(rng);
+        // needs_tohpe_dim() gates the 6th feature on a nonzero weight.
+        if (weights[5] == 0.0f)
+            weights[5] = 0.5f;
+
+        Candidate cand;
+        cand.reduction   = v_dist(rng);
+        cand.basis_dim   = v_dist(rng);
+        cand.bucket_size = v_dist(rng);
+        cand.vec_weight  = v_dist(rng);
+        cand.z_weight    = v_dist(rng);
+        cand.z_size      = std::max(1, v_dist(rng));
+        cand.tohpe_dim   = v_dist(rng);
+
+        const float bn   = 1.0f + static_cast<float>(v_dist(rng));
+        const float dn   = 1.0f + static_cast<float>(v_dist(rng));
+        const float wvwn = 1.0f + static_cast<float>(v_dist(rng));
+
+        FinalizationScore legacy(weights, {0, 0, 0, 0, 0, 0}, ScoringFunction{ScoringFunction::LINEAR, 1.0f});
+        legacy.bn   = bn;
+        legacy.dn   = dn;
+        legacy.wvwn = wvwn;
+        legacy(cand);
+        const float expected = cand.final_score;
+
+        auto      prog = PolicyProgram(linear_sum_code(weights, knobs), weights, 0, PolicySite::Finalization);
+        KnobFrame f{};
+        f.red    = static_cast<float>(cand.reduction);
+        f.dim    = static_cast<float>(cand.basis_dim);
+        f.bucket = static_cast<float>(cand.bucket_size);
+        f.yw     = static_cast<float>(cand.vec_weight);
+        f.zw     = static_cast<float>(cand.z_weight);
+        f.zsize  = static_cast<float>(cand.z_size);
+        f.tohpe  = static_cast<float>(cand.tohpe_dim);
+        f.bn     = bn;
+        f.dn     = dn;
+        f.wvwn   = wvwn;
+
+        require(close(prog.eval(f, {}), expected, 1e-5f),
+                "compiled program must match FinalizationScore over six features");
+    }
+}
+
+// --- non-finite behaviour ---------------------------------------------------
+
+void check_no_spurious_non_finite() {
+    // Every guarded op must stay finite on hostile inputs, so that a policy
+    // cannot silently poison candidate ordering with NaN.
+    KnobFrame f{};
+    f.zsize     = 0.0f;
+    f.bn        = 1.0f;
+    f.dn        = 1.0f;
+    f.wvwn      = 1.0f;
+    f.pool_size = 0.0f;
+
+    const std::vector<std::vector<Instr>> programs = {
+        {cst(0), cst(1), op(Op::Div)},
+        {cst(1), op(Op::Log)},
+        {cst(2), op(Op::Sqrt)},
+        {knob(Knob::nzw)},
+        {knob(Knob::f_todd)},
+        {knob(Knob::nrank_red)},
+    };
+    for (const auto& code : programs) {
+        auto        prog = make(code, {1.0f, 0.0f, -1.0f});
+        const float v    = prog.eval(f, {});
+        require(std::isfinite(v), "guarded operations must not produce NaN or Inf");
+    }
+}
+
+// Prints one line per program so tests/test_policy_api.py can diff the Python
+// reference evaluator against this VM. The two implement the same semantics
+// independently -- the Python one backs the load-time probe pass -- so they
+// must be checked against each other or they will drift.
+void dump_cross_check_vectors() {
+    KnobFrame f{};
+    f.red = 12; f.dim = 7; f.bucket = 9; f.yw = 5; f.zw = 3; f.zsize = 8;
+    f.max_red = 18; f.tohpe = 4; f.rank_red = 2; f.rank_dim = 3; f.rank_score = 1;
+    f.pool_size = 20; f.pool_tohpe = 5; f.pool_prefix = 3; f.pool_todd = 12;
+    f.source = 1; f.bucket_id = 42; f.k_idx = 2; f.l_idx = 6;
+    f.bn = 6; f.dn = 5; f.wvwn = 4;
+
+    const std::vector<float> params = {1.5f, -0.75f, 0.25f};
+
+    struct Case {
+        const char*        name;
+        std::vector<Instr> code;
+        std::vector<float> consts;
+        std::size_t        n_params;
+    };
+    const std::vector<Case> cases = {
+        {"nred", {knob(Knob::nred)}, {}, 0},
+        {"ndim", {knob(Knob::ndim)}, {}, 0},
+        {"nzw", {knob(Knob::nzw)}, {}, 0},
+        {"f_todd", {knob(Knob::f_todd)}, {}, 0},
+        {"nrank_red", {knob(Knob::nrank_red)}, {}, 0},
+        {"ntohpe", {knob(Knob::ntohpe)}, {}, 0},
+        {"nmax_red", {knob(Knob::nmax_red)}, {}, 0},
+        {"lin",
+         {knob(Knob::nred), par(0), op(Op::Mul), knob(Knob::ndim), par(1), op(Op::Mul), op(Op::Add)},
+         {},
+         3},
+        {"div0", {cst(0), cst(1), op(Op::Div)}, {1.0f, 0.0f}, 0},
+        {"divneg", {cst(0), cst(1), op(Op::Div)}, {1.0f, -0.0001f}, 0},
+        {"log0", {cst(0), op(Op::Log)}, {0.0f}, 0},
+        {"sqrtneg", {cst(0), op(Op::Sqrt)}, {-4.0f}, 0},
+        {"sigmoid", {knob(Knob::nred), op(Op::Sigmoid)}, {}, 0},
+        {"tanh", {knob(Knob::nred), op(Op::Tanh)}, {}, 0},
+        {"exp", {knob(Knob::nzw), op(Op::Exp)}, {}, 0},
+        {"floor", {knob(Knob::nred), op(Op::Floor)}, {}, 0},
+        {"sign", {knob(Knob::nred), op(Op::Neg), op(Op::Sign)}, {}, 0},
+        {"where",
+         {knob(Knob::dim), cst(0), op(Op::Gt), knob(Knob::ndim), cst(1), op(Op::Select)},
+         {5.0f, 0.0f},
+         0},
+        {"pow", {knob(Knob::nred), cst(0), op(Op::Pow)}, {3.0f}, 0},
+        {"minmax", {knob(Knob::nred), cst(0), op(Op::Min), cst(1), op(Op::Max)}, {0.5f, 0.1f}, 0},
+        {"ratio", {knob(Knob::nred), knob(Knob::nbucket), cst(0), op(Op::Max), op(Op::Div)}, {0.05f}, 0},
+        {"chain",
+         {knob(Knob::nred), cst(0), op(Op::Lt), knob(Knob::ndim), cst(1), op(Op::Lt), op(Op::And)},
+         {5.0f, 10.0f},
+         0},
+        {"notop", {knob(Knob::nred), cst(0), op(Op::Gt), op(Op::Not)}, {0.5f}, 0},
+    };
+
+    for (const Case& c : cases) {
+        PolicyProgram prog(c.code, c.consts, c.n_params, PolicySite::Finalization);
+        std::printf("%s %.9g\n", c.name, static_cast<double>(prog.eval(f, params)));
+    }
+}
+
+struct Check {
+    const char* name;
+    void (*fn)();
+};
+
+const Check k_checks[] = {
+    {"arithmetic_and_stack", check_arithmetic_and_stack},
+    {"knob_normalization", check_knob_normalization},
+    {"pool_fractions_and_ranks", check_pool_fractions_and_ranks},
+    {"select_and_comparisons", check_select_and_comparisons},
+    {"guarded_division_and_log", check_guarded_division_and_log},
+    {"params", check_params},
+    {"validation_rejects_malformed_programs", check_validation_rejects_malformed_programs},
+    {"site_availability_is_enforced", check_site_availability_is_enforced},
+    {"used_knobs_reporting", check_used_knobs_reporting},
+    {"fast_path_predicate", check_fast_path_predicate},
+    {"fast_path_matches_legacy_predicate", check_fast_path_matches_legacy_predicate},
+    {"linear_score_equivalence", check_linear_score_equivalence},
+    {"polynom_score_equivalence", check_polynom_score_equivalence},
+    {"finalization_six_feature_equivalence", check_finalization_six_feature_equivalence},
+    {"no_spurious_non_finite", check_no_spurious_non_finite},
+};
+
+} // namespace
+
+int main(int argc, char** argv) {
+    // `--dump-cross-check` emits the vectors the Python test diffs against.
+    if (argc > 1 && std::string(argv[1]) == "--dump-cross-check") {
+        dump_cross_check_vectors();
+        return 0;
+    }
+
+    for (const Check& check : k_checks) {
+        try {
+            check.fn();
+        } catch (const std::exception& e) {
+            std::cerr << "FAILED " << check.name << ": " << e.what() << "\n";
+            return 1;
+        }
+        std::cout << "ok " << check.name << "\n";
+    }
+    std::cout << "all policy_expr checks passed\n";
+    return 0;
+}

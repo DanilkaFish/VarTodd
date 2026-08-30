@@ -12,3 +12,13 @@ target_compile_definitions(vartodd_core_regression PRIVATE
 )
 
 add_test(NAME vartodd_core_regression COMMAND vartodd_core_regression)
+
+add_executable(vartodd_policy_expr policy_expr.cpp)
+
+target_link_libraries(vartodd_policy_expr
+    PRIVATE
+        vartodd
+        cnpy++
+)
+
+add_test(NAME vartodd_policy_expr COMMAND vartodd_policy_expr)

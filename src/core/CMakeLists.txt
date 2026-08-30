@@ -2,6 +2,7 @@ set(VARTODD_CORE_SOURCES
     algorithms.cpp
     matrix.cpp
     nullspace.cpp
+    policy_expr.cpp
     todd_generator.cpp
     todd_index.cpp
 )
