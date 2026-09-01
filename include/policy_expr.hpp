@@ -204,16 +204,6 @@ class PolicyProgram {
     std::span<const Instr> code() const noexcept { return code_; }
     std::span<const float> consts() const noexcept { return consts_; }
 
-    // True when, for a fixed y, the program orders candidates identically to
-    // ranking by reduction descending. Lets the inner-z search keep its
-    // reduction-only path instead of scoring every touched bucket.
-    //
-    // `params` are the bound free scalars. They are fixed for the whole policy
-    // iteration, so folding their actual values in is what lets a tunable
-    // coefficient qualify: `nred * p.w(0)` preserves the order whenever the
-    // bound w(0) happens to be positive, which is only decidable here.
-    // Called once per iteration, never per candidate.
-    bool ranks_fixed_y_by_reduction(std::span<const float> params = {}) const noexcept;
 
   private:
     std::vector<Instr> code_;
@@ -221,13 +211,8 @@ class PolicyProgram {
     std::size_t        n_params_          = 0;
     PolicySite         site_              = PolicySite::Finalization;
     KnobMask           used_{};
-    // Decided without parameter values: true only when the program qualifies
-    // for every possible binding. The public accessor refines this using the
-    // actual bound values.
-    bool               ranks_by_reduction_ = false;
 
     void validate_();
-    bool compute_ranks_by_reduction_(std::span<const float> params) const;
 };
 
 } // namespace todd

@@ -29,7 +29,6 @@ struct TohpeZInfo {
     std::uint32_t bucket_id   = 0;
 };
 
-using TohpeZScoreFunction = std::function<float(index_t, index_t, RowCView)>;
 
 struct CountWSScore {
     std::uint32_t bucket_id = 0;
@@ -64,11 +63,6 @@ struct TohpeRedTarget {
 };
 
 
-struct RankedCountWSScore {
-    std::uint32_t bucket_id = 0;
-    index_t       count     = 0;
-    float         score     = 0.0f;
-};
 
 namespace detail {
 
@@ -178,39 +172,6 @@ class PackedCountStorage {
         }
     }
 
-    template <class ScoreFn>
-    void argmax_n_by_into(std::size_t n, std::vector<RankedCountWSScore>& out, ScoreFn&& score_fn) const {
-        out.clear();
-        if (n == 0 || touched_size_ == 0)
-            return;
-
-        out.reserve(touched_size_);
-        for (std::size_t i = 0; i < touched_size_; ++i) {
-            const std::uint32_t id    = touched_ids_[i];
-            const index_t       count = count_of_(id);
-            if (count == 0)
-                continue;
-            out.push_back(RankedCountWSScore{
-                .bucket_id = id,
-                .count     = count,
-                .score     = score_fn(id, count),
-            });
-        }
-
-        const auto better = [](const RankedCountWSScore& a, const RankedCountWSScore& b) {
-            if (a.score != b.score)
-                return a.score > b.score;
-            if (a.count != b.count)
-                return a.count > b.count;
-            return a.bucket_id < b.bucket_id;
-        };
-        n = std::min(n, out.size());
-        if (n < out.size()) {
-            std::ranges::nth_element(out, out.begin() + static_cast<std::ptrdiff_t>(n), better);
-            out.resize(n);
-        }
-        std::ranges::sort(out, better);
-    }
 
     CountWSScore argmax() const {
         assert(touched_size_ != 0);
@@ -363,39 +324,6 @@ class CompactCountStorage {
         }
     }
 
-    template <class ScoreFn>
-    void argmax_n_by_into(std::size_t n, std::vector<RankedCountWSScore>& out, ScoreFn&& score_fn) const {
-        out.clear();
-        if (n == 0 || touched_size_ == 0)
-            return;
-
-        out.reserve(touched_size_);
-        for (std::size_t pos = 0; pos < touched_size_; ++pos) {
-            const std::uint32_t id    = pos_to_id_[pos];
-            const index_t       count = static_cast<index_t>(counts_[pos]);
-            if (count == 0)
-                continue;
-            out.push_back(RankedCountWSScore{
-                .bucket_id = id,
-                .count     = count,
-                .score     = score_fn(id, count),
-            });
-        }
-
-        const auto better = [](const RankedCountWSScore& a, const RankedCountWSScore& b) {
-            if (a.score != b.score)
-                return a.score > b.score;
-            if (a.count != b.count)
-                return a.count > b.count;
-            return a.bucket_id < b.bucket_id;
-        };
-        n = std::min(n, out.size());
-        if (n < out.size()) {
-            std::ranges::nth_element(out, out.begin() + static_cast<std::ptrdiff_t>(n), better);
-            out.resize(n);
-        }
-        std::ranges::sort(out, better);
-    }
 
     CountWSScore argmax() const {
         assert(touched_size_ != 0);
@@ -496,12 +424,6 @@ class CountWS {
         with_storage([n, &out, &target](auto& storage) { storage.argmax_n_into(n, out, target); });
     }
 
-    template <class ScoreFn>
-    void argmax_n_by_into(std::size_t n, std::vector<RankedCountWSScore>& out, ScoreFn&& score_fn) const {
-        with_storage([&](const auto& storage) {
-            storage.argmax_n_by_into(n, out, std::forward<ScoreFn>(score_fn));
-        });
-    }
 
     CountWSScore argmax() const {
         return with_storage([](const auto& storage) { return storage.argmax(); });
@@ -630,8 +552,6 @@ class TohpeGenerator {
     void best_z_n_into(RowCView y, index_t num_samples, std::vector<std::pair<Row, index_t>>& scratch_out) const;
     void best_z_n_details_into(RowCView y, index_t num_samples, std::vector<TohpeZInfo>& scratch_out,
                                const TohpeRedTarget& target = {}) const;
-    void best_z_n_details_into(RowCView y, index_t num_samples, const TohpeZScoreFunction& score_fn,
-                               std::vector<TohpeZInfo>& scratch_out) const;
 
     auto make(RowCView z) const -> NullSpace;
     auto make(RowCView z, std::uint32_t bucket_id) const -> NullSpace;
@@ -650,7 +570,6 @@ class TohpeGenerator {
     mutable std::vector<index_t>            scratch_ones_;
     mutable std::vector<index_t>            scratch_zeros_;
     mutable std::vector<CountWSScore>       scratch_candidates_;
-    mutable std::vector<RankedCountWSScore> scratch_ranked_candidates_;
     mutable std::vector<TohpeZInfo>         scratch_z_infos_;
 };
 

@@ -64,9 +64,9 @@ def explore_score(k, p, fn):
     negative bucket weight, it cannot be cancelled by simply finding a larger
     reduction, so expensive buckets stay expensive at every reduction scale.
 
-    Cost: reading nbucket here gives up the inner z search's reduction-only
-    fast path. Deliberate -- with a light TODD budget this stage is the cheap
-    one, and bucket cost is exactly what it should be discriminating on.
+    Reading nbucket here is free: the inner z search ranks z by the reduction
+    band, never by this score, so the score only ever runs on the candidates
+    that reach the pool.
     """
     cheapness = fn.exp(-k.nbucket * fn.abs(p.w(1)))
     return k.nred * p.w(0) * cheapness + k.ndim * p.w(2) - k.nzw * fn.abs(p.w(3))

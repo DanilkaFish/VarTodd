@@ -657,14 +657,6 @@ py::class_<Stats>(m, "Stats")
              py::arg("site") = static_cast<int>(PolicySite::Finalization))
         .def_property_readonly("n_params", &PolicyProgram::n_params)
         .def_property_readonly("site", [](const PolicyProgram& p) { return static_cast<int>(p.site()); })
-        // Pass the bound parameters to let a tunable coefficient qualify: they
-        // are constants for the whole iteration, so their sign is decidable.
-        .def(
-            "ranks_fixed_y_by_reduction",
-            [](const PolicyProgram& p, const std::vector<float>& params) {
-                return p.ranks_fixed_y_by_reduction(params);
-            },
-            py::arg("params") = std::vector<float>{})
         .def_property_readonly("used_knobs",
                                [](const PolicyProgram& p) {
                                    std::vector<std::string> names;

@@ -256,15 +256,6 @@ class TestLint(unittest.TestCase):
 
         self.assertTrue(any("p.w(1)" in w for w in unused.warnings))
 
-    def test_fast_path_loss_is_reported(self):
-        # An exploration score reading a z-varying knob forfeits the
-        # reduction-only path in the inner z search. That is a wall-clock cost,
-        # so it must be stated rather than discovered as unexplained slowness.
-        self.assertTrue(
-            any("fast path" in w for w in ratio_explore.warnings),
-            ratio_explore.warnings,
-        )
-
     def test_clean_policy_has_no_warnings(self):
         self.assertEqual(linear_explore.warnings, [])
 
@@ -598,102 +589,6 @@ class TestNativeBinding(unittest.TestCase):
                 bound.evaluate(dim=dim, **frame),
                 places=5,
             )
-
-    def test_bound_parameters_can_restore_the_fast_path(self):
-        # Parameters are constants for the whole policy iteration, so their
-        # sign is decidable once bound. Without that, every tunable-weight
-        # exploration score paid the slow path -- measured at ~4x.
-        @policy.exploration
-        def tunable(k, p, fn):
-            return k.nred * p.w(0) + k.ndim * p.w(1)
-
-        positive = tunable.bind([1.5, 0.5]).native()
-        self.assertFalse(positive.ranks_fixed_y_by_reduction())  # unbound: unknown
-        self.assertTrue(positive.ranks_fixed_y_by_reduction([1.5, 0.5]))
-        self.assertFalse(positive.ranks_fixed_y_by_reduction([-1.5, 0.5]))
-        self.assertFalse(positive.ranks_fixed_y_by_reduction([0.0, 0.5]))
-
-    def test_fast_path_claim_is_sound(self):
-        """Whenever the analysis claims the fast path, the score must really
-        rank reductions in descending order for a fixed y.
-
-        The fast path replaces scoring with a reduction-only ranking, so a
-        false claim silently changes which candidates are chosen -- it would
-        not fail, it would quietly search differently. Randomized because the
-        unsound cases are combinations (sqrt(x)*a - x*b is decreasing for large
-        x even though both coefficients are positive), not single operators.
-        """
-        import random
-
-        @policy.exploration
-        def affine(k, p, fn):
-            return k.nred * p.w(0) + k.ndim * p.w(1)
-
-        @policy.exploration
-        def monotone(k, p, fn):
-            return fn.sqrt(fn.max(k.nred, 0.0)) * p.w(0) + k.ndim * p.w(1)
-
-        @policy.exploration
-        def saturating(k, p, fn):
-            return fn.tanh(k.nred * p.w(0)) * p.w(1) + k.nyw * p.w(2)
-
-        @policy.exploration
-        def mixed_rates(k, p, fn):
-            # sqrt and linear rates are not comparable; must be refused.
-            return fn.sqrt(fn.max(k.nred, 0.0)) * p.w(0) - k.nred * p.w(1)
-
-        @policy.exploration
-        def clamped(k, p, fn):
-            return fn.min(k.nred, p.w(0)) * p.w(1) + k.ndim * p.w(2)
-
-        fixed = dict(dim=3, yw=2, zw=1, zsize=4, bucket=5, bn=10, dn=8, wvwn=6)
-        reductions = list(range(30, 0, -1))
-        rng = random.Random(7)
-        claimed = 0
-        for expr in (affine, monotone, saturating, mixed_rates, clamped):
-            for _ in range(120):
-                args = [round(rng.uniform(-3, 3), 3) for _ in range(expr.n_params)]
-                bound = expr.bind(args)
-                if not bound.native().ranks_fixed_y_by_reduction(bound.params):
-                    continue
-                claimed += 1
-                scores = [bound.evaluate(red=r, **fixed) for r in reductions]
-                for i in range(len(scores) - 1):
-                    self.assertGreaterEqual(
-                        scores[i], scores[i + 1] - 1e-9,
-                        msg=f"{expr.name} args={args} claims the fast path but is "
-                            f"not monotone in reduction",
-                    )
-        self.assertGreater(claimed, 100, "the fuzz should exercise real claims")
-
-    def test_monotone_functions_of_reduction_keep_the_fast_path(self):
-        # sqrt/tanh/sigmoid are strictly increasing, so applying them to a
-        # reduction term preserves candidate order and must not be refused.
-        @policy.exploration
-        def compressed(k, p, fn):
-            return fn.sqrt(fn.max(k.nred, 0.0)) * p.w(0) + k.ndim * p.w(1)
-
-        bound = compressed.bind([1.5, 0.5])
-        self.assertTrue(bound.native().ranks_fixed_y_by_reduction(bound.params))
-
-    def test_z_varying_knob_disqualifies_at_any_coefficient(self):
-        @policy.exploration
-        def with_bucket(k, p, fn):
-            return k.nred * p.w(0) + k.nbucket * p.w(1)
-
-        program = with_bucket.bind([1.0, 1.0]).native()
-        for weight in (1.0, 0.0, -1.0):
-            self.assertFalse(program.ranks_fixed_y_by_reduction([1.0, weight]))
-
-    def test_native_reports_the_fast_path(self):
-        @policy.exploration
-        def greedy_expr(k, p, fn):
-            return k.nred * 2.0
-
-        self.assertTrue(greedy_expr.bind([]).native().ranks_fixed_y_by_reduction())
-        # ratio_explore reads nbucket, so it must give the fast path up
-        bound = ratio_explore.bind([1.0])
-        self.assertFalse(bound.native().ranks_fixed_y_by_reduction(bound.params))
 
     def test_native_program_pickles(self):
         program = branchy_final.bind([2.0, 3.0]).native()

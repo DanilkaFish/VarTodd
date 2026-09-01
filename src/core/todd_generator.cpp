@@ -626,7 +626,6 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
     auto local_pool = TopKPool<ExplorationScorer>(config.tohpe.pool.keep, config.escore());
     const index_t dim                 = ctx.tohpe_dim;
     const Int     dim_int             = detail::checked_int_from_index(dim, "TOHPE basis dimension overflow");
-    const bool    reduction_fast_path = config.exploration.ranks_fixed_y_by_reduction(config.exploration_params);
     out.stats.max_basis               = std::max(out.stats.max_basis, dim_int);
 
     PyRNG local_rng(mixed_seed(ctx.base_seed, 0, 0, 0, CandidateSourceTohpe));
@@ -637,30 +636,16 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
         out.stats.evaluated++;
         auto vec = linear_combination_from_basis(ctx.data->tohpe_basis(), coefs);
         const Int vec_weight = detail::checked_int_from_index(vec.count(), "Candidate vector weight overflow");
-        if (reduction_fast_path) {
-            ctx.get_tohpe_gen().best_z_n_details_into(vec, config.tohpe.z_choices, scratch_best_z,
-                                                      config.tohpe.red_target);
-            std::erase_if(scratch_best_z, [](const TohpeZInfo& info) { return info.reduction <= 0; });
-        } else {
-            ctx.get_tohpe_gen().best_z_n_details_into(
-                vec, config.tohpe.z_choices,
-                [&](index_t reduction, index_t bucket_size, RowCView z) {
-                    // Only the z-dependent knobs vary here; dim and the y
-                    // weight are fixed for this y, and the rest of the frame
-                    // carries the per-iteration normalizers.
-                    KnobFrame f = config.frame;
-                    f.red       = static_cast<float>(reduction);
-                    f.dim       = static_cast<float>(dim_int);
-                    f.bucket    = static_cast<float>(bucket_size);
-                    f.yw        = static_cast<float>(vec_weight);
-                    f.zw        = static_cast<float>(z.count());
-                    f.zsize     = static_cast<float>(std::max<index_t>(1, z.size()));
-                    f.max_red   = static_cast<float>(2 * bucket_size);
-                    f.source    = static_cast<float>(CandidateSourceTohpe);
-                    return config.exploration.eval(f, config.exploration_params);
-                },
-                scratch_best_z);
-        }
+        // The inner z search ranks by distance to the target reduction band
+        // alone -- never by the exploration score. Only the z-dependent knobs
+        // vary here, so a score-based ranking would have to be evaluated on
+        // every touched bucket; the band answers the same question ("which
+        // size of reduction do we want from this y") for the cost of a
+        // comparison. The exploration score still decides what enters the
+        // pool, below.
+        ctx.get_tohpe_gen().best_z_n_details_into(vec, config.tohpe.z_choices, scratch_best_z,
+                                                  config.tohpe.red_target);
+        std::erase_if(scratch_best_z, [](const TohpeZInfo& info) { return info.reduction <= 0; });
         for (std::size_t zi = 0; zi < scratch_best_z.size(); ++zi) {
             auto&      info = scratch_best_z[zi];
             const auto red  = info.reduction;

@@ -566,29 +566,6 @@ void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
     }
 }
 
-void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
-                                           const TohpeZScoreFunction& score_fn,
-                                           std::vector<TohpeZInfo>& scratch_out) const {
-    count_z_reductions_(y);
-    const ToddIndex& idx = M_->index();
-    ws_.argmax_n_by_into(num_samples, scratch_ranked_candidates_,
-                         [&](std::uint32_t bucket_id, index_t reduction) {
-                             const Row z = idx.key_of(bucket_id);
-                             return score_fn(reduction, idx.bucket_size(bucket_id), z.cview());
-                         });
-
-    scratch_out.clear();
-    scratch_out.reserve(scratch_ranked_candidates_.size());
-    for (const auto& candidate : scratch_ranked_candidates_) {
-        const auto bucket_id = candidate.bucket_id;
-        scratch_out.push_back(TohpeZInfo{
-            .z           = idx.key_of(bucket_id),
-            .reduction   = candidate.count,
-            .bucket_size = idx.bucket_size(bucket_id),
-            .bucket_id   = bucket_id,
-        });
-    }
-}
 
 FullToddGenerator::FullToddGenerator(std::shared_ptr<MatrixWithData> M) : M_{std::move(M)} {}
 

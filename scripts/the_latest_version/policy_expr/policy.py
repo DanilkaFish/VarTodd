@@ -331,13 +331,6 @@ class PolicyExpr:
 
 # --- lint ---------------------------------------------------------------------
 
-# Knobs whose value changes with the choice of z for a fixed y. Reading any of
-# them in an exploration expression forfeits the reduction-only fast path in the
-# inner z search, which is a wall-clock cost rather than a score change -- so it
-# is reported rather than left to be discovered as unexplained slowness.
-_Z_VARYING = frozenset(
-    {"bucket", "nbucket", "zw", "nzw", "zsize", "bucket_id", "max_red", "nmax_red"}
-)
 _REDUCTION_KNOBS = frozenset({"red", "nred"})
 
 
@@ -362,13 +355,6 @@ def _lint(name, expr: "PolicyExpr", used_knobs, used_params, declared_indices) -
             "never used in the expression"
         )
 
-    if expr.site == SITE_EXPLORATION and (used_knobs & _Z_VARYING):
-        touched = ", ".join(sorted(used_knobs & _Z_VARYING))
-        warnings.append(
-            f"{name}: reads {touched}, so the inner z search must score every "
-            "touched bucket instead of taking the reduction-only fast path. "
-            "This is a wall-clock cost, not a scoring change."
-        )
 
     return warnings
 

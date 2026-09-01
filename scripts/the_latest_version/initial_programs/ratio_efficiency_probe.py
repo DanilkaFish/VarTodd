@@ -10,11 +10,9 @@ The ratio lives in the finalization score, which runs once per merged
 candidate; exploration stays a weighted sum so the pool fills at the usual
 rate.
 
-Cost note: exploration still reads k.nbucket for its ordinary linear bucket
-term, and any z-varying knob there costs the inner z search its reduction-only
-fast path -- measured at roughly 4-5x per policy step. If that proves too
-expensive for the rank it buys, dropping the k.nbucket term from exploration
-recovers it without touching the ratio.
+The inner z search never consults the exploration score -- it ranks z by
+distance to the TOHPE reduction band below -- so reading k.nbucket here costs
+nothing beyond the arithmetic. The score decides what enters the pool.
 """
 
 from collections.abc import Iterable

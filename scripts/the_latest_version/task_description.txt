@@ -88,17 +88,8 @@ ToddSearch(
   are ranked by
   `max(target_min_red - red, red - target_max_red, 0)`,
   so those landing inside `[target_min_red, target_max_red]` come first and,
-  outside it, the nearest to the band follow. The chosen z then enter the action
-  pool on `ExplorationScore` as usual -- the band decides which z get that far,
-  it does not replace the scoring. Reference settings: `[10, 10]` targets the
-  greatest reductions (classic greedy, productive in early bands where large
-  reductions are plentiful); `[3, 4]` targets medium reductions, leaving more
-  structure intact for later steps; `[2, 3]` targets small ones, matching the
-  terminal band where large reductions have stopped appearing. A wide band such
-  as `[1, 10]` spans everything the search realistically produces and so imposes
-  no preference. `target_min_red` must be > 0 -- a zero reduction is not a
-  usable action -- and `target_max_red` must be >= `target_min_red`; both are
-  rejected at construction otherwise.
+  outside it, the nearest to the band follow. This is just filter before explorations scoring 
+  to effectively choose intermediate z_choices actions.
 - TOHPE is the cheap source: a limited TOHPE-specific z/y search with
   `z_choices` as its z budget. It researches a common part of binary null space, which is the intersection of the null spaces for all z.
   It first samples y, then searches for `z_choices` z with the largest reduction.

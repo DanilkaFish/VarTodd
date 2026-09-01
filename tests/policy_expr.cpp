@@ -131,11 +131,6 @@ struct ExplorationScore {
         return sc.evaluate(weights, centers, x, 1.0f / bn / 2.0f);
     }
 
-    bool ranks_fixed_y_by_reduction() const noexcept {
-        const auto weight = [this](std::size_t i) { return i < weights.size() ? weights[i] : 0.0f; };
-        return sc.type == ScoringFunction::LINEAR && bn > 0.0f && weight(0) >= 0.0f && weight(2) == 0.0f &&
-               weight(4) == 0.0f;
-    }
 };
 
 struct FinalizationScore {
@@ -329,127 +324,11 @@ void check_used_knobs_reporting() {
 
 // --- fast-path predicate ----------------------------------------------------
 
-void check_fast_path_predicate() {
-    const auto site = PolicySite::ExplorationZ;
-
-    // Pure positive multiple of reduction: qualifies.
-    require(make({knob(Knob::nred), cst(0), op(Op::Mul)}, {2.0f}, 0, site).ranks_fixed_y_by_reduction(),
-            "positive multiple of nred should keep the fast path");
-
-    // Reduction plus a y-constant term: still monotone in red.
-    require(make({knob(Knob::nred), knob(Knob::ndim), op(Op::Add)}, {}, 0, site).ranks_fixed_y_by_reduction(),
-            "nred + ndim should keep the fast path (ndim is fixed for a given y)");
-
-    // Negative coefficient reverses the order: must not qualify.
-    require(!make({knob(Knob::nred), cst(0), op(Op::Mul)}, {-1.0f}, 0, site).ranks_fixed_y_by_reduction(),
-            "negative multiple of nred must lose the fast path");
-
-    // Any z-varying knob disqualifies, matching the legacy weight(2)/weight(4) checks.
-    require(!make({knob(Knob::nred), knob(Knob::nbucket), op(Op::Add)}, {}, 0, site).ranks_fixed_y_by_reduction(),
-            "bucket size must lose the fast path");
-    require(!make({knob(Knob::nred), knob(Knob::nzw), op(Op::Add)}, {}, 0, site).ranks_fixed_y_by_reduction(),
-            "z weight must lose the fast path");
-
-    // Reduction inside a nonlinearity is not provably order-preserving here.
-    require(!make({knob(Knob::nred), op(Op::Exp)}, {}, 0, site).ranks_fixed_y_by_reduction(),
-            "exp(nred) must conservatively lose the fast path");
-
-    // A program ignoring reduction entirely ties every candidate.
-    require(!make({knob(Knob::ndim)}, {}, 0, site).ranks_fixed_y_by_reduction(),
-            "a program without reduction must lose the fast path");
-
-    // Without parameter values the sign of a bound scalar is unknown, so the
-    // analysis must refuse.
-    require(!make({knob(Knob::nred), par(0), op(Op::Mul)}, {}, 1, site).ranks_fixed_y_by_reduction(),
-            "scaling nred by an unbound parameter must lose the fast path");
-
-    // With the values supplied it becomes decidable: parameters are constants
-    // for the whole iteration, so a positive coefficient preserves the order.
-    // This is the common tunable-weight case and it must not pay the slow path.
-    {
-        const auto prog = make({knob(Knob::nred), par(0), op(Op::Mul)}, {}, 1, site);
-        const std::vector<float> positive = {2.0f};
-        const std::vector<float> zero     = {0.0f};
-        const std::vector<float> negative = {-2.0f};
-        require(prog.ranks_fixed_y_by_reduction(positive),
-                "a positive bound coefficient on nred must keep the fast path");
-        require(!prog.ranks_fixed_y_by_reduction(zero),
-                "a zero coefficient ties every candidate and must lose the fast path");
-        require(!prog.ranks_fixed_y_by_reduction(negative),
-                "a negative bound coefficient reverses the order and must lose the fast path");
-    }
-
-    // A z-varying knob disqualifies whatever the bound values are.
-    {
-        const auto prog = make({knob(Knob::nred), par(0), op(Op::Mul), knob(Knob::nbucket), par(1),
-                                op(Op::Mul), op(Op::Add)},
-                               {}, 2, site);
-        for (float w : {1.0f, 0.0f, -1.0f}) {
-            const std::vector<float> params = {1.0f, w};
-            require(!prog.ranks_fixed_y_by_reduction(params),
-                    "a bucket term must lose the fast path at any coefficient");
-        }
-    }
-
-    // Reduction in a denominator is not affine.
-    require(!make({cst(0), knob(Knob::nred), op(Op::Div)}, {1.0f}, 0, site).ranks_fixed_y_by_reduction(),
-            "nred in a denominator must lose the fast path");
-}
 
 // This is the parity claim from the plan: the new predicate must accept every
 // program the legacy ranks_fixed_y_by_reduction() accepted. That predicate was
 // LINEAR && bn > 0 && w[0] >= 0 && w[2] == 0 && w[4] == 0, i.e. a weighted sum
 // over {red, dim, yw} with a non-negative reduction weight.
-void check_fast_path_matches_legacy_predicate() {
-    const auto site = PolicySite::ExplorationZ;
-
-    struct Case {
-        float w0, w1, w2, w3, w4;
-    };
-    const Case cases[] = {
-        {1.0f, 0.0f, 0.0f, 0.0f, 0.0f},  // pure greedy
-        {2.0f, 1.5f, 0.0f, -1.0f, 0.0f}, // red + dim + yw terms
-        {0.0f, 1.0f, 0.0f, 0.0f, 0.0f},  // legacy accepted w0 == 0; we do not (see below)
-        {-1.0f, 0.0f, 0.0f, 0.0f, 0.0f}, // negative reduction weight
-        {1.0f, 0.0f, 0.5f, 0.0f, 0.0f},  // bucket term
-        {1.0f, 0.0f, 0.0f, 0.0f, 0.5f},  // z-weight term
-    };
-
-    for (const Case& c : cases) {
-        legacy::ExplorationScore legacy(c.w0, c.w1, c.w2, c.w3, c.w4);
-        legacy.bn = 4.0f;
-        legacy.dn = 4.0f;
-        legacy.wvwn = 4.0f;
-        const bool legacy_ok = legacy.ranks_fixed_y_by_reduction();
-
-        // Same weighted sum as a program.
-        std::vector<Instr> code;
-        std::vector<float> consts = {c.w0, c.w1, c.w2, c.w3, c.w4};
-        const Knob         knobs[] = {Knob::nred, Knob::ndim, Knob::nbucket, Knob::nyw, Knob::nzw};
-        bool               first   = true;
-        for (std::uint16_t i = 0; i < 5; ++i) {
-            if (consts[i] == 0.0f)
-                continue; // a zero weight contributes no term, as in the sum
-            code.push_back(knob(knobs[i]));
-            code.push_back(cst(i));
-            code.push_back(op(Op::Mul));
-            if (!first)
-                code.push_back(op(Op::Add));
-            first = false;
-        }
-        if (code.empty())
-            continue;
-
-        const bool ours = PolicyProgram(code, consts, 0, site).ranks_fixed_y_by_reduction();
-
-        if (c.w0 > 0.0f && c.w2 == 0.0f && c.w4 == 0.0f) {
-            require(legacy_ok && ours, "both predicates should accept a positive-reduction linear score");
-        }
-        if (c.w2 != 0.0f || c.w4 != 0.0f || c.w0 < 0.0f) {
-            require(!ours, "z-varying or order-reversing programs must lose the fast path");
-        }
-    }
-}
 
 // --- equivalence with the legacy scoring functions --------------------------
 
@@ -753,8 +632,6 @@ const Check k_checks[] = {
     {"validation_rejects_malformed_programs", check_validation_rejects_malformed_programs},
     {"site_availability_is_enforced", check_site_availability_is_enforced},
     {"used_knobs_reporting", check_used_knobs_reporting},
-    {"fast_path_predicate", check_fast_path_predicate},
-    {"fast_path_matches_legacy_predicate", check_fast_path_matches_legacy_predicate},
     {"linear_score_equivalence", check_linear_score_equivalence},
     {"polynom_score_equivalence", check_polynom_score_equivalence},
     {"finalization_six_feature_equivalence", check_finalization_six_feature_equivalence},

@@ -233,9 +233,6 @@ struct ExplorationScorer : PolicyScorer {
         cand.pool_score = evaluate(cand);
         return std::make_pair(cand.pool_score, 0);
     }
-    bool ranks_fixed_y_by_reduction() const noexcept {
-        return program->ranks_fixed_y_by_reduction();
-    }
 };
 
 // Ranks the merged pool before selection.
