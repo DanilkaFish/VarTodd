@@ -48,6 +48,31 @@ LOWER_BOUND = -2.0
 UPPER_BOUND = 2.0
 
 
+# TOHPE reduction target band.
+#
+# For each sampled y, the cheap TOHPE z search ranks its z candidates by
+#     max(TARGET_MIN_RED - red, red - TARGET_MAX_RED, 0)
+# so candidates whose reduction lands inside [TARGET_MIN_RED, TARGET_MAX_RED]
+# come first, and outside the band the ones nearest to it follow. The chosen z
+# then enter the action pool on the exploration score as usual -- the band only
+# decides which z get that far, it does not replace the scoring.
+#
+# Choosing a *size* of reduction rather than always the largest is the point:
+#   [10, 10] aims at the greatest reductions -- the classic greedy behaviour,
+#            productive in the early bands where large reductions are plentiful;
+#   [3, 4]   aims at medium reductions, which keeps more of the structure intact
+#            for later steps instead of spending it in one move;
+#   [2, 3]   aims at small reductions, matching the terminal band where large
+#            ones have stopped appearing and the search lives on 1-2 per step.
+# [1, 10] here is deliberately permissive: it spans every reduction the
+# search realistically produces, so the band imposes no preference and the
+# z ranking stays the plain reduction-descending order. This program varies
+# its policy by rank instead, and the wide band keeps that the only variable.
+# TARGET_MIN_RED must be > 0: a zero reduction is not a usable action.
+TARGET_MIN_RED = 1
+TARGET_MAX_RED = 10
+
+
 @policy.exploration
 def explore_score(k, p, fn):
     """Linear in the five exploration knobs, shared by both rank bands."""
@@ -130,11 +155,13 @@ class Evaluator(BaseEvaluator):
         self.set_tohpe_search(
             SCHEDULE,
             [
-                TohpeSearch(head_samples, SourcePool(keep=16, reserve=1), z_choices=4),
+                TohpeSearch(head_samples, SourcePool(keep=16, reserve=1), z_choices=4, target_min_red=TARGET_MIN_RED, target_max_red=TARGET_MAX_RED),
                 TohpeSearch(
                     tail_samples,
                     SourcePool(keep=self.int_range(8, 24), reserve=2),
                     z_choices=self.int_range(2, 6),
+                    target_min_red=TARGET_MIN_RED,
+                    target_max_red=TARGET_MAX_RED,
                 ),
             ],
         )

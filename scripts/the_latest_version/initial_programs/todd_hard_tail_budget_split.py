@@ -34,6 +34,27 @@ UPPER_BOUND = 2.0
 EARLY_TODD_LIMIT = 512
 
 
+# TOHPE reduction target band.
+#
+# For each sampled y, the cheap TOHPE z search ranks its z candidates by
+#     max(TARGET_MIN_RED - red, red - TARGET_MAX_RED, 0)
+# so candidates whose reduction lands inside [TARGET_MIN_RED, TARGET_MAX_RED]
+# come first, and outside the band the ones nearest to it follow. The chosen z
+# then enter the action pool on the exploration score as usual -- the band only
+# decides which z get that far, it does not replace the scoring.
+#
+# Choosing a *size* of reduction rather than always the largest is the point:
+#   [10, 10] aims at the greatest reductions -- the classic greedy behaviour,
+#            productive in the early bands where large reductions are plentiful;
+#   [3, 4]   aims at medium reductions, which keeps more of the structure intact
+#            for later steps instead of spending it in one move;
+#   [2, 3]   aims at small reductions, matching the terminal band where large
+#            ones have stopped appearing and the search lives on 1-2 per step.
+# TARGET_MIN_RED must be > 0: a zero reduction is not a usable action.
+TARGET_MIN_RED = 2
+TARGET_MAX_RED = 3
+
+
 @policy.exploration
 def explore_score(k, p, fn):
     """Linear in the five exploration knobs."""
@@ -103,11 +124,15 @@ class Evaluator(BaseEvaluator):
                     SamplingBudget(one_hot="all", sparse=16, dense=12, sparse_max_weight=3),
                     SourcePool(keep=self.int_range(12, 32), reserve=1),
                     z_choices=self.int_range(4, 10),
+                    target_min_red=TARGET_MIN_RED,
+                    target_max_red=TARGET_MAX_RED,
                 ),
                 TohpeSearch(
                     SamplingBudget(one_hot=24, sparse=8, dense=6, sparse_max_weight=3),
                     SourcePool(keep=8, reserve=0),
                     z_choices=2,
+                    target_min_red=TARGET_MIN_RED,
+                    target_max_red=TARGET_MAX_RED,
                 ),
             ],
         )

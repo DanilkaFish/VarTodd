@@ -21,6 +21,27 @@ SEEDS = [17, 18]
 N_EVAL = 288
 
 
+# TOHPE reduction target band.
+#
+# For each sampled y, the cheap TOHPE z search ranks its z candidates by
+#     max(TARGET_MIN_RED - red, red - TARGET_MAX_RED, 0)
+# so candidates whose reduction lands inside [TARGET_MIN_RED, TARGET_MAX_RED]
+# come first, and outside the band the ones nearest to it follow. The chosen z
+# then enter the action pool on the exploration score as usual -- the band only
+# decides which z get that far, it does not replace the scoring.
+#
+# Choosing a *size* of reduction rather than always the largest is the point:
+#   [10, 10] aims at the greatest reductions -- the classic greedy behaviour,
+#            productive in the early bands where large reductions are plentiful;
+#   [3, 4]   aims at medium reductions, which keeps more of the structure intact
+#            for later steps instead of spending it in one move;
+#   [2, 3]   aims at small reductions, matching the terminal band where large
+#            ones have stopped appearing and the search lives on 1-2 per step.
+# TARGET_MIN_RED must be > 0: a zero reduction is not a usable action.
+TARGET_MIN_RED = 3
+TARGET_MAX_RED = 4
+
+
 @policy.exploration
 def explore_score(k, p, fn):
     """Saturating reduction reward, plus a sparsity preference.
@@ -81,7 +102,7 @@ class Evaluator(BaseEvaluator):
         todd_cap = self.int_range(512, 6000)
         self.set_action_selection(ActionSelection(beamwidth=2, mode="softmax", temperature=0.16))
         self.set_action_pool(ActionPool(final_size=self.int_range(12, 28)))
-        self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=6, reserve=1), z_choices=4))
+        self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=6, reserve=1), z_choices=4, target_min_red=TARGET_MIN_RED, target_max_red=TARGET_MAX_RED))
         self.set_todd_search(
             ToddSearch(
                 SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2),

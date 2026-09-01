@@ -47,6 +47,27 @@ UPPER_BOUND = 2.0
 MIN_BUCKET = 1.0
 
 
+# TOHPE reduction target band.
+#
+# For each sampled y, the cheap TOHPE z search ranks its z candidates by
+#     max(TARGET_MIN_RED - red, red - TARGET_MAX_RED, 0)
+# so candidates whose reduction lands inside [TARGET_MIN_RED, TARGET_MAX_RED]
+# come first, and outside the band the ones nearest to it follow. The chosen z
+# then enter the action pool on the exploration score as usual -- the band only
+# decides which z get that far, it does not replace the scoring.
+#
+# Choosing a *size* of reduction rather than always the largest is the point:
+#   [10, 10] aims at the greatest reductions -- the classic greedy behaviour,
+#            productive in the early bands where large reductions are plentiful;
+#   [3, 4]   aims at medium reductions, which keeps more of the structure intact
+#            for later steps instead of spending it in one move;
+#   [2, 3]   aims at small reductions, matching the terminal band where large
+#            ones have stopped appearing and the search lives on 1-2 per step.
+# TARGET_MIN_RED must be > 0: a zero reduction is not a usable action.
+TARGET_MIN_RED = 3
+TARGET_MAX_RED = 4
+
+
 @policy.exploration
 def explore_score(k, p, fn):
     """Plain linear, kept cheap so the pool fills at the usual rate."""
@@ -107,6 +128,8 @@ class Evaluator(BaseEvaluator):
                 sampling=samples,
                 pool=SourcePool(keep=self.int_range(8, 32), reserve=2),
                 z_choices=self.int_range(2, 8),
+                target_min_red=TARGET_MIN_RED,
+                target_max_red=TARGET_MAX_RED,
             )
         )
         self.set_todd_search(

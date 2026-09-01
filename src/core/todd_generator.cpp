@@ -163,6 +163,7 @@ struct NormalizedTohpeSearch {
     NormalizedSamplingBudget sampling{};
     NormalizedSourcePool     pool{};
     Int                      z_choices = 1;
+    TohpeRedTarget           red_target{};
 };
 
 struct NormalizedTohpePrefixSearch {
@@ -216,6 +217,18 @@ NormalizedSamplingBudget normalize_sampling_budget(SamplingBudget sampling) {
     };
 }
 
+// A reduction of 0 is not a usable action -- the engine discards those before
+// they can be scored -- so the band always starts at 1 or above. An inverted
+// band is treated as the single value at its lower edge rather than rejected,
+// so an optimizer sweeping the two knobs independently cannot produce a
+// configuration that fails.
+TohpeRedTarget normalize_red_target(Int min_red, Int max_red) {
+    const auto lower = static_cast<index_t>(std::max(min_red, static_cast<Int>(1)));
+    const auto upper = max_red <= 0 ? std::numeric_limits<index_t>::max()
+                                    : static_cast<index_t>(max_red);
+    return TohpeRedTarget{.min = lower, .max = std::max(lower, upper)};
+}
+
 NormalizedSourcePool normalize_source_pool(SourcePool pool) {
     return {
         .keep    = std::max(pool.keep, static_cast<Int>(0)),
@@ -247,6 +260,7 @@ NormalizedPolicyConfig normalize_policy_config(PolicyConfig config) {
                 .sampling  = normalize_sampling_budget(config.tohpe.sampling),
                 .pool      = normalize_source_pool(config.tohpe.pool),
                 .z_choices = std::max(config.tohpe.z_choices, static_cast<Int>(1)),
+                .red_target = normalize_red_target(config.tohpe.target_min_red, config.tohpe.target_max_red),
             },
         .todd =
             {
@@ -624,7 +638,8 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
         auto vec = linear_combination_from_basis(ctx.data->tohpe_basis(), coefs);
         const Int vec_weight = detail::checked_int_from_index(vec.count(), "Candidate vector weight overflow");
         if (reduction_fast_path) {
-            ctx.get_tohpe_gen().best_z_n_details_into(vec, config.tohpe.z_choices, scratch_best_z);
+            ctx.get_tohpe_gen().best_z_n_details_into(vec, config.tohpe.z_choices, scratch_best_z,
+                                                      config.tohpe.red_target);
             std::erase_if(scratch_best_z, [](const TohpeZInfo& info) { return info.reduction <= 0; });
         } else {
             ctx.get_tohpe_gen().best_z_n_details_into(

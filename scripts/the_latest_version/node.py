@@ -13,18 +13,38 @@ def _load_extension():
     import os
     import sys
 
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    relatives = (
+        ("pyvartodd.Release.pyvartodd", "pyvartodd/Release"),
+        ("pyvartodd.Debug.pyvartodd", "pyvartodd/Debug"),
+        ("pyvartodd.RelWithDebInfo.pyvartodd", "pyvartodd/RelWithDebInfo"),
+        ("pyvartodd.pyvartodd", "pyvartodd"),
+    )
+
+    # This file is symlinked into per-matrix overlay directories, so the repo
+    # root is found relative to the real file, not the symlink, and the overlay
+    # is not always three levels deep.  Walk up until a directory holding a
+    # built extension turns up.
+    def _find_root(start):
+        directory = start
+        while True:
+            for _, relative in relatives:
+                if os.path.isdir(os.path.join(directory, relative)):
+                    return directory
+            parent = os.path.dirname(directory)
+            if parent == directory:
+                return None
+            directory = parent
+
+    here = os.path.dirname(os.path.realpath(__file__))
+    root = _find_root(here) or _find_root(os.path.dirname(os.path.abspath(__file__)))
+    if root is None:
+        root = os.path.dirname(os.path.dirname(here))
     # The extension is built into the repo root, which is not necessarily on
     # sys.path when a program is run from inside scripts/.
     if root not in sys.path:
         sys.path.insert(0, root)
     candidates = []
-    for module, relative in (
-        ("pyvartodd.Release.pyvartodd", "pyvartodd/Release"),
-        ("pyvartodd.Debug.pyvartodd", "pyvartodd/Debug"),
-        ("pyvartodd.RelWithDebInfo.pyvartodd", "pyvartodd/RelWithDebInfo"),
-        ("pyvartodd.pyvartodd", "pyvartodd"),
-    ):
+    for module, relative in relatives:
         directory = os.path.join(root, relative)
         if not os.path.isdir(directory):
             continue

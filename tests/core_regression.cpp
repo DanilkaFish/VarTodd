@@ -638,6 +638,57 @@ void check_exploration_score_feature_contract() {
             "final polynomial reduction center must be subtracted before normalization");
 }
 
+void check_tohpe_reduction_target_band() {
+    // A wider fixture than the score-aware one: the band is only meaningful
+    // when several distinct reductions are reachable from one y.
+    const Matrix P    = Matrix::from_npy(data_path("init_npy/other/barenco_tof_4.qc.matrix.npy").string());
+    auto         data = std::make_shared<MatrixWithData>(P, false);
+    require(data->tohpe_basis().rows() > 0, "target band fixture has an empty TOHPE basis");
+    const Row      y(data->tohpe_basis()[0]);
+    TohpeGenerator generator(data);
+
+    // Unbounded: the original reduction-descending order.
+    std::vector<TohpeZInfo> unbounded;
+    generator.best_z_n_details_into(y, 32, unbounded);
+    require(!unbounded.empty(), "target band fixture produced no z candidates");
+    for (std::size_t i = 1; i < unbounded.size(); ++i)
+        require(unbounded[i - 1].reduction >= unbounded[i].reduction,
+                "unbounded target must rank z by descending reduction");
+
+    const index_t best = unbounded.front().reduction;
+    index_t       smallest = best;
+    for (const auto& info : unbounded)
+        smallest = std::min(smallest, info.reduction);
+
+    if (smallest < best) {
+        // Targeting the smallest reduction present must pull it to the front,
+        // ahead of the larger ones the default order would have preferred.
+        std::vector<TohpeZInfo> banded;
+        generator.best_z_n_details_into(y, 32, banded, TohpeRedTarget{smallest, smallest});
+        require(!banded.empty(), "banded target produced no z candidates");
+        require(banded.front().reduction == smallest,
+                "a target band must rank its own reduction ahead of a larger one");
+    }
+
+    // Outside the band the nearest reduction wins, so a band strictly above
+    // every candidate falls back to the largest available.
+    std::vector<TohpeZInfo> above;
+    generator.best_z_n_details_into(y, 32, above, TohpeRedTarget{best + 10, best + 10});
+    require(!above.empty() && above.front().reduction == best,
+            "an unreachable band must fall back to the closest reduction");
+
+    // An unbounded band must reproduce the default ordering exactly, so the
+    // feature costs nothing when unused.
+    std::vector<TohpeZInfo> explicit_unbounded;
+    generator.best_z_n_details_into(y, 32, explicit_unbounded, TohpeRedTarget{});
+    require(explicit_unbounded.size() == unbounded.size(),
+            "an unbounded band changed the candidate count");
+    for (std::size_t i = 0; i < unbounded.size(); ++i)
+        require(explicit_unbounded[i].bucket_id == unbounded[i].bucket_id &&
+                    explicit_unbounded[i].reduction == unbounded[i].reduction,
+                "an unbounded band changed the default z order");
+}
+
 void check_score_aware_tohpe_z_ranking() {
     Matrix P    = matrix_from_words({1, 4, 11, 14, 16, 21, 26, 28, 31}, 5);
     auto   data = std::make_shared<MatrixWithData>(P, false);
@@ -1055,6 +1106,7 @@ int main() {
         check_portable_random_and_seed_contract();
         check_candidate_tie_order();
         check_exploration_score_feature_contract();
+        check_tohpe_reduction_target_band();
         check_score_aware_tohpe_z_ranking();
         check_policy_iteration_smoke();
         check_policy_iteration_repeatability();

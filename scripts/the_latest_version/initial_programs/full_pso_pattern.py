@@ -31,6 +31,27 @@ LOWER_BOUND = -1.0
 UPPER_BOUND = 1.0
 
 
+# TOHPE reduction target band.
+#
+# For each sampled y, the cheap TOHPE z search ranks its z candidates by
+#     max(TARGET_MIN_RED - red, red - TARGET_MAX_RED, 0)
+# so candidates whose reduction lands inside [TARGET_MIN_RED, TARGET_MAX_RED]
+# come first, and outside the band the ones nearest to it follow. The chosen z
+# then enter the action pool on the exploration score as usual -- the band only
+# decides which z get that far, it does not replace the scoring.
+#
+# Choosing a *size* of reduction rather than always the largest is the point:
+#   [10, 10] aims at the greatest reductions -- the classic greedy behaviour,
+#            productive in the early bands where large reductions are plentiful;
+#   [3, 4]   aims at medium reductions, which keeps more of the structure intact
+#            for later steps instead of spending it in one move;
+#   [2, 3]   aims at small reductions, matching the terminal band where large
+#            ones have stopped appearing and the search lives on 1-2 per step.
+# TARGET_MIN_RED must be > 0: a zero reduction is not a usable action.
+TARGET_MIN_RED = 10
+TARGET_MAX_RED = 10
+
+
 @policy.exploration
 def explore_score(k, p, fn):
     """Linear in the five exploration knobs."""
@@ -88,7 +109,7 @@ class Evaluator(BaseEvaluator):
         return (
             ActionSelection(beamwidth=2, mode="softmax", temperature=0.22),
             ActionPool(final_size=self.int_range(14, 28, group=group)),
-            TohpeSearch(samples, SourcePool(keep=self.int_range(3, 8, group=group), reserve=1), z_choices=3),
+            TohpeSearch(samples, SourcePool(keep=self.int_range(3, 8, group=group), reserve=1), z_choices=3, target_min_red=TARGET_MIN_RED, target_max_red=TARGET_MAX_RED),
             ToddSearch(
                 SamplingBudget(one_hot=8, sparse=2, dense=2, sparse_max_weight=2),
                 SourcePool(keep=3, reserve=1),
@@ -114,7 +135,7 @@ class Evaluator(BaseEvaluator):
         return (
             ActionSelection(beamwidth=3, mode="softmax", temperature=0.12),
             ActionPool(final_size=self.int_range(28, 52, group=group)),
-            TohpeSearch(samples, SourcePool(keep=8, reserve=2), z_choices=4),
+            TohpeSearch(samples, SourcePool(keep=8, reserve=2), z_choices=4, target_min_red=TARGET_MIN_RED, target_max_red=TARGET_MAX_RED),
             ToddSearch(
                 samples,
                 SourcePool(keep=todd_keep, reserve=2),

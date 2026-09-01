@@ -766,6 +766,98 @@ class TestKnobRedundancy(unittest.TestCase):
         self.assertIn("k.red / k.bucket", text)
 
 
+class TestTohpeRedTarget(unittest.TestCase):
+    """The TOHPE inner-z reduction band."""
+
+    def setUp(self):
+        self.native = _native_module()
+        if self.native is None or not hasattr(self.native, "TohpeSearch"):
+            self.skipTest("pyvartodd not built")
+
+    def test_defaults_are_unbounded(self):
+        search = self.native.TohpeSearch()
+        self.assertEqual(search.target_min_red, 1)
+        self.assertGreater(search.target_max_red, 10_000)
+
+    def test_zero_minimum_is_rejected(self):
+        # A zero reduction is not a usable action, so a band starting there
+        # cannot be targeted; the message has to say why.
+        with self.assertRaises(Exception) as ctx:
+            self.native.TohpeSearch(target_min_red=0, target_max_red=5)
+        self.assertIn("must be > 0", str(ctx.exception))
+
+    def test_inverted_band_is_rejected(self):
+        with self.assertRaises(Exception) as ctx:
+            self.native.TohpeSearch(target_min_red=5, target_max_red=2)
+        self.assertIn(">= target_min_red", str(ctx.exception))
+
+    def test_band_appears_in_repr(self):
+        self.assertIn("target_red=3..4",
+                      repr(self.native.TohpeSearch(target_min_red=3, target_max_red=4)))
+        self.assertIn("target_red=1..any", repr(self.native.TohpeSearch()))
+
+    def test_band_survives_pickle(self):
+        search = self.native.TohpeSearch(target_min_red=2, target_max_red=3)
+        restored = pickle.loads(pickle.dumps(search))
+        self.assertEqual(restored.target_min_red, 2)
+        self.assertEqual(restored.target_max_red, 3)
+
+    def test_band_bounds_the_reductions_that_reach_the_pool(self):
+        # End-to-end: with a band, no candidate above its upper edge should be
+        # selected, whichever y-sampling mode is used.
+        import numpy as np
+
+        matrix_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..",
+            "data", "init_npy", "other", "ham15_mad.npy",
+        )
+        if not os.path.isfile(matrix_path):
+            self.skipTest("benchmark matrix not available")
+
+        n = self.native
+        matrix = n.Matrix.from_numpy(np.load(matrix_path))
+
+        @policy.exploration
+        def greedy_expl(k, p, fn):
+            return k.nred
+
+        @policy.final
+        def greedy_fin(k, p, fn):
+            return k.nred
+
+        def best_reduction(low, high, sparse, dense):
+            cfg = n.PolicyConfig()
+            cfg.scores = n.PolicyScores(
+                exploration=greedy_expl.bind([]).native(),
+                final=greedy_fin.bind([]).native(),
+            )
+            cfg.selection = n.ActionSelection(count=3, mode="best", temperature=0.0)
+            cfg.pool = n.ActionPool(final_size=40)
+            cfg.tohpe = n.TohpeSearch(
+                n.SamplingBudget(one_hot=-1, sparse=sparse, dense=dense, sparse_max_weight=2),
+                n.SourcePool(keep=40, reserve=0), 4,
+                target_min_red=low, target_max_red=high,
+            )
+            empty = n.ZBucketSearch(0, 0, 0.0, 0.0, 0)
+            cfg.tohpeprefix = n.TohpePrefixSearch(
+                n.SamplingBudget(), n.SourcePool(keep=0, reserve=0), 1, empty)
+            cfg.todd = n.ToddSearch(
+                n.SamplingBudget(), n.SourcePool(keep=0, reserve=0), 1, empty)
+            result = n.policy_iteration(cur_mat=matrix, policy_cfg=cfg, seed=11, add_seed=0)
+            return max(c.reduction for c in result.chosen), result.stats.max_reduction
+
+        unbounded, _ = best_reduction(1, 1_000_000, 8, 16)
+        for low, high in ((3, 4), (2, 3)):
+            for sparse, dense in ((0, 0), (8, 16)):
+                chosen, seen = best_reduction(low, high, sparse, dense)
+                self.assertLessEqual(
+                    chosen, high,
+                    msg=f"band [{low},{high}] admitted reduction {chosen} "
+                        f"(sparse={sparse}, dense={dense})",
+                )
+        self.assertGreater(unbounded, 4, "fixture should offer reductions above the bands")
+
+
 class TestReportRendering(unittest.TestCase):
     """A converged policy must read back as the expression it was written as.
 

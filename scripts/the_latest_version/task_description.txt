@@ -42,7 +42,7 @@ Each knob below controls one stage of this step.
 
 Actions. An action is a pair `(z, y)`: `z` defines a
 bucket/binary null space, `y` is sampled inside the resulting binary null space, and the pair
-defines a correctness-preserving rewrite. It is hardocoded that only candidates
+defines a correctness-preserving rewrite. It is hardcoded that only candidates
 with positive rank reduction become selectable actions.
 
 y sampling inside a binary null space — `SamplingBudget`:
@@ -68,6 +68,8 @@ TohpeSearch(
     SamplingBudget(...),
     SourcePool(...),
     z_choices=TOHPE_Z_CHOICES,
+    target_min_red=TARGET_MIN_RED,
+    target_max_red=TARGET_MAX_RED,
 )
 
 ToddSearch(
@@ -81,9 +83,25 @@ ToddSearch(
     ),
 )
 ```
+- `target_min_red` / `target_max_red` aim the TOHPE z search at a *size* of
+  reduction instead of always the largest. For each sampled y its z candidates
+  are ranked by
+  `max(target_min_red - red, red - target_max_red, 0)`,
+  so those landing inside `[target_min_red, target_max_red]` come first and,
+  outside it, the nearest to the band follow. The chosen z then enter the action
+  pool on `ExplorationScore` as usual -- the band decides which z get that far,
+  it does not replace the scoring. Reference settings: `[10, 10]` targets the
+  greatest reductions (classic greedy, productive in early bands where large
+  reductions are plentiful); `[3, 4]` targets medium reductions, leaving more
+  structure intact for later steps; `[2, 3]` targets small ones, matching the
+  terminal band where large reductions have stopped appearing. A wide band such
+  as `[1, 10]` spans everything the search realistically produces and so imposes
+  no preference. `target_min_red` must be > 0 -- a zero reduction is not a
+  usable action -- and `target_max_red` must be >= `target_min_red`; both are
+  rejected at construction otherwise.
 - TOHPE is the cheap source: a limited TOHPE-specific z/y search with
-  `z_choices` as its z budget. It researches a common part of binary nullspace which is intersection of nullspaces for all z.
-  It firstly sample y then search for `z_choices` z with the largest reduction.
+  `z_choices` as its z budget. It researches a common part of binary null space, which is the intersection of the null spaces for all z.
+  It first samples y, then searches for `z_choices` z with the largest reduction.
   It quickly produces good early and mid-rank
   actions; in some rank bands it stops producing useful binary null spaces or positive
   actions.
@@ -114,7 +132,7 @@ SourcePool(keep=SOURCE_KEEP, reserve=SOURCE_RESERVE)
 - `keep` is the max actions retained per source; `keep=0` disables the source.
 - `reserve <= keep` is the minimum carried into the final merge.
 - Low `reserve` also lets TODD stop researching z near `min_buckets`, so
-  `max_buckets` may never be reached, but low `reserve` leads to search saturation due to lacking of choice
+  `max_buckets` may never be reached, but low `reserve` leads to search saturation for lack of choice.
 
 Merged pool — `ActionPool`:
 ```python
@@ -123,18 +141,40 @@ ActionPool(final_size=FINAL_POOL_SIZE)
 - `final_size` caps the merged candidate pool after source pools are combined.
 
 Scoring — `PolicyScores`. A score is an ordinary Python function over named
-knobs, decorated to compile it once:
+knobs, decorated to compile it once. The example below is **not a
+recommendation and not a starting point** -- it exists only to show the kinds of
+term the expression language admits, deliberately mixing them in one place. A
+real score is usually far shorter. Which terms belong in yours is a decision to
+make from the evidence in front of you -- the rendered scores and converged
+weights of the parents, the regime you are in, your own reading of what the
+ranking is failing to separate -- not by copying this shape:
 ```python
 from helper import policy, PolicyScores
 
+C_ZW = 0.35          # a fixed constant: written inline, costs no parameter
+W_TAIL = 1.5
+C_RED = 6            # a reduction center, in exact unnormalized rank-reduction
+                     # counts; normalize it at use with `/ k.bn / 2`
+
 @policy.exploration
 def explore_score(k, p, fn):
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
-            + k.nyw * p.w(3) + k.nzw * p.w(4))
+    # ordinary linear weight
+    linear = k.nred * p.w(0) + k.ndim * p.w(1)
+    # nonlinear transform of a knob
+    nonlinear = fn.log(1.0 + k.nbucket) * p.w(2) + fn.exp(-k.nzw) * p.w(3)
+    # product of two features
+    interaction = k.nred * k.ndim * p.w(4)
+    # weight * |feature - center| ** pow, the center itself searched
+    centered = fn.pow(fn.abs(k.nzw - p.w(5)), p.w(6)) * p.w(7)
+    # same shape with the constants fixed instead of searched
+    fixed = fn.pow(fn.abs(k.nyw - C_ZW), 2.0) * W_TAIL
+    # a center given in raw reduction counts, normalized where it is used
+    reduction = fn.abs(k.red - C_RED / k.bn / 2) * p.w(8)
+    return linear + nonlinear + interaction + centered + fn.exp(fixed*reduction)
 
 @policy.final
 def final_score(k, p, fn):
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.ntohpe * p.w(2))
+    return fn.sigmoid(k.nred * p.w(0) + k.ndim * p.w(1) + k.ntohpe * p.w(2)) + ...
 ```
 Three arguments are injected; nothing else needs importing:
 - `k` — the knobs (listed below). An unknown or unavailable name raises at
@@ -145,14 +185,31 @@ Three arguments are injected; nothing else needs importing:
   Builtin `abs()`, `min()`, `max()` also work.
 
 Bind the free scalars in `policy_mapping` from ordinary `map_par` values and
-pass the result to `set_scores`; read the count off the expression so adding a
-term widens the search vector automatically:
+pass the result to `set_scores`. The uniform `float_range(-4, 4)` sweep below is
+again **only one way to bind**, not the way: a parameter that is a center wants
+the range of the knob it centers, an exponent wants a small positive range, a
+weight that must not change sign wants a one-sided range, and a parameter you
+have already converged can be frozen to a constant so the optimizer stops
+spending dimensions on it. Choose per parameter, from what the expression means
+and what the parent's converged values tell you:
 ```python
+explore_w = [
+    self.float_range(-4, 4, group="scores"),      # linear weight, free sign
+    self.float_range(-4, 4, group="scores"),
+    self.float_range(-4, 4, group="scores"),
+    self.float_range(-4, 4, group="scores"),
+    self.float_range(-4, 4, group="scores"),      # interaction weight
+    self.float_range(0.0, 1.0, group="scoresc"),   # a center: the range of k.nzw
+    self.float_range(0.5, 3.0, group="scoresc"),   # an exponent: small, positive
+    0.5,                                          # frozen: converged, not searched
+    self.float_range(-2, 0, group="scoresc"),      # one-sided: must stay a penalty
+]
+
 self.set_scores(
     PolicyScores(
-        exploration=explore_score.bind(
-            [self.float_range(-4, 4, group="scores") for _ in range(explore_score.n_params)]
-        ),
+        exploration=explore_score.bind(explore_w),
+        # or read the count off the expression, so adding a term widens the
+        # search vector automatically
         final=final_score.bind(
             [self.float_range(-4, 4, group="scores") for _ in range(final_score.n_params)]
         ),
@@ -160,7 +217,8 @@ self.set_scores(
 )
 ```
 Each score has its own parameter vector, so `p.w(0)` means "this expression's
-first parameter" in both.
+first parameter" in both. The list passed to `bind` must have exactly
+`n_params` entries, in `p.w(i)` order.
 
 `if`/`else`, `and`, `or` and chained comparisons work and are compiled to
 branchless selects, so **both arms are always evaluated** — a condition does not
@@ -179,40 +237,35 @@ calls to anything but `fn.*` are rejected at import.
 Knobs. Each quantity is available raw and normalized; prefer the normalized
 form, whose meaning does not change as the rank falls.
 
+Available in **both** exploration and finalization expressions:
+
 | raw | normalized | meaning |
 |---|---|---|
-| `red` | `nred` | rank reduction (`red / max_bucket / 2`) |
+| `red` | `nred` | rank reduction (`red / bn / 2`) |
 | `dim` | `ndim` | binary null space basis dimension |
 | `bucket` | `nbucket` | z-bucket reduction potential |
 | `yw` / `zw` | `nyw` / `nzw` | y / z Hamming weight; `nzw` is z density |
 | `zsize` | — | length of the z vector |
-| `max_red` | `nmax_red` | this bucket's reduction ceiling |
-| `tohpe` | `ntohpe` | TOHPE lookahead dimension (finalization only) |
-| `bn`, `dn`, `wvwn` | — | the normalizers themselves |
+| `max_red` | `nmax_red` | bucket's reduction ceiling; `nmax_red` is identical to `nbucket`, prefer `nbucket` |
+| `source` | — | provenance: `1` TOHPE, `2` TOHPE-prefix, `3` TODD |
+| `bucket_id` | — | identifier of the originating bucket |
+| `bn`, `dn`, `wvwn` | — | the normalizers: largest bucket this iteration, TOHPE dimension plus five, parity matrix rows |
 
-Finalization-only knobs, unavailable while source pools are still filling:
-- `rank_red` / `nrank_red`, `rank_dim` / `nrank_dim`, `rank_score` /
-  `nrank_score`: how many candidates in this iteration beat this one on
-  reduction, dimension, or pool score. The normalized forms are fractions of
-  the pool, so they stay meaningful after the raw reduction scale collapses in
-  the terminal band.
-- `pool_size`, `pool_tohpe`, `pool_prefix`, `pool_todd` and the fractions
-  `f_tohpe`, `f_prefix`, `f_todd`: the merged pool's size and source mix.
+Available in **finalization only**, unavailable while source pools are still
+filling:
 
-`k.source` is `1` for TOHPE, `2` for TOHPE-prefix, `3` for TODD.
+| raw | normalized | meaning |
+|---|---|---|
+| `tohpe` | `ntohpe` | TOHPE lookahead dimension of the resulting state |
+| `rank_red` | `nrank_red` | how many candidates beat this one on reduction; normalized is a fraction of the pool |
+| `rank_dim` | `nrank_dim` | how many candidates beat this basis dimension |
+| `rank_score` | `nrank_score` | how many candidates beat this pool score |
+| `pool_size` | — | number of candidates in the finalized pool |
+| `pool_tohpe`, `pool_prefix`, `pool_todd` | `f_tohpe`, `f_prefix`, `f_todd` | the merged pool's source mix, as counts and as fractions |
+| `k_idx`, `l_idx` | — | the two indices of the action pair |
 
-A center is written directly, since any arithmetic is allowed. The classic
-`w * abs(feature - center) ** pow` term is `fn.abs(k.nzw - p.w(5)) * p.w(4)`;
-a raw reduction center in exact rank-reduction counts is
-`fn.abs(k.nred - C_RED / k.bn / 2) * W_RED`. Forms the old weight vector could
-not express -- ratios such as `k.nred / fn.max(k.nbucket, 0.05)`, products, and
-conditionals -- are available.
-
-Cost note: an exploration score that reads `bucket`, `nbucket`, `zw`, `nzw`,
-`zsize`, `bucket_id`, `max_red` or `nmax_red` forfeits the inner z search's
-reduction-only fast path and must score every touched bucket. That is a
-wall-clock cost, not a scoring change. The finalization score runs once per
-merged candidate, so expensive forms are cheapest there.
+The `rank_*` normalized forms are fractions of the pool, so they stay meaningful
+after the raw reduction scale collapses in the terminal band.
 
 Selection — `ActionSelection`:
 ```python
@@ -292,7 +345,6 @@ from helper import (
 ```
 `describe_knobs()` from `helper` prints the knob list and available math at
 runtime, generated from the implementation.
-```
 The available optimizer library is `pymoo`; standard numeric support such as
 `numpy` may be imported as usual. Evolved programs must not install packages
 at runtime or depend on network access.

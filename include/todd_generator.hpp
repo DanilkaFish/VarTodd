@@ -301,6 +301,16 @@ struct TohpeSearch {
     SamplingBudget sampling{};
     SourcePool     pool{2, 0};
     Int            z_choices = 8;
+    // Reduction band the inner z search aims at. For a sampled y, the
+    // z candidates are ranked by distance to [target_min_red, target_max_red]
+    // -- in-band first, then nearest to it -- instead of always taking the
+    // greatest reduction available. Selecting a *size* of reduction rather
+    // than the maximum is what lets a policy work a band deliberately.
+    // The chosen candidates then enter the pool on the exploration score as
+    // usual; this only decides which z reach that pool.
+    // target_min_red must be > 0: a zero reduction is not a usable action.
+    Int            target_min_red = 1;
+    Int            target_max_red = std::numeric_limits<Int>::max();
 };
 
 struct TohpePrefixSearch {

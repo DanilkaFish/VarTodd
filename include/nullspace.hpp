@@ -36,6 +36,34 @@ struct CountWSScore {
     index_t       count     = 0;
 };
 
+// Target band for the TOHPE inner z search. Candidates whose reduction lands
+// inside [min, max] are preferred; outside it, the closest to the band wins.
+// This lets a policy aim the cheap z ranking at a reduction size -- large
+// reductions early, small ones in the terminal band -- instead of always
+// taking the greatest available.
+struct TohpeRedTarget {
+    index_t min = 1;
+    index_t max = std::numeric_limits<index_t>::max();
+
+    // 0 inside the band, otherwise the distance to the nearer edge. Sorting
+    // ascending on this puts in-band candidates first, then the nearest
+    // out-of-band ones.
+    index_t distance(index_t reduction) const noexcept {
+        if (reduction < min)
+            return min - reduction;
+        if (reduction > max)
+            return reduction - max;
+        return 0;
+    }
+
+    // True when the band cannot exclude anything, so ranking by distance is
+    // the same as ranking by reduction and the cheaper comparator applies.
+    bool unbounded() const noexcept {
+        return min <= 1 && max == std::numeric_limits<index_t>::max();
+    }
+};
+
+
 struct RankedCountWSScore {
     std::uint32_t bucket_id = 0;
     index_t       count     = 0;
@@ -114,7 +142,8 @@ class PackedCountStorage {
         return out;
     }
 
-    void argmax_n_into(std::size_t n, std::vector<CountWSScore>& out) {
+    void argmax_n_into(std::size_t n, std::vector<CountWSScore>& out,
+                       const TohpeRedTarget& target = {}) {
         out.clear();
         if (n == 0 || touched_size_ == 0)
             return;
@@ -122,9 +151,16 @@ class PackedCountStorage {
         n = std::min(n, touched_size_);
         auto* const first = touched_ids_.get();
         auto* const last = first + touched_size_;
-        const auto better = [this](std::uint32_t a, std::uint32_t b) {
+        // Rank by distance to the target band first, then by reduction, then by
+        // id. With an unbounded band every distance is 0 and this degenerates
+        // to the original reduction ordering, so the default path is unchanged.
+        const auto better = [this, &target](std::uint32_t a, std::uint32_t b) {
             const index_t count_a = count_of_(a);
             const index_t count_b = count_of_(b);
+            const index_t dist_a  = target.distance(count_a);
+            const index_t dist_b  = target.distance(count_b);
+            if (dist_a != dist_b)
+                return dist_a < dist_b;
             return count_a != count_b ? count_a > count_b : a < b;
         };
         if (n < touched_size_) {
@@ -291,7 +327,8 @@ class CompactCountStorage {
         return out;
     }
 
-    void argmax_n_into(std::size_t n, std::vector<CountWSScore>& out) {
+    void argmax_n_into(std::size_t n, std::vector<CountWSScore>& out,
+                       const TohpeRedTarget& target = {}) {
         out.clear();
         if (n == 0 || touched_size_ == 0)
             return;
@@ -300,9 +337,15 @@ class CompactCountStorage {
         auto* const first = selection_positions_.get();
         auto* const last = first + touched_size_;
         std::iota(first, last, std::uint32_t{0});
-        const auto better = [this](std::uint32_t a, std::uint32_t b) {
-            const Count count_a = counts_[a];
-            const Count count_b = counts_[b];
+        // See the note on the other storage: distance to the band first, then
+        // reduction, then id, so an unbounded band reproduces the old order.
+        const auto better = [this, &target](std::uint32_t a, std::uint32_t b) {
+            const Count   count_a = counts_[a];
+            const Count   count_b = counts_[b];
+            const index_t dist_a  = target.distance(static_cast<index_t>(count_a));
+            const index_t dist_b  = target.distance(static_cast<index_t>(count_b));
+            if (dist_a != dist_b)
+                return dist_a < dist_b;
             return count_a != count_b ? count_a > count_b : pos_to_id_[a] < pos_to_id_[b];
         };
         if (n < touched_size_) {
@@ -448,8 +491,9 @@ class CountWS {
         return with_storage([n](auto& storage) { return storage.argmax_n(n); });
     }
 
-    void argmax_n_into(std::size_t n, std::vector<CountWSScore>& out) {
-        with_storage([n, &out](auto& storage) { storage.argmax_n_into(n, out); });
+    void argmax_n_into(std::size_t n, std::vector<CountWSScore>& out,
+                       const TohpeRedTarget& target = {}) {
+        with_storage([n, &out, &target](auto& storage) { storage.argmax_n_into(n, out, target); });
     }
 
     template <class ScoreFn>
@@ -584,7 +628,8 @@ class TohpeGenerator {
     TohpeGenerator(std::shared_ptr<MatrixWithData> M);
     auto best_z_n(RowCView y, index_t num_samples) const -> std::vector<std::pair<Row, index_t>>;
     void best_z_n_into(RowCView y, index_t num_samples, std::vector<std::pair<Row, index_t>>& scratch_out) const;
-    void best_z_n_details_into(RowCView y, index_t num_samples, std::vector<TohpeZInfo>& scratch_out) const;
+    void best_z_n_details_into(RowCView y, index_t num_samples, std::vector<TohpeZInfo>& scratch_out,
+                               const TohpeRedTarget& target = {}) const;
     void best_z_n_details_into(RowCView y, index_t num_samples, const TohpeZScoreFunction& score_fn,
                                std::vector<TohpeZInfo>& scratch_out) const;
 

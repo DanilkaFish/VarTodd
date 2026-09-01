@@ -913,24 +913,51 @@ py::class_<Stats>(m, "Stats")
             }));
 
     py::class_<TohpeSearch>(m, "TohpeSearch")
-        .def(py::init([](SamplingBudget sampling, SourcePool pool, Int z_choices) {
-                 return TohpeSearch{std::move(sampling), pool, z_choices};
+        .def(py::init([](SamplingBudget sampling, SourcePool pool, Int z_choices, Int target_min_red,
+                         Int target_max_red) {
+                 if (target_min_red <= 0)
+                     throw py::value_error(
+                         "TohpeSearch.target_min_red must be > 0: a zero reduction is not a usable "
+                         "action, so a band starting at 0 cannot be targeted");
+                 if (target_max_red < target_min_red)
+                     throw py::value_error(
+                         "TohpeSearch.target_max_red must be >= target_min_red; got [" +
+                         int_repr(target_min_red) + ", " + int_repr(target_max_red) + "]");
+                 return TohpeSearch{std::move(sampling), pool, z_choices, target_min_red, target_max_red};
              }),
              py::arg("sampling") = SamplingBudget(), py::arg("pool") = SourcePool{2, 0},
-             py::arg("z_choices") = 8)
+             py::arg("z_choices") = 8, py::arg("target_min_red") = 1,
+             py::arg("target_max_red") = std::numeric_limits<Int>::max())
         .def_readwrite("sampling", &TohpeSearch::sampling)
         .def_readwrite("pool", &TohpeSearch::pool)
         .def_readwrite("z_choices", &TohpeSearch::z_choices)
-        .def("__repr__", [](const TohpeSearch& s) {
-            return "TohpeSearch(sampling=" + sampling_budget_repr(s.sampling) + ", pool=" +
-                   source_pool_repr(s.pool) + ", z_choices=" + int_repr(s.z_choices) + ")";
-        })
+        .def_readwrite("target_min_red", &TohpeSearch::target_min_red)
+        .def_readwrite("target_max_red", &TohpeSearch::target_max_red)
+        .def("__repr__",
+             [](const TohpeSearch& s) {
+                 const std::string band =
+                     s.target_max_red == std::numeric_limits<Int>::max()
+                         ? int_repr(s.target_min_red) + "..any"
+                         : int_repr(s.target_min_red) + ".." + int_repr(s.target_max_red);
+                 return "TohpeSearch(sampling=" + sampling_budget_repr(s.sampling) + ", pool=" +
+                        source_pool_repr(s.pool) + ", z_choices=" + int_repr(s.z_choices) +
+                        ", target_red=" + band + ")";
+             })
         .def(py::pickle(
-            [](const TohpeSearch& s) { return py::make_tuple(s.sampling, s.pool, s.z_choices); },
+            [](const TohpeSearch& s) {
+                return py::make_tuple(s.sampling, s.pool, s.z_choices, s.target_min_red, s.target_max_red);
+            },
             [](py::tuple t) {
-                if (t.size() != 3)
+                // Older pickles predate the reduction band; they load with the
+                // unbounded default, which reproduces their original ordering.
+                if (t.size() != 3 && t.size() != 5)
                     throw std::runtime_error("Invalid state for TohpeSearch");
-                return TohpeSearch{t[0].cast<SamplingBudget>(), t[1].cast<SourcePool>(), t[2].cast<Int>()};
+                TohpeSearch s{t[0].cast<SamplingBudget>(), t[1].cast<SourcePool>(), t[2].cast<Int>()};
+                if (t.size() == 5) {
+                    s.target_min_red = t[3].cast<Int>();
+                    s.target_max_red = t[4].cast<Int>();
+                }
+                return s;
             }));
 
     py::class_<TohpePrefixSearch>(m, "TohpePrefixSearch")

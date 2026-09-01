@@ -547,10 +547,11 @@ void TohpeGenerator::count_z_reductions_(RowCView y) const {
 }
 
 void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
-                                           std::vector<TohpeZInfo>& scratch_out) const {
+                                           std::vector<TohpeZInfo>& scratch_out,
+                                           const TohpeRedTarget& target) const {
     count_z_reductions_(y);
     const ToddIndex& idx = M_->index();
-    ws_.argmax_n_into(num_samples, scratch_candidates_);
+    ws_.argmax_n_into(num_samples, scratch_candidates_, target);
 
     scratch_out.clear();
     scratch_out.reserve(scratch_candidates_.size());
