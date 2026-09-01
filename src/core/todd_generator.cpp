@@ -612,7 +612,7 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
     auto local_pool = TopKPool<ExplorationScorer>(config.tohpe.pool.keep, config.escore());
     const index_t dim                 = ctx.tohpe_dim;
     const Int     dim_int             = detail::checked_int_from_index(dim, "TOHPE basis dimension overflow");
-    const bool    reduction_fast_path = config.exploration.ranks_fixed_y_by_reduction();
+    const bool    reduction_fast_path = config.exploration.ranks_fixed_y_by_reduction(config.exploration_params);
     out.stats.max_basis               = std::max(out.stats.max_basis, dim_int);
 
     PyRNG local_rng(mixed_seed(ctx.base_seed, 0, 0, 0, CandidateSourceTohpe));

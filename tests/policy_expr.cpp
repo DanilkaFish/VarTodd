@@ -358,9 +358,38 @@ void check_fast_path_predicate() {
     require(!make({knob(Knob::ndim)}, {}, 0, site).ranks_fixed_y_by_reduction(),
             "a program without reduction must lose the fast path");
 
-    // Unknown-sign scaling by a bound parameter cannot be decided.
+    // Without parameter values the sign of a bound scalar is unknown, so the
+    // analysis must refuse.
     require(!make({knob(Knob::nred), par(0), op(Op::Mul)}, {}, 1, site).ranks_fixed_y_by_reduction(),
-            "scaling nred by a runtime parameter must lose the fast path");
+            "scaling nred by an unbound parameter must lose the fast path");
+
+    // With the values supplied it becomes decidable: parameters are constants
+    // for the whole iteration, so a positive coefficient preserves the order.
+    // This is the common tunable-weight case and it must not pay the slow path.
+    {
+        const auto prog = make({knob(Knob::nred), par(0), op(Op::Mul)}, {}, 1, site);
+        const std::vector<float> positive = {2.0f};
+        const std::vector<float> zero     = {0.0f};
+        const std::vector<float> negative = {-2.0f};
+        require(prog.ranks_fixed_y_by_reduction(positive),
+                "a positive bound coefficient on nred must keep the fast path");
+        require(!prog.ranks_fixed_y_by_reduction(zero),
+                "a zero coefficient ties every candidate and must lose the fast path");
+        require(!prog.ranks_fixed_y_by_reduction(negative),
+                "a negative bound coefficient reverses the order and must lose the fast path");
+    }
+
+    // A z-varying knob disqualifies whatever the bound values are.
+    {
+        const auto prog = make({knob(Knob::nred), par(0), op(Op::Mul), knob(Knob::nbucket), par(1),
+                                op(Op::Mul), op(Op::Add)},
+                               {}, 2, site);
+        for (float w : {1.0f, 0.0f, -1.0f}) {
+            const std::vector<float> params = {1.0f, w};
+            require(!prog.ranks_fixed_y_by_reduction(params),
+                    "a bucket term must lose the fast path at any coefficient");
+        }
+    }
 
     // Reduction in a denominator is not affine.
     require(!make({cst(0), knob(Knob::nred), op(Op::Div)}, {1.0f}, 0, site).ranks_fixed_y_by_reduction(),

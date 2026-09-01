@@ -246,7 +246,17 @@ PolicyProgram::PolicyProgram(std::vector<Instr> code, std::vector<float> consts,
                              PolicySite site)
     : code_(std::move(code)), consts_(std::move(consts)), n_params_(n_params), site_(site) {
     validate_();
-    ranks_by_reduction_ = compute_ranks_by_reduction_();
+    // Decided without parameter values, so it holds for any binding. The
+    // accessor re-runs the analysis when actual values are available.
+    ranks_by_reduction_ = compute_ranks_by_reduction_({});
+}
+
+bool PolicyProgram::ranks_fixed_y_by_reduction(std::span<const float> params) const noexcept {
+    if (ranks_by_reduction_)
+        return true; // qualifies regardless of the binding
+    if (params.empty() || n_params_ == 0)
+        return false;
+    return compute_ranks_by_reduction_(params);
 }
 
 void PolicyProgram::validate_() {
@@ -307,7 +317,7 @@ void PolicyProgram::validate_() {
 // affine function of `red` once every z-varying knob is excluded. Each stack
 // slot is tracked as either a constant, or `slope * red + intercept` with the
 // intercept unknown but fixed for a given y.
-bool PolicyProgram::compute_ranks_by_reduction_() const {
+bool PolicyProgram::compute_ranks_by_reduction_(std::span<const float> params) const {
     if ((used_ & z_varying_knobs()).any())
         return false;
 
@@ -316,6 +326,11 @@ bool PolicyProgram::compute_ranks_by_reduction_() const {
         float slope         = 0.0f;
         bool  constant      = false; // value known exactly
         float value         = 0.0f;
+        // True once the value has passed through a monotone nonlinearity. The
+        // slope then records only a direction, not a rate, so this value must
+        // not be added to another red-dependent term: sqrt(x)*a - x*b has two
+        // positive "slopes" and is still decreasing for large x.
+        bool  nonlinear     = false;
     };
 
     std::array<Value, k_max_stack_depth> stack{};
@@ -363,10 +378,16 @@ bool PolicyProgram::compute_ranks_by_reduction_() const {
             break;
         }
         case Op::LoadParam: {
-            // Bound at evaluation time; fixed across candidates but unknown here.
+            // Fixed for the whole iteration. When the bound value is supplied
+            // it is a genuine constant, which is what lets `nred * p.w(0)`
+            // qualify for a positive w(0) -- the common tunable-weight case.
             Value v{};
             v.affine_in_red = true;
             v.slope         = 0.0f;
+            if (in.arg < params.size()) {
+                v.constant = true;
+                v.value    = params[in.arg];
+            }
             if (!push(v))
                 return false;
             break;
@@ -379,8 +400,15 @@ bool PolicyProgram::compute_ranks_by_reduction_() const {
             const Value a = stack[--sp];
             if (!a.affine_in_red || !b.affine_in_red)
                 return false;
+            // Adding two red-dependent terms requires comparable rates; a
+            // value that went through a nonlinearity has none.
+            const bool a_moves = a.slope != 0.0f;
+            const bool b_moves = b.slope != 0.0f;
+            if ((a.nonlinear && b_moves) || (b.nonlinear && a_moves))
+                return false;
             Value v{};
             v.affine_in_red = true;
+            v.nonlinear     = a.nonlinear || b.nonlinear;
             v.slope         = in.op == Op::Add ? a.slope + b.slope : a.slope - b.slope;
             v.constant      = a.constant && b.constant;
             if (v.constant)
@@ -405,9 +433,11 @@ bool PolicyProgram::compute_ranks_by_reduction_() const {
             } else if (a.constant && b.slope != 0.0f) {
                 // Scaling red by an unknown-sign constant would flip the order.
                 v.affine_in_red = true;
+                v.nonlinear     = b.nonlinear;
                 v.slope         = a.value * b.slope;
             } else if (b.constant && a.slope != 0.0f) {
                 v.affine_in_red = true;
+                v.nonlinear     = a.nonlinear;
                 v.slope         = b.value * a.slope;
             } else if (a.slope == 0.0f && b.slope == 0.0f) {
                 // Product of two red-independent terms: still red-independent.
@@ -443,6 +473,63 @@ bool PolicyProgram::compute_ranks_by_reduction_() const {
             } else {
                 return false; // dividing red by an unknown-sign value
             }
+            if (!push(v))
+                return false;
+            break;
+        }
+        case Op::Min:
+        case Op::Max: {
+            // Clamping against a constant is monotone non-decreasing, so it
+            // preserves the candidate order. This matters because the natural
+            // way to write a guarded monotone term is fn.sqrt(fn.max(nred, 0)).
+            if (sp < 2)
+                return false;
+            const Value b = stack[--sp];
+            const Value a = stack[--sp];
+            if (!a.affine_in_red || !b.affine_in_red)
+                return false;
+            Value v{};
+            v.affine_in_red = true;
+            if (a.constant && b.constant) {
+                v.constant = true;
+                v.value    = in.op == Op::Min ? std::min(a.value, b.value) : std::max(a.value, b.value);
+                v.slope    = 0.0f;
+            } else if (a.constant && b.slope != 0.0f) {
+                v.slope     = b.slope; // clamped, but still moves with red
+                v.nonlinear = true;    // clamping breaks the rate
+            } else if (b.constant && a.slope != 0.0f) {
+                v.slope     = a.slope;
+                v.nonlinear = true;
+            } else if (a.slope == 0.0f && b.slope == 0.0f) {
+                v.slope = 0.0f;
+            } else {
+                return false; // min/max of two red-dependent terms
+            }
+            if (!push(v))
+                return false;
+            break;
+        }
+        case Op::Sqrt:
+        case Op::Tanh:
+        case Op::Sigmoid: {
+            // Strictly increasing on the whole domain the VM can produce
+            // (sqrt clamps its argument at 0), so applying them to a value
+            // that already increases with red preserves the candidate order.
+            // Reduction is a non-negative count, so no branch of these
+            // functions is decreasing here.
+            if (sp < 1)
+                return false;
+            const Value a = stack[--sp];
+            if (!a.affine_in_red)
+                return false;
+            Value v{};
+            v.affine_in_red = true;
+            // The result is no longer affine in red, but it is still
+            // increasing; slope carries only the sign, which is what the
+            // final check reads.
+            v.slope     = a.slope > 0.0f ? 1.0f : (a.slope < 0.0f ? -1.0f : 0.0f);
+            v.constant  = false;
+            v.nonlinear = a.slope != 0.0f; // direction known, rate not
             if (!push(v))
                 return false;
             break;
