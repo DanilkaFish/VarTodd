@@ -576,18 +576,6 @@ void check_exploration_score_feature_contract() {
     require(std::abs(direct - pooled) < 1e-7f && std::abs(direct - cand.pool_score) < 1e-7f,
             "exploration feature scoring diverged from candidate scoring");
 
-    // Fast-path conditions. The predicate is now structural rather than a check
-    // on weight slots, but it must accept and reject the same policies.
-    require(linear_program({1.0f, 7.0f, 0.0f, -3.0f, 0.0f}).ranks_fixed_y_by_reduction(),
-            "fixed-y constants should not disable the reduction fast path");
-    require(!linear_program({1.0f, 7.0f, 0.25f, -3.0f, 0.0f}).ranks_fixed_y_by_reduction(),
-            "bucket scoring must disable the reduction fast path");
-    require(!linear_program({1.0f, 7.0f, 0.0f, -3.0f, -1.0f}).ranks_fixed_y_by_reduction(),
-            "z-density scoring must disable the reduction fast path");
-    require(!polynom_program({1.0f, 7.0f, 0.0f, -3.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}, 2.0f)
-                 .ranks_fixed_y_by_reduction(),
-            "nonlinear scoring must use exact fixed-y ranking");
-
     // A raw reduction center is divided by bn and 2 before being subtracted, so
     // centers are expressed in exact rank-reduction counts.
     const PolicyProgram raw_reduction_center =

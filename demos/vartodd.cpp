@@ -106,8 +106,14 @@ int main(int argc, char* argv[]) {
                       static_cast<Int>(vm["z-max-buckets"].as<int>()),
                       static_cast<float>(vm["z-temperature"].as<double>()),
                       static_cast<float>(vm["z-random-fraction"].as<double>())}};
-    policy_cfg.scores.exploration.weights[0] = vm["escore-wred"].as<int>();
-    policy_cfg.scores.final.weights[0]       = vm["fscore-wred"].as<int>();
+    auto wred_program = [](int wred, PolicySite site) {
+        return PolicyProgram(
+            {Instr{Op::LoadKnob, static_cast<std::uint16_t>(Knob::nred)}, Instr{Op::LoadConst, 0},
+             Instr{Op::Mul, 0}},
+            {static_cast<float>(wred)}, 0, site);
+    };
+    policy_cfg.scores.exploration = wred_program(vm["escore-wred"].as<int>(), PolicySite::ExplorationZ);
+    policy_cfg.scores.final       = wred_program(vm["fscore-wred"].as<int>(), PolicySite::Finalization);
 	
 	auto init_matrix = Matrix::from_npy(filename);
 	auto finit_matrix = init_matrix;
