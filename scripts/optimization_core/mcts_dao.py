@@ -7,8 +7,6 @@ from typing import Any, Callable, Dict, Generic, List, Mapping, Optional, Sequen
 from .node import (
     ActionPool,
     ActionSelection,
-    ExplorationScore,
-    FinalizationScore,
     Node,
     PolicyConfig,
     PolicyScores,
@@ -119,46 +117,71 @@ class Path:
         return f"{value:+.3f}".rstrip("0").rstrip(".")
 
     @staticmethod
-    def _format_score(score: Any, labels: Sequence[str]) -> str:
+    def _format_score(score: Any, params: Sequence[float] = ()) -> str:
+        """Render a compiled policy score as the expression it was written as.
+
+        A converged policy is read back to decide the next mutation, so it is
+        shown in the same syntax it was authored in, with the optimizer's
+        coefficients substituted -- not as an opaque program or weight vector.
+        """
         try:
-            size = len(score)
+            from .policy_expr.expr import (
+                KNOB_NAMES,
+                OP_LOAD_CONST,
+                OP_LOAD_KNOB,
+                OP_LOAD_PARAM,
+                Node,
+                render_with_params,
+            )
         except Exception:
             return str(score)
 
-        weights = []
-        centers = []
-        for i in range(size):
-            try:
-                weights.append(float(score[i]))
-            except Exception:
-                break
-        for i in range(size):
-            try:
-                centers.append(float(score[i + size]))
-            except Exception:
-                break
         try:
-            power = score.pow()
+            ops = list(score.ops)
+            args = list(score.args)
+            consts = list(score.consts)
         except Exception:
-            power = getattr(score, "power", 1.0)
+            return str(score)
 
-        labels = list(labels)[: len(weights)]
-        if len(labels) < len(weights):
-            labels.extend(f"w{i}" for i in range(len(labels), len(weights)))
-
-        centers = centers[: len(weights)]
-        if len(centers) < len(weights):
-            centers.extend(0.0 for _ in range(len(weights) - len(centers)))
-
-        weight_text = ",".join(
-            f"{label}:{Path._format_signed(weight)}"
-            for label, weight in zip(labels, weights)
+        # Rebuild a tree from the flat program so the renderer can walk it. The
+        # program is postfix and its stack discipline was validated at
+        # construction, so this is a straight reduction.
+        from .policy_expr.expr import (
+            OP_ABS, OP_ADD, OP_AND, OP_DIV, OP_EQ, OP_EXP, OP_FLOOR, OP_GE,
+            OP_GT, OP_LE, OP_LOG, OP_LT, OP_MAX, OP_MIN, OP_MUL, OP_NEG,
+            OP_NOT, OP_OR, OP_POW, OP_SELECT, OP_SIGMOID, OP_SIGN, OP_SQRT,
+            OP_SUB, OP_TANH,
         )
-        center_text = ",".join(
-            f"{label}:{Path._format_signed(center)}"
-            for label, center in zip(labels, centers)
-        )
-        return f"=w[{weight_text}];c[{center_text}];p={_fmt_float(power, 3)}"
+
+        arity = {
+            OP_ADD: 2, OP_SUB: 2, OP_MUL: 2, OP_DIV: 2, OP_MIN: 2, OP_MAX: 2,
+            OP_POW: 2, OP_LT: 2, OP_LE: 2, OP_GT: 2, OP_GE: 2, OP_EQ: 2,
+            OP_AND: 2, OP_OR: 2,
+            OP_NEG: 1, OP_ABS: 1, OP_EXP: 1, OP_LOG: 1, OP_SQRT: 1, OP_TANH: 1,
+            OP_SIGMOID: 1, OP_FLOOR: 1, OP_SIGN: 1, OP_NOT: 1,
+            OP_SELECT: 3,
+        }
+
+        stack = []
+        try:
+            for op, arg in zip(ops, args):
+                if op == OP_LOAD_KNOB:
+                    stack.append(Node(OP_LOAD_KNOB, float(arg)))
+                elif op == OP_LOAD_CONST:
+                    stack.append(Node(OP_LOAD_CONST, float(consts[arg])))
+                elif op == OP_LOAD_PARAM:
+                    stack.append(Node(OP_LOAD_PARAM, float(arg)))
+                else:
+                    n = arity[op]
+                    children = tuple(stack[-n:])
+                    del stack[-n:]
+                    stack.append(Node(op, 0.0, children))
+            if len(stack) != 1:
+                return str(score)
+        except Exception:
+            return str(score)
+
+        return render_with_params(stack[0], list(params), 3)
 
     @staticmethod
     def _format_policy_value(value: Any) -> str:
@@ -228,8 +251,8 @@ class Path:
             ("todd_z_min_buckets", _as_int(todd_buckets.min_buckets)),
             ("todd_z_max_buckets", _as_int(todd_buckets.max_buckets)),
             ("todd_z_limit_bucket", _as_int(todd_buckets.limit_bucket)),
-            ("pool_scores", self._format_score(scores.exploration, ["red", "dim", "bucket", "yw", "zw"])),
-            ("final_scores", self._format_score(scores.final, ["red", "dim", "bucket", "yw", "zw", "tohpe"])),
+            ("pool_scores", self._format_score(scores.exploration, scores.exploration_params)),
+            ("final_scores", self._format_score(scores.final, scores.final_params)),
         ]
         return tuple((key, self._format_policy_value(value)) for key, value in fields)
 
@@ -253,9 +276,9 @@ class Path:
     @staticmethod
     def _profile_scores_str(snapshot: Tuple[Tuple[str, str], ...]) -> str:
         values = dict(snapshot)
-        pool_scores = values.get("pool_scores", "(none;p=1)")
-        final_scores = values.get("final_scores", "(none;p=1)")
-        return f"pool{pool_scores} final{final_scores}"
+        pool_scores = values.get("pool_scores", "(none)")
+        final_scores = values.get("final_scores", "(none)")
+        return f"pool={pool_scores} final={final_scores}"
 
     @staticmethod
     def _format_policy_profile(
@@ -910,7 +933,13 @@ def _as_policy_scores(x: Any) -> PolicyScores:
     if isinstance(x, PolicyScores):
         return x
     if isinstance(x, Mapping):
-        return PolicyScores(exploration=x.get("exploration", ExplorationScore()), final=x.get("final", FinalizationScore()))
+        defaults = _default_policy_scores()
+        return PolicyScores(
+            exploration=x.get("exploration", defaults.exploration),
+            final=x.get("final", defaults.final),
+            exploration_params=x.get("exploration_params", []),
+            final_params=x.get("final_params", []),
+        )
     raise TypeError(f"expected PolicyScores or mapping, got {type(x).__name__}")
 
 
@@ -1007,9 +1036,12 @@ class TreeDao:
 
 
 def _default_policy_scores() -> PolicyScores:
+    """Reduction and basis dimension, equally weighted -- the previous default."""
+    from .policy_expr import SITE_EXPLORATION, SITE_FINAL, linear_score
+
     return PolicyScores(
-        exploration=ExplorationScore([0.5, 0.5, 0.0, 0.0, 0.0]),
-        final=FinalizationScore([0.5, 0.5, 0.0, 0.0, 0.0, 0.0]),
+        exploration=linear_score([0.5, 0.5, 0.0, 0.0, 0.0], site=SITE_EXPLORATION).bind([]).native(),
+        final=linear_score([0.5, 0.5, 0.0, 0.0, 0.0, 0.0], site=SITE_FINAL).bind([]).native(),
     )
 
 

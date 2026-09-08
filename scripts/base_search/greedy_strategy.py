@@ -4,10 +4,7 @@ from scripts.optimization_core.helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     Matrix,
-    PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
@@ -31,13 +28,8 @@ class Evaluator(BaseEvaluator):
     def policy_mapping(self):
         lr = 0
         ranks = [lr]
-        w_pool = [ExplorationScore([1,0,0,0,0],
-                                  pow=1) for r in  ranks]
-        w_final = [FinalizationScore([1,0,0,0,0,0],
-                                  pow=1
-                                  ) for r in ranks]
         sampling = SamplingBudget(one_hot=15, sparse=0, dense=15, sparse_max_weight=8)
-        self.set_scores(ranks, [PolicyScores(exploration=w_pool[0], final=w_final[0])])
+        self.set_scores(ranks, [{"exploration": [1, 0, 0, 0, 0], "final": [1, 0, 0, 0, 0, 0]}])
         self.set_action_selection(ActionSelection(count=1, mode="best", temperature=0.0))
         self.set_action_pool(ActionPool(final_size=1))
         self.set_tohpe_search(TohpeSearch(pool=SourcePool(keep=0, reserve=0)))

@@ -99,6 +99,7 @@ class Todd:
             if not new_nodes:
                 break 
             nodes = heapq.nlargest(next_width, new_nodes, self._beam_key)
+            print(f"{best_node.state.rows=}")
 
         if with_report:
             best_counter = min(counter, best_counter)

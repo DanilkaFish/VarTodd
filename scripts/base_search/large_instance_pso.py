@@ -12,16 +12,14 @@ from scripts.optimization_core.helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     Matrix,
-    PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
     TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
+    policy,
 )
 
 MAX_DEPTH = 1800
@@ -60,40 +58,45 @@ def _make_seeds(count: int, base_seed: int) -> list[int]:
     return [int(seed) for seed in rng.integers(1, 10000, size=max(1, int(count)))]
 
 
+@policy.exploration
+def _pool_score(k, p, fn):
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + k.nzw * p.w(4))
+
+
+@policy.final
+def _final_score(k, p, fn):
+    # The legacy weight vector's 6th slot (tohpe) was always fixed at 0.0, so
+    # tohpe never contributed here; dropped rather than carried as dead weight.
+    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+            + k.nyw * p.w(3) + k.nzw * p.w(4))
+
+
 class Evaluator(BaseEvaluator):
     def __init__(self, *args, seeds: Iterable[int], use_todd_stage: bool = True, **kwargs):
         self.seeds = list(seeds)
         self.use_todd_stage = bool(use_todd_stage)
         super().__init__(*args, **kwargs)
 
-    def _pool_score(self) -> ExplorationScore:
-        weights = _normalize(
-            [
-                self.map_par(_signed, 0),
-                self.map_par(_signed, 0),
-                self.map_par(_signed, 0),
-                self.map_par(_signed, 0),
-                self.map_par(_signed, 0),
-            ]
-        )
-        return ExplorationScore(weights=weights, centers=[0.0] * 5, pow=1)
-
-    def _final_score(self) -> FinalizationScore:
-        weights = _normalize(
-            [
-                self.map_par(_signed, 0),
-                self.map_par(_signed, 0),
-                self.map_par(_signed, 0),
-                self.map_par(_signed, 0),
-                self.map_par(_signed, 0),
-                0.0,
-            ]
-        )
-        return FinalizationScore(weights=weights, centers=[0.0] * 6, pow=1)
-
     def policy_mapping(self):
-        pool_score = self._pool_score()
-        final_score = self._final_score()
+        pool_weights = _normalize(
+            [
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
+            ]
+        )
+        final_weights = _normalize(
+            [
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
+                self.map_par(_signed, 0),
+            ]
+        )
 
         sample_budget = self.map_par(_sigmoid, 0)
         breadth_budget = self.map_par(_sigmoid, 0)
@@ -106,7 +109,10 @@ class Evaluator(BaseEvaluator):
         bucket_budget = self.map_par(_sigmoid, 0)
 
         sparse_weight = 4 + int(20 * sparse_budget)
-        self.set_scores(PolicyScores(exploration=pool_score, final=final_score))
+        self.set_scores({
+            "exploration": _pool_score.bind(pool_weights),
+            "final": _final_score.bind(final_weights),
+        })
         self.set_action_selection(ActionSelection(count=1, mode="softmax", temperature=0.01 + 0.09 * temp_bias))
         self.set_action_pool(ActionPool(final_size=10 + int(30 * pool_budget)))
         self.set_tohpe_search(TohpeSearch(pool=SourcePool(keep=0, reserve=0)))

@@ -11,10 +11,9 @@ from .mcts_dao import RANK_SCHEDULE_SENTINEL, Dao, Path, RankSchedule
 from .node import (
     ActionPool,
     ActionSelection,
-    ExplorationScore,
-    FinalizationScore,
     Matrix,
     Node,
+    PolicyProgram,
     PolicyScores,
     SamplingBudget,
     SourcePool,
@@ -25,6 +24,17 @@ from .node import (
     ZBucketSearch,
 )
 from .path_store import PathStore, X0_LENGTH
+from .policy_expr import (
+    BoundPolicy,
+    PolicyError,
+    PolicyExpr,
+    SITE_EXPLORATION,
+    SITE_FINAL,
+    describe_knobs,
+    linear_score,
+    policy,
+    validate_scores,
+)
 from .todd import Todd
 
 MIN_SAVED_PATH_MARGIN = 1
@@ -107,6 +117,7 @@ def _worker_run_one_from_template(
         with_timing=True,
         seed=seed,
     )
+    print(f"{node.state.rows=}")
     return seed, node, counters, discovered_at
 
 
@@ -215,59 +226,56 @@ def _converted_rank_schedule(x: Any, convert):
         return RankSchedule.from_any([(rank, convert(value)) for rank, value in x])
     return RankSchedule.constant(convert(x))
 
-def _to_erank_schedule(x: Any) -> "RankSchedule":
-    """Accept RankSchedule | [(rank, value), ...] | scalar and return RankSchedule."""
-    if isinstance(x, RankSchedule):
-        return x
-    if isinstance(x, zip):
-        x = [obj for obj in x]
-    if _is_rank_list(x):
-        return RankSchedule.from_any([(rank, _to_exploration_score(el)) for (rank, el) in x])
-    return RankSchedule.constant(_to_exploration_score(x))
+def _score_program(x: Any, site: str):
+    """Coerce one score argument into a compiled program plus its parameters.
 
-def _to_frank_schedule(x: Any) -> "RankSchedule":
-    """Accept RankSchedule | [(rank, value), ...] | scalar and return RankSchedule."""
-    if isinstance(x, RankSchedule):
-        return x
-    if isinstance(x, zip):
-        x = [obj for obj in x]
-    if _is_rank_list(x):
-        return RankSchedule.from_any([(rank, _to_finalization_score(el)) for (rank, el) in x])
-    return RankSchedule.constant(_to_finalization_score(x))
+    Accepts a bound policy (`expr.bind([...])`), an already-compiled
+    PolicyProgram, or a plain weight list, which is normalized and compiled to
+    the equivalent linear score. Returns `(program, params)`.
+    """
+    if isinstance(x, PolicyProgram):
+        return x, []
+    if isinstance(x, BoundPolicy):
+        if x.site != site:
+            raise ValueError(
+                f"policy {x.expr.name!r} was declared with @policy.{x.site} but is "
+                f"being used as the {site} score"
+            )
+        return x.native(), x.params
+    if isinstance(x, PolicyExpr):
+        raise ValueError(
+            f"policy {x.name!r} is unbound; call {x.name}.bind([...]) with "
+            f"{x.n_params} value{'' if x.n_params == 1 else 's'} before passing it "
+            "to set_scores"
+        )
 
-def _to_exploration_score(x: Any) -> "ExplorationScore":
-    """Accept ExplorationScore | (wred, wdim, wpossible_red) and return ExplorationScore."""
-    if isinstance(x, ExplorationScore):
-        return x
+    # Weight list: normalized to unit length as before, then compiled.
+    values = np.asarray([float(v) for v in list(x)], dtype=float)
+    if np.any(values):
+        values = values / np.sqrt(np.sum(values * values))
+    return linear_score([float(v) for v in values], site=site).bind([]).native(), []
 
-    x = list(x)
-    xs = np.asarray(x)
-    x = np.asarray(xs)/np.sqrt(np.sum(xs*xs)) if np.any(xs) else xs
-    weights = [float(v) for v in x]
-    return ExplorationScore(weights, [0.0] * len(weights))
-
-def _to_finalization_score(x: Any) -> "FinalizationScore":
-    """Accept FinalizationScore | (wred, wdim, wpossible_red, wtohpe_dim) and return FinalizationScore."""
-    if isinstance(x, FinalizationScore):
-        return x
-    x = list(x)
-    xs = np.asarray(x)
-    x = np.asarray(xs)/np.sqrt(np.sum(xs*xs)) if np.any(xs) else xs
-    weights = [float(v) for v in x]
-    return FinalizationScore(weights, [0.0] * len(weights))
 
 def _to_policy_scores(x: Any) -> "PolicyScores":
     if isinstance(x, PolicyScores):
         return x
     if isinstance(x, Mapping):
-        return PolicyScores(
-            exploration=_to_exploration_score(x.get("exploration", [1.0, 0.0, 0.0, 0.0, 0.0])),
-            final=_to_finalization_score(x.get("final", [1.0, 0.0, 0.0, 0.0, 0.0, 0.0])),
-        )
-    values = list(x)
-    if len(values) != 2:
-        raise ValueError("PolicyScores expects PolicyScores, mapping, or (exploration, final)")
-    return PolicyScores(exploration=_to_exploration_score(values[0]), final=_to_finalization_score(values[1]))
+        exploration = x.get("exploration", [1.0, 0.0, 0.0, 0.0, 0.0])
+        final = x.get("final", [1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    else:
+        values = list(x)
+        if len(values) != 2:
+            raise ValueError("PolicyScores expects PolicyScores, mapping, or (exploration, final)")
+        exploration, final = values
+
+    exploration_program, exploration_params = _score_program(exploration, SITE_EXPLORATION)
+    final_program, final_params = _score_program(final, SITE_FINAL)
+    return PolicyScores(
+        exploration=exploration_program,
+        final=final_program,
+        exploration_params=exploration_params,
+        final_params=final_params,
+    )
 
 def _to_policy_scores_schedule(x: Any) -> "RankSchedule":
     return _converted_rank_schedule(x, _to_policy_scores)
@@ -1277,11 +1285,13 @@ class BaseEvaluator:
         if exploration is not None or final is not None:
             if x is not None or vals is not None or ranks is not None or values is not None:
                 raise ValueError("use either a PolicyScores value/schedule or exploration=.../final=..., not both")
-            x = PolicyScores(
-                exploration=_to_exploration_score(
-                    exploration if exploration is not None else [1.0, 0.0, 0.0, 0.0, 0.0]
-                ),
-                final=_to_finalization_score(final if final is not None else [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            x = _to_policy_scores(
+                {
+                    "exploration": exploration
+                    if exploration is not None
+                    else [1.0, 0.0, 0.0, 0.0, 0.0],
+                    "final": final if final is not None else [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                }
             )
         else:
             x = _rank_args(x, vals, ranks=ranks, values=values)
