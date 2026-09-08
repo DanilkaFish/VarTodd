@@ -700,7 +700,10 @@ class TestTohpeRedTarget(unittest.TestCase):
     def test_band_bounds_the_reductions_that_reach_the_pool(self):
         # End-to-end: with a band, no candidate above its upper edge should be
         # selected, whichever y-sampling mode is used.
-        import numpy as np
+        try:
+            import numpy as np
+        except ModuleNotFoundError:
+            self.skipTest("NumPy is required for the matrix-backed policy test")
 
         matrix_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..",
@@ -751,6 +754,38 @@ class TestTohpeRedTarget(unittest.TestCase):
                         f"(sparse={sparse}, dense={dense})",
                 )
         self.assertGreater(unbounded, 4, "fixture should offer reductions above the bands")
+
+    def test_policy_iteration_exposes_optimized_tohpe_mode(self):
+        n = self.native
+        matrix = n.Matrix.from_rows([
+            n.BitVec(4, [bool((value >> bit) & 1) for bit in range(4)])
+            for value in range(1, 16)
+        ])
+        cfg = n.PolicyConfig()
+        cfg.tohpe = n.TohpeSearch(
+            n.SamplingBudget(one_hot=1, sparse=0, dense=0, sparse_max_weight=2),
+            n.SourcePool(keep=4, reserve=0), 2,
+        )
+        empty = n.ZBucketSearch(0, 0, 0.0, 0.0, 0)
+        cfg.todd = n.ToddSearch(n.SamplingBudget(), n.SourcePool(keep=0, reserve=0), 1, empty)
+        cfg.tohpeprefix = n.TohpePrefixSearch(
+            n.SamplingBudget(), n.SourcePool(keep=0, reserve=0), 1, empty)
+
+        automatic = n.policy_iteration(cur_mat=matrix, policy_cfg=cfg, seed=7, add_seed=0)
+        optimized = n.policy_iteration(
+            cur_mat=matrix, policy_cfg=cfg, seed=7, add_seed=0, tohpe_mode=20,
+        )
+        eager = n.policy_iteration(
+            cur_mat=matrix, policy_cfg=cfg, seed=7, add_seed=0, tohpe_mode=0,
+        )
+        shared = n.policy_iteration(
+            data=n.MatrixWithData(matrix, False), policy_cfg=cfg, seed=7, add_seed=0,
+        )
+        self.assertEqual(n.MatrixWithData(matrix, False).tohpe_mode, 0)
+        self.assertEqual(n.MatrixWithData(matrix, False, 20).tohpe_mode, 20)
+        self.assertEqual(automatic.chosen[0].reduction, optimized.chosen[0].reduction)
+        self.assertEqual(automatic.chosen[0].reduction, eager.chosen[0].reduction)
+        self.assertEqual(automatic.chosen[0].reduction, shared.chosen[0].reduction)
 
 
 class TestReportRendering(unittest.TestCase):

@@ -682,6 +682,26 @@ void check_policy_iteration_smoke() {
             "final pool composition should contain all three sources");
 }
 
+void check_lazy_tohpe_feature_skips_inactive_branch() {
+    Matrix P(31, 5);
+    for (index_t r = 1; r <= 31; ++r) for (index_t c = 0; c < 5; ++c) if ((r >> c) & 1) P[r - 1].set(c);
+    auto data = std::make_shared<MatrixWithData>(P, false, 20);
+    PolicyConfig cfg;
+    cfg.tohpe = TohpeSearch{SamplingBudget{8, 0, 0, 2}, SourcePool{4, 0}, 2};
+    cfg.todd.pool = {0, 0}; cfg.tohpeprefix.pool = {0, 0}; cfg.pool.final_size = 4;
+    cfg.scores.final = PolicyProgram({{Op::LoadConst, 0}, {Op::LoadKnob, static_cast<uint16_t>(Knob::tohpe)},
+        {Op::LoadKnob, static_cast<uint16_t>(Knob::red)}, {Op::Select}}, {0.0f}, 0, PolicySite::Finalization);
+    auto lazy = policy_iteration_impl(data, cfg, 21, 0);
+    require(!lazy.chosen.empty(), "lazy TOHPE fixture produced no action");
+    require(get_tohpe_basis(lazy.states[0]).rows() > 0, "lazy TOHPE fixture has zero child dimension");
+    require(lazy.chosen[0].tohpe_dim == 0, "inactive TOHPE branch was evaluated");
+    require(lazy.chosen[0].final_score == lazy.chosen[0].reduction, "lazy TOHPE score mismatch");
+    cfg.scores.final = PolicyProgram({{Op::LoadConst, 0}, {Op::LoadKnob, static_cast<uint16_t>(Knob::tohpe)},
+        {Op::LoadKnob, static_cast<uint16_t>(Knob::red)}, {Op::Select}}, {1.0f}, 0, PolicySite::Finalization);
+    auto active = policy_iteration_impl(data, cfg, 21, 0);
+    require(active.chosen[0].tohpe_dim > 0, "active TOHPE branch was not evaluated");
+}
+
 void check_policy_iteration_repeatability() {
     Matrix P(4, 3);
     P[0].set(0);
@@ -970,6 +990,7 @@ int main() {
         check_tohpe_reduction_target_band();
         check_policy_iteration_smoke();
         check_policy_iteration_repeatability();
+        check_lazy_tohpe_feature_skips_inactive_branch();
         check_policy_iteration_merges_equivalent_parity_states();
         check_tohpe_only_policy_continues_after_todd_stops();
         check_tohpe_policy();
