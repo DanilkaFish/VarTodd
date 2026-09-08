@@ -19,6 +19,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <unordered_map>
+#include <ankerl/unordered_dense.h>
 
 namespace todd {
 
@@ -441,9 +443,19 @@ class CountWS {
 // Owns a matrix plus the indexes/bases reused during one policy iteration.
 class MatrixWithData {
   public:
-    explicit MatrixWithData(Matrix P, bool build_full_todd = true);
+    explicit MatrixWithData(Matrix P, bool build_full_todd = true, int lazy_mode = 0);
 
-    const ToddIndex& index() const noexcept { return index_; }
+    const ToddIndex& index() const;
+    bool has_index() const noexcept { return index_.has_value(); }
+    int lazy_mode() const noexcept { return lazy_mode_; }
+    mutable std::size_t row_bucket_calls = 0;
+    mutable std::size_t source_cache_hits = 0;
+    mutable std::size_t topk_cache_entries = 0;
+    mutable std::size_t topk_cache_bytes = 0;
+    mutable double candidate_seconds = 0;
+    mutable double bucket_seconds = 0;
+    void row_bucket(RowCView z, std::vector<SumEntry>& entries) const;
+    const std::vector<uint64_t>& row_hashes() const { return row_hashes_; }
     const Matrix&    P() const noexcept { return P_; }
     const Matrix&    tohpe_basis() const noexcept { return tohpe_basis_; }
 
@@ -464,7 +476,13 @@ class MatrixWithData {
   private:
     Matrix                              P_;
     Matrix                              tohpe_basis_;
-    const ToddIndex                     index_;
+    mutable std::optional<ToddIndex> index_;
+    int lazy_mode_ = 0;
+    std::vector<uint64_t> row_hashes_;
+    std::vector<uint64_t> hash_masks_;
+    ankerl::unordered_dense::map<uint64_t, index_t> row_hash_heads_;
+    std::vector<index_t> row_hash_next_;
+    ankerl::unordered_dense::map<Row, index_t, RowHash, RowEq> row_lookup_;
     bool                                can_build_full_todd_ = false;
     mutable std::optional<FullToddData> full_todd_;
 };
@@ -558,11 +576,23 @@ class TohpeGenerator {
     auto make(index_t row) const -> NullSpace;
     auto make(index_t row1, index_t row2) const -> NullSpace;
     Row  best_z(RowCView y) const;
+    void cache_topk(const std::vector<Row>& keys) const;
 
     const Matrix& P() const noexcept { return M_->P(); }
 
   private:
     void count_z_reductions_(RowCView y) const;
+    void lazy_best_z_(RowCView y, index_t n, std::vector<TohpeZInfo>& out, const TohpeRedTarget& target) const;
+    void fingerprint_best_(RowCView y, index_t n, std::vector<TohpeZInfo>& out, const TohpeRedTarget& target) const;
+    index_t cached_bucket_size_(RowCView z) const;
+    mutable std::size_t cache_payload_ = 0;
+    struct LazyBucket { index_t a, b, count; uint32_t next; };
+    mutable ankerl::unordered_dense::map<uint64_t, uint32_t> heads_;
+    mutable std::vector<LazyBucket> lazy_buckets_;
+    mutable std::vector<uint64_t> flat_keys_;
+    mutable std::vector<uint32_t> flat_heads_;
+    mutable std::unordered_map<Row, std::vector<SumEntry>, RowHash, RowEq> topk_cache_;
+    mutable ankerl::unordered_dense::map<Row, index_t, RowHash, RowEq> dense_counts_;
 
     std::shared_ptr<MatrixWithData> M_;
 

@@ -16,7 +16,7 @@ def explore_score(k, p, fn):
 
 @policy.final
 def final_score(k, p, fn):
-    return k.nred * p.w(0) + k.ndim * p.w(1) + k.ntohpe * p.w(2)
+    return k.nred * p.w(0) + k.ndim * p.w(1)
 
 
 def disabled_todd():
@@ -27,11 +27,11 @@ class Evaluator(BaseEvaluator):
     def policy_mapping(self):
         self.set_scores({
             "exploration": explore_score.bind([1.0, 2.0, 2.0, 0.0, 0.0]),
-            "final": final_score.bind([2.0, 1.5, 1.0]),
+            "final": final_score.bind([2.0, 1.5]),
         })
-        early = TohpeSearch(SamplingBudget(50, 0, 0, 2), SourcePool(15, 8), 10, 4, 8)
+        early = TohpeSearch(SamplingBudget(10, 0, 0, 2), SourcePool(15, 8), 10, 4, 8)
         late = TohpeSearch(SamplingBudget("all", 0, 0, 0), SourcePool(32, 16), 64, 2, 6)
-        self.set_action_pool(ActionPool(final_size=45))
+        self.set_action_pool(ActionPool(final_size=8))
         self.set_action_selection(ActionSelection(count=2, mode="softmax", temperature=0.30))
         rank_span = max(1, self.init_rank - self.target_final_rank)
         takeover_rank = self.target_final_rank + round(0.12 * rank_span)

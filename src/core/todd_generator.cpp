@@ -312,7 +312,11 @@ struct PolicyIterationContext {
 PolicyIterationContext make_policy_context(const std::shared_ptr<MatrixWithData>& data, NormalizedPolicyConfig& config,
                                            index_t seed, index_t add_seed) {
     PolicyIterationContext ctx(data, matrix_seed(data->P(), seed, add_seed));
-    const auto             bucket_normalization = data->index().max_bucket();
+    const bool need_global = config.exploration.uses(Knob::bn) || config.exploration.uses(Knob::nbucket) ||
+        config.final.uses(Knob::bn) || config.final.uses(Knob::nbucket) ||
+        config.exploration.uses(Knob::bucket_id) || config.final.uses(Knob::bucket_id) ||
+        config.todd.pool.keep > 0 || config.tohpeprefix.pool.keep > 0;
+    const auto bucket_normalization = (data->has_index() || need_global) ? data->index().max_bucket() : index_t(1);
     const auto             wvw_normalization    = data->P().rows();
     const auto             dim_normalization    = ctx.tohpe_dim + 5;
     config.frame.bn                          = static_cast<float>(bucket_normalization);
@@ -715,6 +719,7 @@ SourceTraversalState make_source_traversal_state(const Search& search, std::size
 
 void generate_bucket_candidates(PolicyIterationContext& ctx, const NormalizedPolicyConfig& config,
                                 GenerationOutput& out) {
+    if (config.tohpeprefix.pool.keep <= 0 && config.todd.pool.keep <= 0) return;
     const ToddIndex& index        = ctx.data->index();
     const auto       bucket_count = static_cast<std::size_t>(index.buckets_num());
     const auto prefix_state = make_source_traversal_state(config.tohpeprefix, bucket_count);
@@ -880,6 +885,11 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
                                 static_cast<std::size_t>(config.tohpe.pool.reserve),
                                 static_cast<std::size_t>(config.tohpeprefix.pool.reserve),
                                 static_cast<std::size_t>(config.todd.pool.reserve));
+    if (!ctx.data->has_index()) {
+        std::vector<Row> keys;
+        for (const auto& c : merged_candidates) if (c.is_tohpe()) keys.push_back(c.z);
+        ctx.get_tohpe_gen().cache_topk(keys);
+    }
     const auto score_fn        = config.fscore();
     const bool need_tohpe_dim  = score_fn.needs_tohpe_dim();
     auto       get_tohpe_gen  = [&]() -> TohpeGenerator& { return ctx.get_tohpe_gen(); };
@@ -982,6 +992,20 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
         throw std::runtime_error("data is null");
 
     auto config_norm = normalize_policy_config(std::move(config));
+    if ((data->lazy_mode() == 6 || data->lazy_mode() == 8 || data->lazy_mode() == 10 || data->lazy_mode() == 12 || data->lazy_mode() == 15 || data->lazy_mode() == 18 || data->lazy_mode() == 20) && !data->has_index()) {
+        const auto m = static_cast<double>(data->P().rows());
+        const auto& basis = data->tohpe_basis();
+        double support_work = 0;
+        for (index_t i = 0; i < basis.rows(); ++i) { const auto w = double(basis[i].count()); support_work += w * (m - w); }
+        const auto one_hot = std::min<index_t>(basis.rows(), config_norm.tohpe.sampling.vector_samples[0]);
+        double estimated_work = basis.rows() ? support_work * double(one_hot) / double(basis.rows()) : 0;
+        // Non-one-hot samples can be dense; use the worst balanced split.
+        estimated_work += (double(config_norm.tohpe.sampling.vector_samples[1]) + double(config_norm.tohpe.sampling.vector_samples[2])) * m * m / 4;
+        // Flat insertion has less per-contribution overhead; this is a general
+        // work-budget heuristic, not a problem/width-specific dispatch rule.
+        const double work_budget_scale = data->lazy_mode() == 20 ? 2.0 : 1.0;
+        if (estimated_work >= work_budget_scale * m * (m - 1) / 2 && m > 1) (void)data->index();
+    }
     auto ctx         = make_policy_context(data, config_norm, seed, add_seed);
     auto generated   = GenerationOutput(config_norm);
 

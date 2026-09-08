@@ -43,6 +43,20 @@ def _load_extension():
     # sys.path when a program is run from inside scripts/.
     if root not in sys.path:
         sys.path.insert(0, root)
+
+    # The Nix shell adds ``<repo>/pyvartodd`` directly to PYTHONPATH so that
+    # ``import pyvartodd`` can load the extension as a top-level module.  When
+    # loading a configuration-specific module, however, that path shadows the
+    # namespace package at ``<repo>/pyvartodd`` and makes imports such as
+    # ``pyvartodd.Release.pyvartodd`` fail with "pyvartodd is not a package".
+    # Remove only that direct overlay while resolving the package; restore the
+    # caller's path afterwards so this loader remains side-effect free.
+    direct_extension_path = os.path.realpath(os.path.join(root, "pyvartodd"))
+    original_path = sys.path[:]
+    sys.path[:] = [
+        entry for entry in sys.path
+        if os.path.realpath(entry or os.curdir) != direct_extension_path
+    ]
     candidates = []
     for module, relative in relatives:
         directory = os.path.join(root, relative)
@@ -54,11 +68,14 @@ def _load_extension():
                 break
 
     errors = []
-    for _, module in sorted(candidates, reverse=True):
-        try:
-            return __import__(module, fromlist=["policy_iteration"])
-        except Exception as exc:  # a stale or ABI-mismatched build
-            errors.append(f"{module}: {exc}")
+    try:
+        for _, module in sorted(candidates, reverse=True):
+            try:
+                return __import__(module, fromlist=["policy_iteration"])
+            except Exception as exc:  # a stale or ABI-mismatched build
+                errors.append(f"{module}: {exc}")
+    finally:
+        sys.path[:] = original_path
     raise ImportError(
         "could not import the pyvartodd extension; build it with "
         "`cmake --build build`. Tried:\n  " + "\n  ".join(errors or ["no built module found"])

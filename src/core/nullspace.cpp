@@ -13,6 +13,8 @@
 #include <ranges>
 #include <stdexcept>
 #include <vector>
+#include <random>
+#include <chrono>
 
 namespace todd {
 
@@ -275,12 +277,68 @@ static void or_shifted(RowView dst, index_t offset, RowCView src) noexcept {
 
 } // namespace
 
-MatrixWithData::MatrixWithData(Matrix P, bool build_full_todd)
-    : P_{std::move(P)}, tohpe_basis_{build_tohpe_basis_precompute(P_)}, index_{P_},
+MatrixWithData::MatrixWithData(Matrix P, bool build_full_todd, int lazy_mode)
+    : P_{std::move(P)}, tohpe_basis_{lazy_mode >= 7 ? get_tohpe_basis(P_) : build_tohpe_basis_precompute(P_)}, lazy_mode_(lazy_mode),
       can_build_full_todd_{build_full_todd} {
+    if (lazy_mode_) {
+        row_lookup_.reserve(P_.rows());
+        std::mt19937_64 rng(0x9e3779b97f4a7c15ULL);
+        hash_masks_.resize(P_.cols()); for (auto& h : hash_masks_) h = (lazy_mode == 13 || lazy_mode == 16 || lazy_mode == 19) ? 0 : rng(); // Mode 13 forces collisions in tests.
+        row_hashes_.resize(P_.rows());
+        for (index_t i = 0; i < P_.rows(); ++i)
+            for (auto bit = P_[i].find_first(); bit != RowCView::npos; bit = P_[i].find_next(bit)) row_hashes_[i] ^= hash_masks_[bit];
+        for (index_t i = 0; i < P_.rows(); ++i)
+            if (P_[i].none() || !row_lookup_.emplace(Row(P_[i]), i).second) lazy_mode_ = 0;
+    }
+    if (lazy_mode_ >= 11) {
+        row_hash_heads_.reserve(P_.rows());
+        row_hash_next_.resize(P_.rows(), std::numeric_limits<index_t>::max());
+        for (index_t i = 0; i < P_.rows(); ++i) {
+            auto [it, inserted] = row_hash_heads_.try_emplace(row_hashes_[i], i);
+            if (!inserted) { row_hash_next_[i] = it->second; it->second = i; }
+        }
+    }
+    if (!lazy_mode_) index_.emplace(P_);
 #ifndef NDEBUG
     assert(rows_are_linearly_independent(tohpe_basis_));
 #endif
+}
+
+const ToddIndex& MatrixWithData::index() const {
+    if (!index_) index_.emplace(P_);
+    return *index_;
+}
+
+void MatrixWithData::row_bucket(RowCView z, std::vector<SumEntry>& entries) const {
+    const auto started = std::chrono::steady_clock::now();
+    ++row_bucket_calls;
+    entries.clear();
+    auto single = row_lookup_.find(z);
+    if (single != row_lookup_.end()) entries.emplace_back(single->second);
+    if (lazy_mode_ >= 11) {
+        uint64_t zh = 0;
+        for (auto bit = z.find_first(); bit != RowCView::npos; bit = z.find_next(bit)) zh ^= hash_masks_[bit];
+        const auto none = std::numeric_limits<index_t>::max();
+        for (index_t i = 0; i < P_.rows(); ++i) {
+            auto found = row_hash_heads_.find(row_hashes_[i] ^ zh);
+            if (found == row_hash_heads_.end()) continue;
+            for (index_t j = found->second; j != none; j = row_hash_next_[j]) {
+                if (j <= i) continue;
+                bool same = true;
+                for (index_t k = 0; k < z.blocks(); ++k)
+                    if ((P_[i].data()[k] ^ z.data()[k]) != P_[j].data()[k]) { same = false; break; }
+                if (same) entries.emplace_back(i, j);
+            }
+        }
+    } else {
+    Row partner(P_.cols());
+    for (index_t i = 0; i < P_.rows(); ++i) {
+        assign(partner, P_[i]); partner ^= z;
+        auto found = row_lookup_.find(partner);
+        if (found != row_lookup_.end() && i < found->second) entries.emplace_back(i, found->second);
+    }
+    }
+    bucket_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
 }
 
 const MatrixWithData::FullToddData& MatrixWithData::full_todd() const {
@@ -461,20 +519,30 @@ Matrix NullSpace::apply(RowCView y, std::vector<std::uint8_t>& scratch_killed) c
 TohpeGenerator::TohpeGenerator(std::shared_ptr<MatrixWithData> M) : M_{std::move(M)} {}
 
 NullSpace TohpeGenerator::make(index_t row) const {
-    return NullSpace(M_, std::make_unique<TohpeWitness>(M_, M_->P()[row]));
+    return make(M_->P()[row]);
 }
 
 NullSpace TohpeGenerator::make(index_t row1, index_t row2) const {
     Row z(M_->P()[row1]);
     z ^= M_->P()[row2];
-    return NullSpace(M_, std::make_unique<TohpeWitness>(M_, std::move(z)));
+    return make(z.cview());
 }
 
 NullSpace TohpeGenerator::make(RowCView z) const {
+    if (!M_->has_index()) {
+        auto cached = topk_cache_.find(z);
+        if (cached != topk_cache_.end())
+            return NullSpace(M_, std::make_unique<TohpeWitness>(M_, z, cached->second.data(), cached->second.size()));
+        std::vector<SumEntry> entries;
+        M_->row_bucket(z, entries);
+        return NullSpace(M_, std::make_unique<TohpeWitness>(M_, z, entries.data(), entries.size()));
+    }
     return NullSpace(M_, std::make_unique<TohpeWitness>(M_, z));
 }
 
 NullSpace TohpeGenerator::make(RowCView z, std::uint32_t bucket_id) const {
+    if (!M_->has_index() || bucket_id == std::numeric_limits<std::uint32_t>::max())
+        return make(z);
     std::vector<SumEntry> entries;
     M_->index().materialize_bucket(bucket_id, entries);
     return NullSpace(M_, std::make_unique<TohpeWitness>(
@@ -549,6 +617,14 @@ void TohpeGenerator::count_z_reductions_(RowCView y) const {
 void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
                                            std::vector<TohpeZInfo>& scratch_out,
                                            const TohpeRedTarget& target) const {
+    if (y.size() != M_->P().rows()) throw std::invalid_argument("TOHPE coefficient width mismatch");
+    if (!M_->has_index()) {
+        const auto started = std::chrono::steady_clock::now();
+        if (M_->lazy_mode() >= 4) fingerprint_best_(y, num_samples, scratch_out, target);
+        else lazy_best_z_(y, num_samples, scratch_out, target);
+        M_->candidate_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        return;
+    }
     count_z_reductions_(y);
     const ToddIndex& idx = M_->index();
     ws_.argmax_n_into(num_samples, scratch_candidates_, target);
@@ -566,6 +642,182 @@ void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
     }
 }
 
+
+void TohpeGenerator::cache_topk(const std::vector<Row>& keys) const {
+    if (M_->lazy_mode() >= 9) return; // Bounded cache already holds per-vector winners.
+    topk_cache_.clear();
+    if (M_->has_index() || (M_->lazy_mode() != 3 && M_->lazy_mode() != 5)) return;
+    std::size_t bytes = 0;
+    for (const auto& z : keys) {
+        if (topk_cache_.contains(z)) continue;
+        std::vector<SumEntry> entries; M_->row_bucket(z, entries);
+        const auto added = entries.capacity() * sizeof(SumEntry) + z.blocks() * sizeof(uint64_t);
+        if (bytes + added > 8 * 1024 * 1024) continue;
+        bytes += added; topk_cache_.emplace(z, std::move(entries));
+    }
+    M_->topk_cache_bytes = bytes;
+    M_->topk_cache_entries = topk_cache_.size();
+}
+
+index_t TohpeGenerator::cached_bucket_size_(RowCView z) const {
+    if (M_->lazy_mode() >= 9) {
+        if (auto it = topk_cache_.find(z); it != topk_cache_.end()) {
+            ++M_->source_cache_hits;
+            return it->second.size();
+        }
+    }
+    std::vector<SumEntry> entries;
+    M_->row_bucket(z, entries);
+    const auto size = entries.size();
+    const auto payload = entries.capacity() * sizeof(SumEntry) + z.blocks() * sizeof(uint64_t);
+    // Payload cap plus entry cap bounds metadata as well as retained source arrays.
+    if (M_->lazy_mode() >= 9 && cache_payload_ + payload <= 8 * 1024 * 1024 && topk_cache_.size() < 4096) {
+        topk_cache_.emplace(Row(z), std::move(entries));
+        cache_payload_ += payload;
+        M_->topk_cache_bytes = cache_payload_;
+        M_->topk_cache_entries = topk_cache_.size();
+    }
+    return size;
+}
+
+void TohpeGenerator::lazy_best_z_(RowCView y, index_t n, std::vector<TohpeZInfo>& out,
+                                  const TohpeRedTarget& target) const {
+    out.clear(); if (n == 0) return;
+    const Matrix& P = M_->P();
+    scratch_ones_.clear(); scratch_zeros_.clear();
+    for (index_t i = 0; i < P.rows(); ++i)
+        (y.test(i) ? scratch_ones_ : scratch_zeros_).push_back(i);
+    const bool parity = y.count() & 1;
+    auto evaluate = [&](auto& counts) {
+        counts.clear();
+        auto add = [&](RowCView key, index_t delta) {
+            auto it = counts.find(key);
+            if (it == counts.end()) counts.emplace(Row(key), delta - index_t(parity));
+            else it->second += delta;
+        };
+        Row z(P.cols());
+        for (auto i : scratch_ones_) {
+            add(P[i], 1);
+            for (auto j : scratch_zeros_) { assign(z, P[i]); z ^= P[j]; add(z.cview(), 2); }
+        }
+        if (parity) for (auto j : scratch_zeros_) add(P[j], 2);
+        // Keep only n keys, not source lists for every bucket.
+        using Pair = std::pair<Row, index_t>;
+        std::vector<Pair> best;
+        auto better = [&](const Pair& a, const Pair& b) {
+            auto da = target.distance(a.second), db = target.distance(b.second);
+            return da != db ? da < db : a.second != b.second ? a.second > b.second : a.first < b.first;
+        };
+        for (const auto& [key, count] : counts) {
+            if (best.size() >= n) {
+                auto da = target.distance(count), db = target.distance(best.front().second);
+                if (da > db || (da == db && (count < best.front().second ||
+                    (count == best.front().second && !(key < best.front().first))))) continue;
+            }
+            Pair item{key, count};
+            if (best.size() < n) { best.push_back(std::move(item)); std::push_heap(best.begin(), best.end(), better); }
+            else if (better(item, best.front())) { std::pop_heap(best.begin(), best.end(), better); best.back() = std::move(item); std::push_heap(best.begin(), best.end(), better); }
+        }
+        std::sort(best.begin(), best.end(), better);
+        std::vector<SumEntry> entries;
+        for (auto& item : best) {
+            M_->row_bucket(item.first, entries);
+            out.push_back({std::move(item.first), item.second, entries.size(), std::numeric_limits<uint32_t>::max()});
+        }
+    };
+    if (M_->lazy_mode() == 1) {
+        std::unordered_map<Row, index_t, RowHash, RowEq> counts; evaluate(counts);
+    } else evaluate(dense_counts_);
+}
+
+void TohpeGenerator::fingerprint_best_(RowCView y, index_t n, std::vector<TohpeZInfo>& out,
+                                         const TohpeRedTarget& target) const {
+    out.clear(); if (!n) return;
+    const Matrix& P = M_->P(); const auto& hashes = M_->row_hashes();
+    const auto none = std::numeric_limits<index_t>::max();
+    const auto no_link = std::numeric_limits<uint32_t>::max();
+    const auto blocks = ceil_div64(P.cols());
+    const bool parity = y.count() & 1;
+    auto word = [&](index_t a, index_t b, index_t k) { return P[a].data()[k] ^ (b == none ? uint64_t(0) : P[b].data()[k]); };
+    auto equal = [&](const LazyBucket& rep, index_t a, index_t b) {
+        for (index_t k = 0; k < blocks; ++k) if (word(rep.a, rep.b, k) != word(a, b, k)) return false;
+        return true;
+    };
+    scratch_ones_.clear(); scratch_zeros_.clear();
+    for (index_t i = 0; i < P.rows(); ++i) (y.test(i) ? scratch_ones_ : scratch_zeros_).push_back(i);
+    heads_.clear(); lazy_buckets_.clear();
+    const bool flat = M_->lazy_mode() >= 17;
+    if (flat) {
+        const auto ones = scratch_ones_.size(), zeros = scratch_zeros_.size();
+        const auto limit = std::numeric_limits<std::size_t>::max();
+        if (zeros && ones > (limit - P.rows()) / zeros) throw std::overflow_error("flat table size overflow");
+        const auto bound = ones * zeros + P.rows();
+        if (bound > limit / 2) throw std::overflow_error("flat table capacity overflow");
+        std::size_t capacity = 2;
+        while (capacity < 2 * bound) {
+            if (capacity > limit / 2) throw std::overflow_error("flat table capacity overflow");
+            capacity *= 2;
+        }
+        flat_keys_.resize(capacity);
+        flat_heads_.resize(capacity);
+        std::fill(flat_heads_.begin(), flat_heads_.end(), no_link);
+    }
+    auto add = [&](index_t a, index_t b, index_t delta) {
+        const auto h = hashes[a] ^ (b == none ? uint64_t(0) : hashes[b]);
+        if (flat) {
+            const auto mask = flat_heads_.size() - 1;
+            auto slot = static_cast<std::size_t>(h) & mask;
+            while (flat_heads_[slot] != no_link && flat_keys_[slot] != h) slot = (slot + 1) & mask;
+            auto& head = flat_heads_[slot];
+            for (auto id = head; id != no_link; id = lazy_buckets_[id].next)
+                if (equal(lazy_buckets_[id], a, b)) { lazy_buckets_[id].count += delta; return; }
+            if (lazy_buckets_.size() >= no_link) throw std::overflow_error("lazy bucket count overflow");
+            auto id = static_cast<uint32_t>(lazy_buckets_.size());
+            lazy_buckets_.push_back({a,b,delta-index_t(parity),head});
+            flat_keys_[slot] = h; head = id;
+            return;
+        }
+        const bool single_probe = M_->lazy_mode() >= 14;
+        auto [found, existed] = [&] {
+            if (single_probe) {
+                auto [it, inserted] = heads_.try_emplace(h, no_link);
+                return std::pair{it, !inserted};
+            }
+            auto it = heads_.find(h);
+            return std::pair{it, it != heads_.end()};
+        }();
+        if (existed) {
+            for (auto id = found->second; id != no_link; id = lazy_buckets_[id].next)
+                if (equal(lazy_buckets_[id], a, b)) { lazy_buckets_[id].count += delta; return; }
+        }
+        if (lazy_buckets_.size() >= no_link) throw std::overflow_error("lazy bucket count overflow");
+        auto id = static_cast<uint32_t>(lazy_buckets_.size());
+        lazy_buckets_.push_back({a,b,delta-index_t(parity),existed ? found->second : no_link});
+        if (!existed && !single_probe) heads_.emplace(h,id); else found->second = id;
+    };
+    for (auto i : scratch_ones_) {
+        add(i,none,1);
+        for (auto j : scratch_zeros_) add(i,j,2);
+    }
+    if (parity) for (auto j : scratch_zeros_) add(j,none,2);
+    auto better = [&](uint32_t a, uint32_t b) {
+        const auto& x=lazy_buckets_[a]; const auto& v=lazy_buckets_[b];
+        auto dx=target.distance(x.count),dv=target.distance(v.count);
+        if(dx!=dv)return dx<dv;
+        if(x.count!=v.count)return x.count>v.count;
+        for(index_t k=0;k<blocks;++k){auto wx=word(x.a,x.b,k),wv=word(v.a,v.b,k);if(wx!=wv)return wx<wv;}
+        return false;
+    };
+    std::vector<uint32_t> best;
+    for (uint32_t i=0;i<lazy_buckets_.size();++i) {
+        if(best.size()<n){best.push_back(i);std::push_heap(best.begin(),best.end(),better);}
+        else if(better(i,best.front())){std::pop_heap(best.begin(),best.end(),better);best.back()=i;std::push_heap(best.begin(),best.end(),better);}
+    }
+    std::sort(best.begin(),best.end(),better);
+    std::vector<SumEntry> entries;
+    for(auto id:best){const auto& b=lazy_buckets_[id];Row z(P[b.a]);if(b.b!=none)z^=P[b.b];
+        auto size=cached_bucket_size_(z);out.push_back({std::move(z),b.count,size,no_link});}
+}
 
 FullToddGenerator::FullToddGenerator(std::shared_ptr<MatrixWithData> M) : M_{std::move(M)} {}
 

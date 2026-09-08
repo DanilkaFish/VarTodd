@@ -10,7 +10,7 @@ find_package(Boost 1.70 REQUIRED)
 find_package(ZLIB REQUIRED)
 FetchContent_Declare(cnpy++
     GIT_REPOSITORY https://github.com/mreininghaus/cnpypp.git
-    GIT_SHALLOW True
+    GIT_TAG c6cd4e2078e4f39e862720b66fb211c45577c510
 )
 FetchContent_MakeAvailable(cnpy++)
 
@@ -19,7 +19,7 @@ FetchContent_MakeAvailable(cnpy++)
 FetchContent_Declare(
     unordered_dense
     GIT_REPOSITORY https://github.com/martinus/unordered_dense.git
-    GIT_TAG main
+    GIT_TAG c3b4667c7cb5b059f2df100db4ff7203203ad564
 )
 FetchContent_MakeAvailable(unordered_dense)
 

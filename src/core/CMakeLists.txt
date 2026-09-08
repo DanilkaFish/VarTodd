@@ -8,6 +8,7 @@ set(VARTODD_CORE_SOURCES
 )
 
 find_package(Boost 1.70 REQUIRED)
+find_package(libzip REQUIRED)
 # Create an object library with PIC
 add_library(vartodd OBJECT ${VARTODD_CORE_SOURCES})
 set_target_properties(vartodd PROPERTIES
@@ -18,6 +19,7 @@ set_target_properties(vartodd PROPERTIES
 target_link_libraries(vartodd
     PRIVATE
         cnpy++
+        libzip::zip
     PUBLIC
         unordered_dense
         Boost::headers

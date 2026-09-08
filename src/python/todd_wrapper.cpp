@@ -37,6 +37,13 @@ static Row bitvec_from_list(std::size_t n, const std::vector<bool>& bits) {
     return bv;
 }
 
+static bool todd_search_disabled(const PolicyConfig& config) {
+    return std::max(config.todd.pool.keep, static_cast<Int>(0)) == 0 &&
+           std::max(config.todd.pool.reserve, static_cast<Int>(0)) == 0 &&
+           std::max(config.tohpeprefix.pool.keep, static_cast<Int>(0)) == 0 &&
+           std::max(config.tohpeprefix.pool.reserve, static_cast<Int>(0)) == 0;
+}
+
 // Convert and canonicalize a C-style bool NumPy matrix into the compact core format.
 static Matrix matrix_from_numpy(py::array_t<bool, py::array::c_style | py::array::forcecast> A) {
     if (A.ndim() != 2)
@@ -362,12 +369,13 @@ py::class_<Tensor3D>(m, "Tensor3D")
     .def("__ne__", &Tensor3D::operator!=, py::is_operator());
 
 py::class_<MatrixWithData, std::shared_ptr<MatrixWithData>>(m, "MatrixWithData")
-    .def(py::init([](Matrix P, bool build_full_todd) {
-             return std::make_shared<MatrixWithData>(std::move(P), build_full_todd);
+    .def(py::init([](Matrix P, bool build_full_todd, int tohpe_mode) {
+             return std::make_shared<MatrixWithData>(std::move(P), build_full_todd, tohpe_mode);
          }),
-         py::arg("P"), py::arg("build_full_todd") = true)
+         py::arg("P"), py::arg("build_full_todd") = true, py::arg("tohpe_mode") = 0)
     .def_property_readonly("P", &MatrixWithData::P, py::return_value_policy::reference_internal)
     .def_property_readonly("tohpe_basis", &MatrixWithData::tohpe_basis, py::return_value_policy::reference_internal)
+    .def_property_readonly("tohpe_mode", &MatrixWithData::lazy_mode)
     .def("tohpe_dim", [](const MatrixWithData& M) { return M.tohpe_basis().rows(); });
 
 py::class_<NullSpace>(m, "NullSpace")
@@ -1039,22 +1047,35 @@ py::class_<Stats>(m, "Stats")
 
     m.def(
         "policy_iteration",
-        [](Matrix cur_mat, PolicyConfig pcfg, index_t seed, index_t add_seed) {
+        [](Matrix cur_mat, PolicyConfig pcfg, index_t seed, index_t add_seed, int tohpe_mode) {
             const bool build_full_todd =
                 std::max(pcfg.tohpeprefix.pool.keep, static_cast<Int>(0)) > 0 ||
                 std::max(pcfg.tohpeprefix.pool.reserve, static_cast<Int>(0)) > 0 ||
                 std::max(pcfg.todd.pool.keep, static_cast<Int>(0)) > 0 ||
                 std::max(pcfg.todd.pool.reserve, static_cast<Int>(0)) > 0;
-            auto data = std::make_shared<MatrixWithData>(std::move(cur_mat), build_full_todd);
+            if (tohpe_mode < 0) {
+                tohpe_mode = todd_search_disabled(pcfg) ? 20 : 0;
+            }
+            auto data = std::make_shared<MatrixWithData>(std::move(cur_mat), build_full_todd, tohpe_mode);
             return policy_iteration_impl(data, pcfg, seed, add_seed);
         },
         py::arg("cur_mat"), py::arg("policy_cfg") = PolicyConfig{}, py::arg("seed") = 21, py::arg("add_seed") = 0,
+        py::arg("tohpe_mode") = -1,
         py::call_guard<py::gil_scoped_release>());
     m.def(
         "policy_iteration",
-        [](std::shared_ptr<MatrixWithData> data, PolicyConfig pcfg, index_t seed, index_t add_seed) {
+        [](std::shared_ptr<MatrixWithData> data, PolicyConfig pcfg, index_t seed, index_t add_seed, int tohpe_mode) {
+            if (tohpe_mode < 0) {
+                if (todd_search_disabled(pcfg) && data->lazy_mode() == 0)
+                    tohpe_mode = 20;
+            }
+            if (tohpe_mode >= 0 && tohpe_mode != data->lazy_mode()) {
+                data = std::make_shared<MatrixWithData>(
+                    Matrix(data->P()), data->full_todd_ready(), tohpe_mode);
+            }
             return policy_iteration_impl(data, pcfg, seed, add_seed);
         },
         py::arg("data"), py::arg("policy_cfg") = PolicyConfig{}, py::arg("seed") = 21, py::arg("add_seed") = 0,
+        py::arg("tohpe_mode") = -1,
         py::call_guard<py::gil_scoped_release>());
 }
