@@ -50,7 +50,7 @@ void require_same_entries(const std::vector<SumEntry>& actual, const std::vector
 // sum_i w[i] * feature_i, over the canonical feature order.
 PolicyProgram linear_program(const std::vector<float>& weights,
                              PolicySite                site = PolicySite::ExplorationPool) {
-    static constexpr Knob k_features[] = {Knob::nred, Knob::ndim,  Knob::nbucket,
+    static constexpr Knob k_features[] = {Knob::red, Knob::ndim,  Knob::bucket,
                                           Knob::nyw,  Knob::nzw,   Knob::ntohpe};
     std::vector<Instr>    code;
     bool                  first = true;
@@ -71,11 +71,10 @@ PolicyProgram linear_program(const std::vector<float>& weights,
 }
 
 // sum_i w[i] * |feature_i - c[i]| ** pow, with the first center scaled by
-// 1/bn/2 so a raw reduction center lands in normalized space -- the
-// `first_center_scale` rule of the replaced polynomial scoring.
+// Centers are expressed directly in the raw feature units.
 PolicyProgram polynom_program(const std::vector<float>& weights, const std::vector<float>& centers, float pow,
                               PolicySite site = PolicySite::ExplorationPool) {
-    static constexpr Knob k_features[] = {Knob::nred, Knob::ndim,  Knob::nbucket,
+    static constexpr Knob k_features[] = {Knob::red, Knob::ndim,  Knob::bucket,
                                           Knob::nyw,  Knob::nzw,   Knob::ntohpe};
     std::vector<float>    consts       = weights;
     consts.insert(consts.end(), centers.begin(), centers.end());
@@ -92,15 +91,9 @@ PolicyProgram polynom_program(const std::vector<float>& weights, const std::vect
         if (weights[i] == 0.0f)
             continue;
         const auto center_slot = static_cast<std::uint16_t>(center_index + i);
-        // |feature - center|, with feature 0's center divided by bn then by 2
+        // |feature - center|
         code.push_back(Instr{Op::LoadKnob, static_cast<std::uint16_t>(k_features[i])});
         code.push_back(Instr{Op::LoadConst, center_slot});
-        if (i == 0) {
-            code.push_back(Instr{Op::LoadKnob, static_cast<std::uint16_t>(Knob::bn)});
-            code.push_back(Instr{Op::Div, 0});
-            code.push_back(Instr{Op::LoadConst, two_index});
-            code.push_back(Instr{Op::Div, 0});
-        }
         code.push_back(Instr{Op::Sub, 0});
         code.push_back(Instr{Op::Abs, 0});
         code.push_back(Instr{Op::LoadConst, pow_index});
@@ -125,7 +118,7 @@ PolicyScores scores_with_exploration(PolicyProgram exploration) {
 // Evaluates a program the way the engine does for one candidate.
 float score_candidate(const PolicyProgram& program, const Candidate& cand, float bn, float dn, float wvwn) {
     KnobFrame frame{};
-    frame.bn   = bn;
+    (void)bn;
     frame.dn   = dn;
     frame.wvwn = wvwn;
     PolicyScorer scorer{&program, {}, &frame};
@@ -562,11 +555,10 @@ void check_exploration_score_feature_contract() {
     const PolicyProgram score = linear_program({2.0f, -1.0f, 0.5f, 3.0f, -4.0f});
 
     const float direct = score_features(score, 6, 3, 4, 5, 2, 8, 10.0f, 12.0f, 20.0f);
-    require(std::abs(direct - 0.3f) < 1e-7f, "exploration feature normalization changed");
+    require(std::abs(direct - 13.5f) < 1e-7f, "exploration raw feature scoring changed");
 
     ExplorationScorer scorer;
     KnobFrame         frame{};
-    frame.bn      = 10.0f;
     frame.dn      = 12.0f;
     frame.wvwn    = 20.0f;
     scorer.program = &score;
@@ -576,13 +568,12 @@ void check_exploration_score_feature_contract() {
     require(std::abs(direct - pooled) < 1e-7f && std::abs(direct - cand.pool_score) < 1e-7f,
             "exploration feature scoring diverged from candidate scoring");
 
-    // A raw reduction center is divided by bn and 2 before being subtracted, so
-    // centers are expressed in exact rank-reduction counts.
+    // Centers are expressed in exact rank-reduction counts.
     const PolicyProgram raw_reduction_center =
         polynom_program({-4.0f, 0.0f, 0.0f, 0.0f, 0.0f}, {0.8f, 0.0f, 0.0f, 0.0f, 0.0f}, 1.0f);
     const float raw_center_score = score_features(raw_reduction_center, 16, 0, 0, 0, 0, 1, 10.0f, 1.0f, 1.0f);
-    require(std::abs(raw_center_score - (-3.04f)) < 1e-6f,
-            "polynomial reduction center must be subtracted before normalization");
+    require(std::abs(raw_center_score - (-60.8f)) < 1e-6f,
+            "polynomial reduction center must be subtracted in raw units");
 
     Candidate final_candidate;
     final_candidate.reduction = 16;
@@ -591,8 +582,8 @@ void check_exploration_score_feature_contract() {
         polynom_program({-4.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}, {0.8f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}, 1.0f,
                         PolicySite::Finalization);
     const float raw_final_score = score_candidate(raw_final_center, final_candidate, 10.0f, 1.0f, 1.0f);
-    require(std::abs(raw_final_score - (-3.04f)) < 1e-6f,
-            "final polynomial reduction center must be subtracted before normalization");
+    require(std::abs(raw_final_score - (-60.8f)) < 1e-6f,
+            "final polynomial reduction center must be subtracted in raw units");
 }
 
 void check_tohpe_reduction_target_band() {
@@ -727,12 +718,12 @@ void check_policy_iteration_merges_equivalent_parity_states() {
 
     PolicyConfig cfg;
     cfg.selection = ActionSelection{16, "best", 0.0f};
-    cfg.pool = ActionPool{16};
-    cfg.tohpe = TohpeSearch{SamplingBudget{k_all_one_hot_samples, 32, 64, 3}, SourcePool{16, 0}, 8};
+    cfg.pool = ActionPool{256};
+    cfg.tohpe = TohpeSearch{SamplingBudget{k_all_one_hot_samples, 32, 64, 3}, SourcePool{256, 0}, 8};
     cfg.tohpeprefix = TohpePrefixSearch{
-        SamplingBudget{k_all_one_hot_samples, 32, 64, 3}, SourcePool{16, 0}, 4,
+        SamplingBudget{k_all_one_hot_samples, 32, 64, 3}, SourcePool{256, 0}, 256,
         ZBucketSearch{32, 0, 0.0f, 0.0f, 128}};
-    cfg.todd = ToddSearch{SamplingBudget{k_all_one_hot_samples, 32, 64, 3}, SourcePool{16, 0}, 4,
+    cfg.todd = ToddSearch{SamplingBudget{k_all_one_hot_samples, 32, 64, 3}, SourcePool{256, 0}, 256,
                           ZBucketSearch{32, 0, 0.0f, 0.0f, 128}};
 
     const auto first = policy_iteration_impl(data, cfg, 123, 0);
@@ -746,8 +737,12 @@ void check_policy_iteration_merges_equivalent_parity_states() {
     require(first.states[0] == expected, "selected parity state should use canonical row ordering");
 
     const auto& chosen = first.chosen[0];
-    require(chosen.reduction == 4 && std::abs(chosen.final_score - (2.0f / 3.0f)) < 1e-6f,
-            "equivalent parity states should retain the greatest finalization score");
+    require(chosen.reduction == 2 && first.stats.mean_reduction == 2.0f,
+            "noncanonical input must report the actual four-to-two row reduction for every source");
+    require(first.stats.accepted > 1 && first.stats.accepted < 256,
+            "collision fixture must admit all generated candidates without truncation");
+    require(std::abs(chosen.final_score - first.stats.mean_reduction) < 1e-6f,
+            "equivalent parity states should average all finalization scores");
     require(chosen.pool_size == 1 && chosen.pool_tohpe_size == 1 && chosen.pool_tohpeprefix_size == 0 &&
                 chosen.pool_todd_size == 0,
             "final pool metadata should describe unique state representatives");
@@ -756,6 +751,23 @@ void check_policy_iteration_merges_equivalent_parity_states() {
     require(second.chosen.size() == 1 && second.states.size() == 1 && second.states[0] == first.states[0] &&
                 second.chosen[0].final_score == chosen.final_score && second.chosen[0].source == chosen.source,
             "equivalent-state finalization should remain fixed-seed repeatable");
+
+    // A nonlinear source score plus pool metadata checks that each colliding
+    // candidate is scored using the settled unique pool, before averaging.
+    cfg.scores.final = PolicyProgram({
+        {Op::LoadKnob, static_cast<std::uint16_t>(Knob::source)},
+        {Op::LoadKnob, static_cast<std::uint16_t>(Knob::source)}, {Op::Mul, 0},
+        {Op::LoadKnob, static_cast<std::uint16_t>(Knob::pool_size)},
+        {Op::LoadConst, 0}, {Op::Mul, 0}, {Op::Add, 0}}, {10.0f}, 0, PolicySite::Finalization);
+    const auto mixed = policy_iteration_impl(data, cfg, 123, 0);
+    const auto& stats = mixed.stats;
+    const double expected_score = 10.0 + (stats.accepted_tohpe + 4.0 * stats.accepted_tohpeprefix +
+                                         9.0 * stats.accepted_todd) / stats.accepted;
+    require(mixed.chosen.size() == 1 && stats.accepted_tohpe > 0 &&
+                stats.accepted_tohpeprefix + stats.accepted_todd > 0,
+            "collision fixture must exercise multiple sources");
+    require(std::abs(mixed.chosen[0].final_score - expected_score) < 1e-6,
+            "collisions must average individual scores after pool composition is known");
 }
 
 void check_tohpe_only_policy_continues_after_todd_stops() {
@@ -948,6 +960,274 @@ void check_two_region_sampling_routes_sources() {
     std::unordered_set<Row, RowHash, RowEq> seen(prefix_rows.begin(), prefix_rows.end());
     for (const Row& row : full_rows)
         require(seen.insert(row).second, "full callback collided with a prefix coefficient");
+
+    seen.clear();
+    index_t prefix_count = 0;
+    rng.for_each_capped_bitvector_regions(
+        7, 3, {0, 7, 0}, 2, {0, 120, 7}, 2,
+        [&](RowCView coefs) {
+            ++prefix_count;
+            require(coefs.size() == 7 && coefs.find_next(2) == Row::npos,
+                    "prefix saturation escaped the prefix region");
+            require(seen.emplace(coefs).second, "prefix saturation emitted a duplicate");
+        },
+        [&](RowCView coefs) {
+            require(seen.emplace(coefs).second, "full saturation repeated a prefix vector");
+        });
+    require(prefix_count == 7 && seen.size() == 127, "two-region sparse saturation must cover both spaces");
+}
+
+void check_sampling_coverage_and_uniqueness() {
+    for (index_t dim = 0; dim <= 8; ++dim) {
+        const index_t universe = (index_t{1} << dim) - 1;
+        const std::array<std::array<index_t, 3>, 5> budgets{{
+            {0, universe, 0}, {0, universe / 2, universe - universe / 2},
+            {dim, universe + 1, universe + 1}, {0, 0, universe}, {0, 0, 0}}};
+        for (const auto& caps : budgets) {
+            for (index_t seed = 1; seed <= 4; ++seed) {
+                PyRNG rng(seed);
+                std::unordered_set<Row, RowHash, RowEq> seen;
+                rng.for_each_capped_bitvector(dim, caps, 2, [&](RowCView coefs, const char* src) {
+                    require(!coefs.none(), "sampler emitted the zero vector");
+                    require(seen.emplace(coefs).second, "sampling phases emitted a duplicate");
+                    require(std::string(src) == "oh" || std::string(src) == "sparse" ||
+                                std::string(src) == "dense", "sampler lost provenance");
+                });
+                const bool empty = caps == std::array<index_t, 3>{0, 0, 0};
+                require(seen.size() == (empty ? 0 : universe),
+                        "saturated sparse+dense budget must cover the full nonzero space");
+            }
+        }
+    }
+
+    // Below saturation, sparse samples stay in their requested weight range;
+    // dense samples must fill their quota without duplicating either phase.
+    PyRNG rng(41);
+    std::unordered_set<Row, RowHash, RowEq> seen;
+    std::array<index_t, 3> counts{};
+    rng.for_each_capped_bitvector(8, {3, 20, 30}, 2, [&](RowCView coefs, const char* src) {
+        require(seen.emplace(coefs).second, "mixed sampling emitted a duplicate");
+        if (std::string(src) == "oh") {
+            ++counts[0];
+            require(coefs.count() == 1, "one-hot sample has the wrong weight");
+        } else if (std::string(src) == "sparse") {
+            ++counts[1];
+            require(coefs.count() == 2, "sparse sample has the wrong weight");
+        } else {
+            ++counts[2];
+        }
+    });
+    require(counts == std::array<index_t, 3>{3, 20, 30}, "mixed sampling underfilled its quotas");
+
+    // The old fallback stopped at dimension 20. Unequal weight-class sizes
+    // leave unseen weight-three vectors after the bounded random attempts.
+    for (index_t dim : {index_t{21}, index_t{65}}) {
+        const index_t pairs = dim * (dim - 1) / 2;
+        const index_t triples = dim * (dim - 1) * (dim - 2) / 6;
+        seen.clear();
+        rng.for_each_capped_bitvector(dim, {0, pairs + triples, 0}, 3, [&](RowCView coefs) {
+            require(coefs.count() == 2 || coefs.count() == 3, "sparse fallback escaped its weights");
+            require(seen.emplace(coefs).second, "sparse fallback emitted a duplicate");
+        });
+        require(seen.size() == pairs + triples, "sparse sampling must exhaust spaces above dimension 20");
+    }
+}
+
+void check_sampling_extreme_budgets() {
+    const index_t max_count = std::numeric_limits<index_t>::max();
+    const index_t api_max = static_cast<index_t>(std::numeric_limits<Int>::max());
+    // Tiny/degenerate spaces with huge quotas must clamp before reserving or
+    // adding budgets. The last case also tests overflow-safe internal addition.
+    for (index_t dim : {0, 1, 2, 8, 12}) {
+        const index_t universe = (index_t{1} << dim) - 1;
+        const std::array<std::array<index_t, 3>, 5> budgets{{
+            {0, api_max, 0}, {0, 0, api_max}, {max_count, api_max, api_max},
+            {0, universe / 2, universe - universe / 2}, {0, max_count, max_count}}};
+        for (const auto& caps : budgets) {
+            PyRNG rng(91);
+            std::unordered_set<Row, RowHash, RowEq> seen;
+            rng.for_each_capped_bitvector(dim, caps, 2, [&](RowCView coefs) {
+                require(coefs.size() == dim && !coefs.none(), "extreme budget emitted an invalid vector");
+                require(seen.emplace(coefs).second, "extreme budget emitted a duplicate");
+            });
+            require(seen.size() == universe, "extreme budget missed part of the full space");
+        }
+    }
+
+    // Exhaust a tractable sparse class even when the full space is enormous.
+    // 243 and 729 match the observed GF32/GF64 TOHPE dimensions. Dense samples
+    // must fill their quota without repeating any sparse or one-hot vector.
+    for (index_t dim : {63, 64, 65, 129, 243, 729}) {
+        const index_t pairs = dim * (dim - 1) / 2;
+        PyRNG rng(102);
+        std::unordered_set<Row, RowHash, RowEq> seen;
+        std::array<index_t, 3> counts{};
+        rng.for_each_capped_bitvector(dim, {max_count, pairs + 100, 257}, 2,
+            [&](RowCView coefs, const char* src) {
+                require(coefs.size() == dim && !coefs.none(), "wide sampler emitted an invalid vector");
+                require(seen.emplace(coefs).second, "wide sampler emitted a duplicate");
+                if (std::string(src) == "oh") {
+                    require(coefs.count() == 1, "wide one-hot sample has wrong weight");
+                    ++counts[0];
+                } else if (std::string(src) == "sparse") {
+                    require(coefs.count() == 2, "wide sparse sample has wrong weight");
+                    ++counts[1];
+                } else {
+                    require(std::string(src) == "dense", "wide sampler lost provenance");
+                    ++counts[2];
+                }
+            });
+        require(counts == std::array<index_t, 3>{dim, pairs, 257},
+                "wide sampler did not exhaust its sparse space or fill its dense quota");
+    }
+}
+
+void check_sampling_primitives() {
+    for (index_t seed = 1; seed <= 32; ++seed) {
+        PyRNG rng(seed);
+        for (std::uint32_t n = 0; n <= 16; ++n) {
+            for (index_t k = 0; k <= n; ++k) {
+                const auto zero_based = rng.floyd_sample_0n(n, k);
+                const auto one_based = rng.floyd_sample_1n(n, k);
+                const std::unordered_set<std::uint32_t> z(zero_based.begin(), zero_based.end());
+                const std::unordered_set<std::uint32_t> o(one_based.begin(), one_based.end());
+                require(z.size() == k && o.size() == k, "Floyd sampler repeated an index");
+                for (auto value : z)
+                    require(value < n, "zero-based sample escaped its range");
+                for (auto value : o)
+                    require(value >= 1 && value <= n, "one-based sample escaped its range");
+            }
+        }
+        Matrix basis(4, 4);
+        const auto special = rng.sample_special_bitvec(basis, 0, 0, 100);
+        const std::unordered_set<Row, RowHash, RowEq> distinct(special.begin(), special.end());
+        require(special.size() == 15 && distinct.size() == 15,
+                "special sampler must cover the nonzero space without duplicates");
+    }
+    // Fixed seed, broad bounds: catch the former 2x bias toward all-ones when
+    // a zero draw was replaced by 11 instead of being rejected and redrawn.
+    PyRNG rng(777);
+    std::array<index_t, 4> counts{};
+    for (index_t i = 0; i < 6000; ++i) {
+        const Row row = rng.sample_bitvector(2);
+        ++counts[row.data()[0]];
+    }
+    require(counts[0] == 0, "dense sampler emitted zero");
+    for (index_t i = 1; i < counts.size(); ++i)
+        require(counts[i] >= 1700 && counts[i] <= 2300, "dense sampler strongly biases a nonzero vector");
+}
+
+void check_strict_population_ranks() {
+    SeenValues empty;
+    empty.finalize();
+    require(empty.better_red(0) == 0 && empty.better_dim(0) == 0 && empty.better_score(0) == 0,
+            "empty population has no better candidates");
+    SeenValues values;
+    values.observe(5, 3, 7);
+    values.finalize();
+    require(values.better_red(5) == 0 && values.better_dim(3) == 0 && values.better_score(7) == 0,
+            "a single candidate must have zero rank");
+    SeenValues other;
+    other.observe(5, 3, 7); // tie
+    other.observe(2, 1, -2);
+    other.observe(9, 6, 11);
+    values.merge_from(other);
+    values.finalize();
+    require(values.better_red(5) == 1 && values.better_dim(3) == 1 && values.better_score(7) == 1,
+            "rank must count strictly better candidates, excluding ties");
+    require(values.better_red(2) == 3 && values.better_dim(1) == 3 && values.better_score(-2) == 3,
+            "worst candidate should have rank population_size - 1");
+    require(values.better_red(-1) == 4 && values.better_dim(-1) == 4 && values.better_score(-3) == 4,
+            "queries below all observations should count the whole population");
+    require(values.better_red(std::numeric_limits<Int>::max()) == 0 &&
+                values.better_dim(std::numeric_limits<Int>::max()) == 0 && values.better_score(11) == 0,
+            "queries at or above the maximum must have zero rank");
+}
+
+void check_sampled_policy_states() {
+    const Matrix input = Matrix::from_npy(data_path("init_npy/gf_mult_Vandaele_wo_ancilla/gf2^4_410.npy").string());
+    const Tensor3D signature(input);
+    for (int lazy_mode : {0, 20}) {
+        for (bool enable_todd : {false, true}) {
+            for (const char* selection : {"best", "softmax"}) {
+                auto data = std::make_shared<MatrixWithData>(input, enable_todd, lazy_mode);
+                PolicyConfig cfg;
+                cfg.selection = ActionSelection{32, selection, 1.0f};
+                cfg.pool = ActionPool{32};
+                cfg.tohpe = TohpeSearch{SamplingBudget{4, 8, 8, 3}, SourcePool{32, 0}, 8};
+                cfg.todd = ToddSearch{SamplingBudget{4, 8, 8, 3}, SourcePool{enable_todd ? 32 : 0, 0}, 8,
+                                      ZBucketSearch{16, 16, 0.0f, 0.0f, 16}};
+                const auto result = policy_iteration_impl(data, cfg, 37, 0);
+                require(result.states.size() > 1 && result.chosen.size() == result.states.size(),
+                        "GF4 sampling fixture should return multiple actions");
+                for (std::size_t i = 0; i < result.states.size(); ++i) {
+                    const auto& state = result.states[i];
+                    require(Tensor3D(state) == signature, "sampled action changed the parity tensor");
+                    require(state == canonical_parity_matrix(state), "final state is not canonical");
+                    require(result.chosen[i].pool_size == result.states.size(),
+                            "pool metadata must describe the unique pool before selection");
+                    for (std::size_t j = 0; j < i; ++j)
+                        require(state != result.states[j], "final pool contains duplicate states");
+                }
+            }
+        }
+    }
+}
+
+void check_policy_population_rank_normalization() {
+    const Matrix input = Matrix::from_npy(data_path("init_npy/gf_mult_Vandaele_wo_ancilla/gf2^4_410.npy").string());
+    const auto rank_sum = [](bool normalized) {
+        const auto knobs = normalized
+            ? std::array{Knob::nrank_red, Knob::nrank_dim, Knob::nrank_score}
+            : std::array{Knob::rank_red, Knob::rank_dim, Knob::rank_score};
+        return PolicyProgram({{Op::LoadKnob, static_cast<std::uint16_t>(knobs[0])},
+                              {Op::LoadKnob, static_cast<std::uint16_t>(knobs[1])}, {Op::Add, 0},
+                              {Op::LoadKnob, static_cast<std::uint16_t>(knobs[2])}, {Op::Add, 0}},
+                             {}, 0, PolicySite::Finalization);
+    };
+    for (int mode : {0, 20}) {
+        for (bool todd_enabled : {false, true}) {
+            index_t population = 0;
+            for (Int size : {1, 8, 32}) {
+                auto data = std::make_shared<MatrixWithData>(input, todd_enabled, mode);
+                PolicyConfig cfg;
+                cfg.selection = ActionSelection{size, "best", 0};
+                cfg.pool = ActionPool{size};
+                cfg.tohpe = TohpeSearch{SamplingBudget{4, 8, 8, 3}, SourcePool{32, 0}, 8};
+                cfg.todd = ToddSearch{SamplingBudget{4, 8, 8, 3}, SourcePool{todd_enabled ? 32 : 0, 0}, 8,
+                                      ZBucketSearch{16, 16, 0, 0, 16}};
+                cfg.scores.final = rank_sum(false);
+                const auto raw = policy_iteration_impl(data, cfg, 37, 0);
+                require(!raw.chosen.empty() && raw.stats.accepted > 32,
+                        "rank fixture needs truncation of the generated population");
+                if (population == 0) population = raw.stats.accepted;
+                require(raw.stats.accepted == population, "final_size must not change rank population");
+
+                cfg.scores.final = rank_sum(true);
+                const auto norm = policy_iteration_impl(data, cfg, 37, 0);
+                require(norm.states.size() == raw.states.size(), "rank normalization changed unique pool size");
+                for (std::size_t i = 0; i < norm.states.size(); ++i) {
+                    const auto it = std::find(raw.states.begin(), raw.states.end(), norm.states[i]);
+                    require(it != raw.states.end(), "normalized pool lost a raw-ranked state");
+                    const auto j = static_cast<std::size_t>(it - raw.states.begin());
+                    const double expected = raw.chosen[j].final_score / double(population);
+                    require(std::abs(norm.chosen[i].final_score - expected) < 1e-5,
+                            "nrank denominator must include discarded and colliding candidates");
+                    require(norm.chosen[i].final_score >= 0 && norm.chosen[i].final_score < 3,
+                            "sum of three normalized ranks must lie in [0,3)");
+                    if (!todd_enabled)
+                        require(norm.chosen[i].num_better_dim == 0,
+                                "constant TOHPE dimension must have zero strict dimension rank");
+                }
+
+                cfg.scores.final = PolicyProgram({{Op::LoadKnob, static_cast<std::uint16_t>(Knob::population_size)}},
+                                                {}, 0, PolicySite::Finalization);
+                const auto count = policy_iteration_impl(data, cfg, 37, 0);
+                for (const auto& c : count.chosen)
+                    require(c.final_score == population, "population_size knob must match all accepted candidates");
+            }
+        }
+    }
 }
 
 } // namespace
@@ -980,6 +1260,12 @@ int main() {
         check_tohpe_only_request_keeps_full_todd_cache_lazy();
         check_two_region_sampling();
         check_two_region_sampling_routes_sources();
+        check_sampling_primitives();
+        check_sampling_coverage_and_uniqueness();
+        check_sampling_extreme_budgets();
+        check_sampled_policy_states();
+        check_strict_population_ranks();
+        check_policy_population_rank_normalization();
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

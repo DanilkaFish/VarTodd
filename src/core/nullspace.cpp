@@ -355,6 +355,9 @@ const MatrixWithData::FullToddData& MatrixWithData::full_todd() const {
 }
 
 Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{std::move(M)}, z_{std::move(z)} {
+    if (z_.size() != M_->P().cols())
+        throw std::invalid_argument("Witness: z.size()!=P.cols()");
+    simple_entries_ = M_->has_canonical_rows() && !z_.none();
     const ToddIndex& idx = M_->index();
 
     std::vector<SumEntry> entries;
@@ -366,6 +369,9 @@ Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z) : M_{std::move(M)}, z
 
 Witness::Witness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntry* ptr, index_t len)
     : M_{std::move(M)}, z_{std::move(z)} {
+    if (z_.size() != M_->P().cols())
+        throw std::invalid_argument("Witness: z.size()!=P.cols()");
+    simple_entries_ = M_->has_canonical_rows() && !z_.none();
     init_from_entries_(ptr, len);
 }
 
@@ -377,7 +383,6 @@ void Witness::init_from_entries_(const SumEntry* ptr, index_t len) {
     const index_t m = P.rows();
     pairs_.reserve(std::min(static_cast<std::size_t>(len), static_cast<std::size_t>(m / 2)));
     pair_endpoints_ = Row(m);
-    simple_entries_ = true;
 
     for (index_t t = 0; t < len; ++t) {
         if (ptr[t].is_pair())
@@ -419,9 +424,17 @@ ToddWitness::ToddWitness(std::shared_ptr<MatrixWithData> M, Row z, const SumEntr
     : Witness(std::move(M), std::move(z), ptr, len), Y_{std::move(Y)} {}
 
 int Witness::rank_divergence(RowCView y) const {
+    if (y.size() != M_->P().rows())
+        throw std::invalid_argument("rank_divergence: y.size()!=P.rows()");
     if (!simple_entries_)
         return exact_rank_divergence(M_->P(), z_, y);
 
+    // For distinct nonzero input rows and z!=0, translation by z partitions
+    // rows into disjoint pairs {p,p^z}. A pair cancels iff its y bits differ,
+    // contributing 2. Let p=parity(y), S=[z occurs], t=y at that row (0 if
+    // absent). The special orbit {0,z} contributes t for p=0, or 2*S-t-1
+    // for p=1: remove/retain z and account for the parity-dependent extra z.
+    // Other orbits cannot collide. Noncanonical inputs and z=0 use exact count.
     const bool parity = (y.count() & 1u) != 0;
     unsigned __int128 ones_S = 0;
     const bool has_special = special_ != k_single_sentinel<index_t>();
@@ -618,6 +631,33 @@ void TohpeGenerator::best_z_n_details_into(RowCView y, index_t num_samples,
                                            std::vector<TohpeZInfo>& scratch_out,
                                            const TohpeRedTarget& target) const {
     if (y.size() != M_->P().rows()) throw std::invalid_argument("TOHPE coefficient width mismatch");
+    if (!M_->has_canonical_rows()) {
+        // The per-pair accumulator assumes unique nonzero rows. Repeated rows
+        // can cancel even in untouched buckets; evaluate every existing key.
+        scratch_out.clear();
+        if (num_samples == 0) return;
+        const auto& idx = M_->index();
+        for (index_t id = 0; id < idx.buckets_num(); ++id) {
+            const auto bucket_id = static_cast<std::uint32_t>(id);
+            Row z = idx.key_of(bucket_id);
+            const int red = exact_rank_divergence(M_->P(), z, y);
+            if (red > 0)
+                scratch_out.push_back({std::move(z), static_cast<index_t>(red), idx.bucket_size(bucket_id), bucket_id});
+        }
+        const auto better = [&target](const TohpeZInfo& a, const TohpeZInfo& b) {
+            const auto da = target.distance(a.reduction), db = target.distance(b.reduction);
+            if (da != db) return da < db;
+            if (a.reduction != b.reduction) return a.reduction > b.reduction;
+            return a.bucket_id < b.bucket_id;
+        };
+        const auto count = std::min<std::size_t>(num_samples, scratch_out.size());
+        if (count < scratch_out.size()) {
+            std::nth_element(scratch_out.begin(), scratch_out.begin() + count, scratch_out.end(), better);
+            scratch_out.resize(count);
+        }
+        std::sort(scratch_out.begin(), scratch_out.end(), better);
+        return;
+    }
     if (!M_->has_index()) {
         const auto started = std::chrono::steady_clock::now();
         if (M_->lazy_mode() >= 4) fingerprint_best_(y, num_samples, scratch_out, target);
@@ -824,7 +864,7 @@ FullToddGenerator::FullToddGenerator(std::shared_ptr<MatrixWithData> M) : M_{std
 GeneratedSolutionBasis FullToddGenerator::tohpe_prefix_kernel(RowCView z, const SumEntry* ptr, index_t len) const {
     (void)z;
     static thread_local PivotMap pivY;
-    Matrix basis = detail::build_transformed_tohpe_prefix(M_->tohpe_basis(), ptr, len, pivY);
+    Matrix basis = detail::build_transformed_tohpe_prefix(M_->tohpe_basis(), ptr, len, pivY, M_->P().rows());
     const index_t prefix_size = basis.rows();
     return {std::move(basis), prefix_size};
 }

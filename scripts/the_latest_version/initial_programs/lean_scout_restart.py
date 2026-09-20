@@ -64,7 +64,7 @@ def explore_score(k, p, fn):
     center and falls off either side, so the policy can prefer a *particular*
     y weight instead of only "more" or "less".
     """
-    compressed = fn.sqrt(fn.max(k.nred, 0.0)) * p.w(0)
+    compressed = fn.sqrt(fn.max(k.red, 0.0)) * p.w(0)
     offset = k.nyw - p.w(2)
     band = fn.exp(-(offset * offset) * fn.abs(p.w(3)))
     return compressed + band * p.w(1) + k.ndim * p.w(4)
@@ -81,7 +81,7 @@ def final_score(k, p, fn):
     back regardless of the company it is in.
     """
     standing = 1.0 - k.nrank_red
-    return (k.nred * p.w(0) * fn.max(standing, 0.05)
+    return (k.red * p.w(0) * fn.max(standing, 0.05)
             + k.ndim * p.w(1)
             + k.ntohpe * p.w(2)
             + fn.abs(k.nyw - p.w(4)) * p.w(3))

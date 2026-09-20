@@ -71,6 +71,9 @@ struct Candidate {
     Int           source                 = CandidateSourceUnknown;
     std::uint32_t bucket_id              = no_bucket_id;
 
+    // Sampling phase that first emitted the unique coefficient vector.
+    std::string src = "unknown";
+
     Candidate() = default;
 
     Candidate(float s, Int r, Int kk, Int ll, Row v, Int basis_dim, Int bucket_size, Int z_weight, Int z_size,
@@ -160,6 +163,7 @@ struct CandidateExport {
     Int   pool_tohpeprefix_size{};
     Int   pool_todd_size{};
     Int   source{CandidateSourceUnknown};
+    std::string src = "unknown";
 };
 
 struct Result {
@@ -189,6 +193,7 @@ static CandidateExport export_candidate(Candidate const& c) {
         .pool_tohpeprefix_size  = c.pool_tohpeprefix_size,
         .pool_todd_size         = c.pool_todd_size,
         .source                 = c.source,
+        .src                    = c.src,
     };
 }
 
@@ -246,12 +251,12 @@ struct FinalizationScorer : PolicyScorer {
     }
 };
 
-// A single `nred` instruction: score = reduction / bn / 2. This is the
+// A single `red` instruction: score = raw reduction. This is the
 // reduction-greedy default the previous ExplorationScore{1,0,0,0,0} and
 // FinalizationScore{1,0,0,0,0,0} expressed, kept as the default so an
 // unconfigured PolicyConfig still behaves as it always did.
 inline PolicyProgram greedy_reduction_program(PolicySite site) {
-    return PolicyProgram({Instr{Op::LoadKnob, static_cast<std::uint16_t>(Knob::nred)}}, {}, 0, site);
+    return PolicyProgram({Instr{Op::LoadKnob, static_cast<std::uint16_t>(Knob::red)}}, {}, 0, site);
 }
 
 struct PolicyScores {

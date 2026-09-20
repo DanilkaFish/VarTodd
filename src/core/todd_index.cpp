@@ -227,6 +227,8 @@ void ToddIndex::build_sum_buckets_() {
         RowCView            row(row_data[static_cast<std::size_t>(i)], n_bits_, nb);
         const auto source_pos = static_cast<std::uint32_t>(i);
         const auto [id, inserted] = get_bucket_id_(hP_[static_cast<std::size_t>(i)], row, source_pos);
+        if (!inserted || row.none())
+            canonical_rows_ = false;
         if (inserted)
             build_lengths.push_back(0);
         else

@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
-#include <unordered_map>
+#include <unordered_set>
 
 namespace todd {
 
@@ -108,7 +108,7 @@ Matrix solve_and_build_solution_basis(Matrix& A,
 }
 
 Matrix basis_gauss_elimination(Matrix&& A) {
-    Matrix linear_indep;
+    Matrix linear_indep(0, A.cols());
     linear_indep.reserve_rows(A.rows());
     std::vector<index_t> pivot_cols;
     pivot_cols.reserve(A.rows());
@@ -138,7 +138,7 @@ Matrix row_dependency_basis(Matrix&& A) {
 
     Matrix   row_basis;
     Matrix   transform_basis;
-    Matrix   dependencies;
+    Matrix   dependencies(0, A.rows());
     row_basis.reserve_rows(A.rows());
     transform_basis.reserve_rows(A.rows());
     dependencies.reserve_rows(A.rows());
@@ -215,7 +215,7 @@ void gauss_elimination_inplace_rref(Matrix& A, Matrix& aug, PivotMap& pivots) {
 }
 
 Matrix extract_basis(const Matrix& kernel, const PivotMap& pivots) {
-    Matrix basis(0, 0);
+    Matrix basis(0, kernel.cols());
     basis.reserve_rows(kernel.rows());
     std::vector<std::uint8_t> is_pivot_row(kernel.rows(), 0);
     for (std::size_t col = 0; col < pivots.row.size(); ++col) {
@@ -345,17 +345,14 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
     const index_t                          N      = index_t{1} << dim;
     const index_t                          target = std::min(num_samples, N - 1);
     std::vector<Row>                       out;
-    std::unordered_map<uint64_t, uint64_t> remap;
+    std::unordered_set<index_t> selected;
     out.reserve(static_cast<std::size_t>(target));
-    remap.reserve(checked_mul_size(static_cast<std::size_t>(target), 2,
+    selected.reserve(checked_mul_size(static_cast<std::size_t>(target), 2,
                                    "sample_special_bitvec reserve overflow"));
     for (index_t upper = N - target; upper < N; ++upper) {
-        index_t t   = rand_int(1, upper); // inclusive
-        auto    itT = remap.find(t);
-        index_t x   = (itT == remap.end()) ? t : itT->second;
-        auto    itJ = remap.find(upper);
-        index_t y   = (itJ == remap.end()) ? upper : itJ->second;
-        remap[t]    = y;
+        const index_t t = rand_int(1, upper); // inclusive
+        const index_t x = selected.insert(t).second ? t : upper;
+        selected.insert(x);
         out.push_back(mask_to_bv(dim, x));
     }
 
@@ -365,22 +362,18 @@ std::vector<Row> PyRNG::sample_special_bitvec(const Matrix& basis, index_t i, in
 std::vector<std::uint32_t> PyRNG::floyd_sample_0n(std::uint32_t n, index_t k) {
     if (k > n)
         throw std::invalid_argument("floyd_sample_0n: k > n");
-    std::unordered_map<std::uint32_t, std::uint32_t> map;
-    map.reserve(checked_mul_size(static_cast<std::size_t>(k), 2, "floyd_sample_0n reserve overflow"));
+    std::unordered_set<std::uint32_t> selected;
+    selected.reserve(checked_mul_size(static_cast<std::size_t>(k), 2, "floyd_sample_0n reserve overflow"));
 
     std::vector<std::uint32_t> out;
     out.reserve(k);
 
     for (index_t j = static_cast<index_t>(n) - k; j < static_cast<index_t>(n); ++j) {
-        const auto t   = static_cast<std::uint32_t>(rand_int(0, j)); // inclusive
-        auto       itT = map.find(t);
-        auto       x   = (itT == map.end()) ? t : itT->second;
-
-        const auto jj = static_cast<std::uint32_t>(j);
-        auto       itJ = map.find(jj);
-        auto       y   = (itJ == map.end()) ? jj : itJ->second;
-
-        map[t] = y;
+        const auto t = static_cast<std::uint32_t>(rand_int(0, j)); // inclusive
+        // Floyd's algorithm grows the sampled set. When t was already picked,
+        // j is guaranteed fresh because earlier iterations only reached j-1.
+        const auto x = selected.insert(t).second ? t : static_cast<std::uint32_t>(j);
+        selected.insert(x);
         out.push_back(x);
     }
     return out;
@@ -390,24 +383,9 @@ std::vector<std::uint32_t> PyRNG::floyd_sample_0n(std::uint32_t n, index_t k) {
 std::vector<std::uint32_t> PyRNG::floyd_sample_1n(std::uint32_t n, index_t k) {
     if (k > n)
         throw std::invalid_argument("floyd_sample_1n: k > n");
-    std::unordered_map<std::uint32_t, std::uint32_t> map;
-    map.reserve(checked_mul_size(static_cast<std::size_t>(k), 2, "floyd_sample_1n reserve overflow"));
-
-    std::vector<std::uint32_t> out;
-    out.reserve(k);
-
-    for (index_t j = static_cast<index_t>(n) - k + 1; j <= static_cast<index_t>(n); ++j) {
-        const auto t   = static_cast<std::uint32_t>(rand_int(1, j));
-        auto       itT = map.find(t);
-        auto       x   = (itT == map.end()) ? t : itT->second;
-
-        const auto jj = static_cast<std::uint32_t>(j);
-        auto       itJ = map.find(jj);
-        auto       y   = (itJ == map.end()) ? jj : itJ->second;
-
-        map[t] = y;
-        out.push_back(x);
-    }
+    auto out = floyd_sample_0n(n, k);
+    for (auto& value : out)
+        ++value;
     return out;
 }
 
@@ -425,24 +403,17 @@ void PyRNG::sample_bitvector_inplace(Row& r) {
     uint64_t*     dst = r.data();
     const index_t nb  = r.blocks();
 
-    for (index_t i = 0; i < nb; ++i) {
-        dst[i] = rand_u64();
-    }
-
     const index_t rem = dim & 63;
-    if (rem != 0) {
-        dst[nb - 1] &= ((1ULL << rem) - 1ULL);
-    }
-    if (r.count() == 0) {
+    // Reject zero rather than mapping it to all-ones, which gave that vector
+    // twice the probability of any other nonzero vector in small spaces.
+    do {
         for (index_t i = 0; i < nb; ++i) {
-            dst[i] = ~0ULL;
+            dst[i] = rand_u64();
         }
-
-        const index_t rem = dim & 63;
         if (rem != 0) {
             dst[nb - 1] &= ((1ULL << rem) - 1ULL);
         }
-    }
+    } while (r.none());
 }
 Matrix get_tohpe_basis(const Matrix& P) {
     return row_dependency_basis(L_expansion(P));

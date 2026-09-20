@@ -47,9 +47,9 @@ def explore_score(k, p, fn):
     TOHPE action from the next.
     """
     from_todd = k.source >= TODD_TAG
-    todd_term = k.nbucket * p.w(1)
+    todd_term = k.bucket * p.w(1)
     tohpe_term = k.nyw * fn.abs(p.w(2))
-    return k.nred * p.w(0) + fn.where(from_todd, todd_term, tohpe_term)
+    return k.red * p.w(0) + fn.where(from_todd, todd_term, tohpe_term)
 
 
 @policy.final
@@ -65,7 +65,7 @@ def final_score(k, p, fn):
     property of the pool that knob sits in.
     """
     share = fn.clip(k.f_todd, 0.0, 1.0)
-    scaled = k.nred * p.w(0) * (1.0 + share * p.w(1))
+    scaled = k.red * p.w(0) * (1.0 + share * p.w(1))
     return scaled + k.ntohpe * p.w(2) + (1.0 - k.nrank_score) * p.w(3)
 
 

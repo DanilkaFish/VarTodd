@@ -122,7 +122,16 @@ class BoundPolicy:
         return self._native
 
     def evaluate(self, **knob_values) -> float:
-        """Evaluate on explicit knob values. For tests and the probe pass."""
+        """Evaluate explicit features; normalized overrides win over derived values.
+
+        ysize is the y width (legacy alias: wvwn).
+        """
+        from .expr import KNOB_NAMES
+        unknown = set(knob_values) - set(KNOB_NAMES)
+        if unknown:
+            raise ValueError(f"Unknown knob values: {sorted(unknown)}")
+        if "ysize" in knob_values and "wvwn" in knob_values and knob_values["ysize"] != knob_values["wvwn"]:
+            raise ValueError("ysize and wvwn must agree")
         return _reference_eval(self._expr, self._params, knob_values)
 
     def rendered(self, precision: int = 3) -> str:
@@ -331,7 +340,7 @@ class PolicyExpr:
 
 # --- lint ---------------------------------------------------------------------
 
-_REDUCTION_KNOBS = frozenset({"red", "nred"})
+_REDUCTION_KNOBS = frozenset({"red"})
 
 
 def _lint(name, expr: "PolicyExpr", used_knobs, used_params, declared_indices) -> List[str]:
@@ -344,7 +353,7 @@ def _lint(name, expr: "PolicyExpr", used_knobs, used_params, declared_indices) -
         )
     elif not (used_knobs & _REDUCTION_KNOBS):
         warnings.append(
-            f"{name}: expression never reads k.red or k.nred, so it does not "
+            f"{name}: expression never reads k.red, so it does not "
             "reward reduction at all -- usually a mistake"
         )
 
@@ -373,31 +382,27 @@ def _guarded_div(a: float, b: float) -> float:
 
 def _knob_value(values: dict, name: str) -> float:
     """Mirror of knob_value() in src/core/policy_expr.cpp."""
+    if name in values:
+        return float(values[name])
     raw = lambda n, default=0.0: float(values.get(n, default))  # noqa: E731
-    bn = raw("bn", 1.0)
     dn = raw("dn", 1.0)
-    wvwn = raw("wvwn", 1.0)
+    wvwn = raw("ysize", raw("wvwn", 1.0))
     pool = max(1.0, raw("pool_size"))
-    if name == "nred":
-        return raw("red") / bn / 2.0
+    population = max(1.0, raw("population_size"))
     if name == "ndim":
         return raw("dim") / dn
-    if name == "nbucket":
-        return raw("bucket") / bn
     if name == "nyw":
         return raw("yw") / wvwn
     if name == "nzw":
         return raw("zw") / max(1.0, raw("zsize", 1.0))
-    if name == "nmax_red":
-        return raw("max_red") / bn / 2.0
     if name == "ntohpe":
         return raw("tohpe") / dn
     if name == "nrank_red":
-        return raw("rank_red") / pool
+        return raw("rank_red") / population
     if name == "nrank_dim":
-        return raw("rank_dim") / pool
+        return raw("rank_dim") / population
     if name == "nrank_score":
-        return raw("rank_score") / pool
+        return raw("rank_score") / population
     if name == "f_tohpe":
         return raw("pool_tohpe") / pool
     if name == "f_prefix":
@@ -406,8 +411,8 @@ def _knob_value(values: dict, name: str) -> float:
         return raw("pool_todd") / pool
     if name == "zsize":
         return raw("zsize", 1.0)
-    if name in ("bn", "dn", "wvwn"):
-        return {"bn": bn, "dn": dn, "wvwn": wvwn}[name]
+    if name in ("dn", "wvwn", "ysize"):
+        return {"dn": dn, "wvwn": wvwn, "ysize": wvwn}[name]
     return raw(name)
 
 

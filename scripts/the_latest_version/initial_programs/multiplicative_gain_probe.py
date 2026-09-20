@@ -45,7 +45,7 @@ def explore_score(k, p, fn):
     regret, and it has no additive expression over nred and nbucket alone.
     """
     headroom = fn.log(fn.max(k.max_red - k.red, 0.0) + 1.0)
-    return k.nred * p.w(0) - headroom * fn.abs(p.w(1)) + k.ndim * p.w(2)
+    return k.red * p.w(0) - headroom * fn.abs(p.w(1)) + k.ndim * p.w(2)
 
 
 @policy.final
@@ -64,7 +64,7 @@ def final_score(k, p, fn):
     """
     standing = (1.0 - k.nrank_red) * p.w(0) + (1.0 - k.nrank_score) * p.w(1)
     gate = fn.sigmoid(standing)
-    payload = k.nred * p.w(2) + k.ntohpe * p.w(3)
+    payload = k.red * p.w(2) + k.ntohpe * p.w(3)
     return gate * payload + k.nrank_dim * p.w(4)
 
 

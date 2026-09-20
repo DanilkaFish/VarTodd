@@ -312,14 +312,8 @@ struct PolicyIterationContext {
 PolicyIterationContext make_policy_context(const std::shared_ptr<MatrixWithData>& data, NormalizedPolicyConfig& config,
                                            index_t seed, index_t add_seed) {
     PolicyIterationContext ctx(data, matrix_seed(data->P(), seed, add_seed));
-    const bool need_global = config.exploration.uses(Knob::bn) || config.exploration.uses(Knob::nbucket) ||
-        config.final.uses(Knob::bn) || config.final.uses(Knob::nbucket) ||
-        config.exploration.uses(Knob::bucket_id) || config.final.uses(Knob::bucket_id) ||
-        config.todd.pool.keep > 0 || config.tohpeprefix.pool.keep > 0;
-    const auto bucket_normalization = (data->has_index() || need_global) ? data->index().max_bucket() : index_t(1);
     const auto             wvw_normalization    = data->P().rows();
     const auto             dim_normalization    = ctx.tohpe_dim + 5;
-    config.frame.bn                          = static_cast<float>(bucket_normalization);
     config.frame.wvwn                        = static_cast<float>(wvw_normalization);
     config.frame.dn                          = static_cast<float>(dim_normalization);
     return ctx;
@@ -635,7 +629,7 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
     PyRNG local_rng(mixed_seed(ctx.base_seed, 0, 0, 0, CandidateSourceTohpe));
     std::vector<TohpeZInfo> scratch_best_z;
     local_rng.for_each_capped_bitvector(dim, config.tohpe.sampling.vector_samples,
-                                        config.tohpe.sampling.sparse_max_weight, [&](RowCView coefs) {
+                                        config.tohpe.sampling.sparse_max_weight, [&](RowCView coefs, const char* src) {
         assert(coefs.count() != 0);
         out.stats.evaluated++;
         auto vec = linear_combination_from_basis(ctx.data->tohpe_basis(), coefs);
@@ -660,6 +654,7 @@ void generate_tohpe_candidates(PolicyIterationContext& ctx, const NormalizedPoli
                                 std::move(info.z), dim_int,
                                 detail::checked_int_from_index(info.bucket_size, "Candidate bucket size overflow"),
                                 info.bucket_id, CandidateSourceTohpe);
+            candidate.src = src;
             out.stats.nonzero++;
             out.stats.accepted++;
             out.stats.accepted_tohpe++;
@@ -781,7 +776,7 @@ void generate_bucket_candidates(PolicyIterationContext& ctx, const NormalizedPol
             is_single ? k_single_sentinel<Int>() : detail::checked_int_from_index(l, "Candidate l overflow");
 
         auto sample_into = [&](TopKPool<ExplorationScorer>& target, CandidateSource source, Int basis_dim,
-                               RowCView coefs) {
+                               RowCView coefs, const char* src) {
             stats.evaluated++;
             auto       vec = ns.linear_combination(coefs);
             const auto red = ns.rank_divergence(vec);
@@ -794,6 +789,7 @@ void generate_bucket_candidates(PolicyIterationContext& ctx, const NormalizedPol
                                 detail::checked_int_from_index(bucket_size, "Candidate bucket size overflow"),
                                 detail::checked_int_from_index(key.count(), "Candidate z weight overflow"),
                                 detail::checked_int_from_index(key.size(), "Candidate z size overflow"), source);
+            candidate.src = src;
             stats.accepted++;
             stats.nonzero++;
             if (source == CandidateSourceTohpePrefix)
@@ -814,27 +810,27 @@ void generate_bucket_candidates(PolicyIterationContext& ctx, const NormalizedPol
                 full_dim, prefix_dim, config.tohpeprefix.sampling.vector_samples,
                 config.tohpeprefix.sampling.sparse_max_weight, config.todd.sampling.vector_samples,
                 config.todd.sampling.sparse_max_weight,
-                [&](RowCView coefs) {
+                [&](RowCView coefs, const char* src) {
                     sample_into(bucket_prefix_pool, CandidateSourceTohpePrefix,
-                                detail::checked_int_from_index(prefix_dim, "TOHPE basis dimension overflow"), coefs);
+                                detail::checked_int_from_index(prefix_dim, "TOHPE basis dimension overflow"), coefs, src);
                 },
-                [&](RowCView coefs) {
+                [&](RowCView coefs, const char* src) {
                     sample_into(bucket_todd_pool, CandidateSourceTodd,
-                                detail::checked_int_from_index(full_dim, "Todd basis dimension overflow"), coefs);
+                                detail::checked_int_from_index(full_dim, "Todd basis dimension overflow"), coefs, src);
                 });
         } else if (need_prefix) {
             local_rng.for_each_capped_bitvector(
                 prefix_dim, config.tohpeprefix.sampling.vector_samples, config.tohpeprefix.sampling.sparse_max_weight,
-                [&](RowCView coefs) {
+                [&](RowCView coefs, const char* src) {
                     sample_into(bucket_prefix_pool, CandidateSourceTohpePrefix,
-                                detail::checked_int_from_index(prefix_dim, "TOHPE basis dimension overflow"), coefs);
+                                detail::checked_int_from_index(prefix_dim, "TOHPE basis dimension overflow"), coefs, src);
                 });
         } else {
             local_rng.for_each_capped_bitvector(
                 full_dim, config.todd.sampling.vector_samples, config.todd.sampling.sparse_max_weight,
-                [&](RowCView coefs) {
+                [&](RowCView coefs, const char* src) {
                     sample_into(bucket_todd_pool, CandidateSourceTodd,
-                                detail::checked_int_from_index(full_dim, "Todd basis dimension overflow"), coefs);
+                                detail::checked_int_from_index(full_dim, "Todd basis dimension overflow"), coefs, src);
                 });
         }
         local_prefix_pool.merge_from(bucket_prefix_pool);
@@ -890,26 +886,24 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
         for (const auto& c : merged_candidates) if (c.is_tohpe()) keys.push_back(c.z);
         ctx.get_tohpe_gen().cache_topk(keys);
     }
-    const auto score_fn        = config.fscore();
+    // Ranks and their denominator refer to the same complete generated
+    // population, irrespective of source quotas, final_size or deduplication.
+    KnobFrame final_frame = config.frame;
+    final_frame.population_size = static_cast<float>(out.svs.pool_scores_sorted.size());
+    auto score_fn = config.fscore();
+    score_fn.frame = &final_frame;
     const bool need_tohpe_dim  = score_fn.needs_tohpe_dim();
     auto       get_tohpe_gen  = [&]() -> TohpeGenerator& { return ctx.get_tohpe_gen(); };
     auto       get_full_gen   = [&]() -> FullToddGenerator& { return ctx.get_full_gen(); };
 
-    // The population ranks come from SeenValues, finalized before this call, so
-    // they are available while candidates are still being scored. The pool
-    // composition is not: it is only known once deduplication has settled the
-    // pool, so a policy reading it needs a second scoring pass.
-    const bool needs_pool_composition =
-        config.final.uses(Knob::pool_size) || config.final.uses(Knob::pool_tohpe) ||
-        config.final.uses(Knob::pool_prefix) || config.final.uses(Knob::pool_todd) ||
-        config.final.uses(Knob::f_tohpe) || config.final.uses(Knob::f_prefix) ||
-        config.final.uses(Knob::f_todd) || config.final.uses(Knob::nrank_red) ||
-        config.final.uses(Knob::nrank_dim) || config.final.uses(Knob::nrank_score);
-
-    // Pass 1: realize each candidate's state, score it, and deduplicate
-    // equivalent parity states keeping the greatest finalization score.
+    // Group equivalent parity states before scoring. Keep every member until
+    // the unique pool composition is known, since final policies can read it.
+    // Metadata comes from a deterministic representative independent of the
+    // final score, avoiding a circular dependency through pool source counts.
     FinalizedActions finalized;
     finalized.reserve(merged_candidates.size());
+    std::vector<std::vector<Candidate>> duplicates;
+    duplicates.reserve(merged_candidates.size());
     std::vector<std::uint8_t> scratch_killed;
     for (auto& cand : merged_candidates) {
         auto ns    = make_candidate_nullspace(cand, get_tohpe_gen, get_full_gen);
@@ -921,15 +915,15 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
         cand.num_better_dim        = out.svs.better_dim(cand.basis_dim);
         cand.num_better_red        = out.svs.better_red(cand.reduction);
         cand.num_better_pool_score = out.svs.better_score(cand.pool_score);
-        score_fn(cand);
-
         auto same_state = std::find_if(finalized.begin(), finalized.end(),
                                        [&](const FinalizedAction& action) { return action.state == state; });
         if (same_state == finalized.end()) {
             finalized.push_back(FinalizedAction{std::move(cand), std::move(state)});
-        } else if (scored_candidate_preferred(cand, cand.final_score, same_state->candidate,
-                                              same_state->candidate.final_score)) {
-            *same_state = FinalizedAction{std::move(cand), std::move(state)};
+            duplicates.emplace_back();
+        } else {
+            if (candidate_tie_preferred(cand, same_state->candidate))
+                std::swap(cand, same_state->candidate);
+            duplicates[static_cast<std::size_t>(same_state - finalized.begin())].push_back(std::move(cand));
         }
     }
 
@@ -946,19 +940,13 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
             ++pool_todd_size;
     }
 
-    // Pass 2: record the settled pool composition. A policy that reads any of
-    // those knobs is re-scored now that they are known; one that does not keeps
-    // the score from pass 1 unchanged.
-    index_t n = 0;
-    for (auto& action : finalized) {
-        Candidate& cand = action.candidate;
+    auto score_member = [&](Candidate& cand) {
         cand.pool_size              = pool_size;
         cand.pool_tohpe_size        = pool_tohpe_size;
         cand.pool_tohpeprefix_size = pool_tohpeprefix_size;
         cand.pool_todd_size         = pool_todd_size;
 
-        if (needs_pool_composition)
-            score_fn(cand);
+        score_fn(cand);
         if (!std::isfinite(cand.final_score)) {
             // A non-finite score sorts unpredictably, so it would silently
             // corrupt the ordering rather than fail. Count it, and neutralize
@@ -966,7 +954,18 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
             ++out.stats.nonfinite_score_count;
             cand.final_score = -std::numeric_limits<float>::max();
         }
+        return static_cast<double>(cand.final_score);
+    };
 
+    // Average scores, not features: finalization expressions may be nonlinear.
+    // Use a sum and the full group size, rather than successive pairwise means.
+    index_t n = 0;
+    for (auto& action : finalized) {
+        Candidate& cand = action.candidate;
+        double sum = score_member(cand);
+        for (auto& duplicate : duplicates[n])
+            sum += score_member(duplicate);
+        cand.final_score = static_cast<float>(sum / (duplicates[n].size() + 1));
         ++n;
         const float tohpe = static_cast<float>(cand.tohpe_dim);
         out.stats.max_final_tohpe_dim = std::max(out.stats.max_final_tohpe_dim, tohpe);
@@ -992,7 +991,10 @@ auto policy_iteration_impl(const std::shared_ptr<MatrixWithData>& data, PolicyCo
         throw std::runtime_error("data is null");
 
     auto config_norm = normalize_policy_config(std::move(config));
-    if ((data->lazy_mode() == 6 || data->lazy_mode() == 8 || data->lazy_mode() == 10 || data->lazy_mode() == 12 || data->lazy_mode() == 15 || data->lazy_mode() == 18 || data->lazy_mode() == 20) && !data->has_index()) {
+    // TOHPE-only iterations never consume bucket candidates, so they must not
+    // pay the quadratic ToddIndex construction cost even for dense sampling.
+    const bool needs_bucket_sources = config_norm.tohpeprefix.pool.keep > 0 || config_norm.todd.pool.keep > 0;
+    if (needs_bucket_sources && (data->lazy_mode() == 6 || data->lazy_mode() == 8 || data->lazy_mode() == 10 || data->lazy_mode() == 12 || data->lazy_mode() == 15 || data->lazy_mode() == 18 || data->lazy_mode() == 20) && !data->has_index()) {
         const auto m = static_cast<double>(data->P().rows());
         const auto& basis = data->tohpe_basis();
         double support_work = 0;
@@ -1068,30 +1070,30 @@ void SeenValues::finalize() {
 
 Int SeenValues::better_red(Int r) const {
     assert(finalized);
-    const auto signed_idx = static_cast<std::int64_t>(r) + 1;
+    const auto signed_idx = static_cast<std::int64_t>(r) + 2;
     if (signed_idx < 0)
         return red_suf.empty() ? 0 : detail::checked_int_from_index(red_suf[0], "SeenValues red count overflow");
     const auto idx = static_cast<std::size_t>(signed_idx);
     if (idx >= red_freq.size())
         return 0;
-    return detail::checked_int_from_index(red_suf[idx], "SeenValues red count overflow"); // >= r
+    return detail::checked_int_from_index(red_suf[idx], "SeenValues red count overflow"); // > r
 }
 
 Int SeenValues::better_dim(Int d) const {
     assert(finalized);
     if (d < 0)
         return dim_suf.empty() ? 0 : detail::checked_int_from_index(dim_suf[0], "SeenValues dim count overflow");
-    const auto idx = static_cast<std::size_t>(d);
+    const auto idx = static_cast<std::size_t>(d) + 1;
     if (idx >= dim_freq.size())
         return 0;
-    return detail::checked_int_from_index(dim_suf[idx], "SeenValues dim count overflow"); // >= d
+    return detail::checked_int_from_index(dim_suf[idx], "SeenValues dim count overflow"); // > d
 }
 
 Int SeenValues::better_score(float s) const {
     assert(finalized);
-    auto it = std::lower_bound(pool_scores_sorted.begin(), pool_scores_sorted.end(), s);
+    auto it = std::upper_bound(pool_scores_sorted.begin(), pool_scores_sorted.end(), s);
     return detail::checked_int_from_index(static_cast<index_t>(pool_scores_sorted.end() - it),
-                                          "SeenValues score count overflow"); // >= s
+                                          "SeenValues score count overflow"); // > s
 }
 
 void SeenValues::merge_from(const SeenValues& other) {

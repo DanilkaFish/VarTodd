@@ -122,10 +122,13 @@ inline bool insert_into_y_basis(Row& y, Matrix& basis, PivotMap& pivY) {
     return false;
 }
 
-inline Matrix build_transformed_tohpe_prefix(const Matrix& tohpe, const SumEntry* ptr, index_t len, PivotMap& pivY) {
-    Matrix basis(0, tohpe.cols());
+inline Matrix build_transformed_tohpe_prefix(const Matrix& tohpe, const SumEntry* ptr, index_t len,
+                                           PivotMap& pivY, index_t y_width) {
+    // A zero-dimensional prefix still lives in the full y space. In particular,
+    // legacy callers may pass a default 0x0 matrix as an empty prefix.
+    Matrix basis(0, y_width);
     basis.reserve_rows(tohpe.rows());
-    pivY.reset(static_cast<std::size_t>(tohpe.cols()));
+    pivY.reset(static_cast<std::size_t>(y_width));
 
     for (index_t i = 0; i < tohpe.rows(); ++i) {
         Row y = tohpe[i];
@@ -157,7 +160,7 @@ GeneratedSolutionBasis solve_and_build_solution_basis_generated(index_t rows, in
     static thread_local PivotMap pivY;
 
     pivA.reset(static_cast<std::size_t>(divider));
-    Matrix basis = detail::build_transformed_tohpe_prefix(tohpe, ptr, len, pivY);
+    Matrix basis = detail::build_transformed_tohpe_prefix(tohpe, ptr, len, pivY, nY);
     Matrix pivot_rows(0, cols);
     Row    row(cols);
 
@@ -285,6 +288,7 @@ class ToddIndex {
     const Matrix& matrix() const noexcept { return P_; }
     index_t       rows() const noexcept { return m_; }
     index_t       cols() const noexcept { return n_bits_; }
+    bool          has_canonical_rows() const noexcept { return canonical_rows_; }
     HashKey       hash_vec(RowCView v) const noexcept;
     index_t       get_size_from_z(RowCView z) const;
     bool          materialize_bucket(RowCView key, std::vector<SumEntry>& out) const;
@@ -309,6 +313,7 @@ class ToddIndex {
   private:
     const Matrix&                                                     P_;
     index_t                                                           m_{}, n_bits_{};
+    bool                                                              canonical_rows_ = true;
     std::vector<HashKey>                                              masks_;
     std::vector<HashKey>                                              hP_;
     std::vector<std::uint32_t>                                        single_id_;

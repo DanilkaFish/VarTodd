@@ -44,6 +44,22 @@ static bool todd_search_disabled(const PolicyConfig& config) {
            std::max(config.tohpeprefix.pool.reserve, static_cast<Int>(0)) == 0;
 }
 
+// Lazy TOHPE is useful for a small number of non-one-hot probes, but repeated
+// dense vectors eventually make its per-vector quadratic fingerprint work more
+// expensive than building ToddIndex.  Measurements on the optimized extension
+// (GF32: 1701 rows, GF64: 5103 rows) showed lazy winning through dense=2 and
+// indexed search winning at dense=4.  Sparse-only lazy search remained faster
+// through roughly rows/32 probes.  Keep the sparse threshold matrix-scaled.
+static int default_tohpe_mode(const PolicyConfig& config, index_t rows) {
+    if (!todd_search_disabled(config))
+        return 0;
+
+    const auto sparse = std::max(config.tohpe.sampling.sparse, static_cast<Int>(0));
+    const auto dense  = std::max(config.tohpe.sampling.dense, static_cast<Int>(0));
+    const auto sparse_limit = std::max<Int>(32, static_cast<Int>(rows / 32));
+    return dense <= 2 && sparse <= sparse_limit ? 20 : 0;
+}
+
 // Convert and canonicalize a C-style bool NumPy matrix into the compact core format.
 static Matrix matrix_from_numpy(py::array_t<bool, py::array::c_style | py::array::forcecast> A) {
     if (A.ndim() != 2)
@@ -429,6 +445,7 @@ py::class_<CandidateExport>(m, "CandidateExport")
     .def_readwrite("pool_tohpe_size", &CandidateExport::pool_tohpe_size)
     .def_readwrite("pool_tohpeprefix_size", &CandidateExport::pool_tohpeprefix_size)
     .def_readwrite("pool_todd_size", &CandidateExport::pool_todd_size)
+    .def_readwrite("src", &CandidateExport::src)
     .def_readwrite("source", &CandidateExport::source)
     .def("__repr__", [](const CandidateExport& c) {
         return "CandidateExport(score=" + std::to_string(c.pool_score) +
@@ -460,11 +477,12 @@ py::class_<CandidateExport>(m, "CandidateExport")
                 c.pool_tohpe_size,
                 c.pool_tohpeprefix_size,
                 c.pool_todd_size,
-                c.source
+                c.source,
+                c.src
             );
         },
         [](py::tuple t) { 
-            if (t.size() != 11 && t.size() != 14 && t.size() != 16)
+            if (t.size() != 11 && t.size() != 14 && t.size() != 16 && t.size() != 17)
                 throw std::runtime_error("Invalid state!");
 
             CandidateExport c;
@@ -480,10 +498,10 @@ py::class_<CandidateExport>(m, "CandidateExport")
             c.num_better_dim = t[8].cast<decltype(c.num_better_dim)>();
             c.num_better_red = t[9].cast<decltype(c.num_better_red)>();
             c.num_better_pool_score = t[10].cast<decltype(c.num_better_pool_score)>();
-            if (t.size() == 14 || t.size() == 16) {
+            if (t.size() == 14 || t.size() >= 16) {
                 c.pool_size = t[11].cast<decltype(c.pool_size)>();
                 c.pool_tohpe_size = t[12].cast<decltype(c.pool_tohpe_size)>();
-                if (t.size() == 16) {
+                if (t.size() >= 16) {
                     c.pool_tohpeprefix_size = t[13].cast<decltype(c.pool_tohpeprefix_size)>();
                     c.pool_todd_size = t[14].cast<decltype(c.pool_todd_size)>();
                     c.source = t[15].cast<decltype(c.source)>();
@@ -492,6 +510,7 @@ py::class_<CandidateExport>(m, "CandidateExport")
                 }
             }
             
+            if (t.size() == 17) c.src = t[16].cast<std::string>();
             return c;
         }
     ));
@@ -696,6 +715,13 @@ py::class_<Stats>(m, "Stats")
         .def(
             "evaluate",
             [](const PolicyProgram& p, const py::kwargs& kwargs) {
+                for (const auto& item : kwargs) {
+                    const auto name = py::cast<std::string>(item.first);
+                    bool known = name == "params";
+                    for (std::size_t i = 0; i < k_knob_count; ++i)
+                        known |= name == knob_name(static_cast<Knob>(i));
+                    if (!known) throw py::value_error("Unknown knob value: " + name);
+                }
                 KnobFrame f{};
                 const auto get = [&](const char* name, float fallback) {
                     return kwargs.contains(name) ? kwargs[name].cast<float>() : fallback;
@@ -712,6 +738,7 @@ py::class_<Stats>(m, "Stats")
                 f.rank_dim = get("rank_dim", 0.0f);
                 f.rank_score = get("rank_score", 0.0f);
                 f.pool_size = get("pool_size", 0.0f);
+                f.population_size = get("population_size", 0.0f);
                 f.pool_tohpe = get("pool_tohpe", 0.0f);
                 f.pool_prefix = get("pool_prefix", 0.0f);
                 f.pool_todd = get("pool_todd", 0.0f);
@@ -719,13 +746,29 @@ py::class_<Stats>(m, "Stats")
                 f.bucket_id = get("bucket_id", 0.0f);
                 f.k_idx = get("k_idx", 0.0f);
                 f.l_idx = get("l_idx", 0.0f);
-                f.bn = get("bn", 1.0f);
                 f.dn = get("dn", 1.0f);
-                f.wvwn = get("wvwn", 1.0f);
+                f.wvwn = get("ysize", get("wvwn", 1.0f));
+                if (kwargs.contains("ysize") && kwargs.contains("wvwn") &&
+                    get("ysize", 1.0f) != get("wvwn", 1.0f))
+                    throw py::value_error("ysize and wvwn must agree");
                 std::vector<float> params;
                 if (kwargs.contains("params"))
                     params = kwargs["params"].cast<std::vector<float>>();
-                return p.eval(f, params);
+                // Explicit overrides are for this Python probe only. Substitute
+                // constants without adding branches to per-candidate evaluation.
+                std::vector<Instr> code(p.code().begin(), p.code().end());
+                std::vector<float> consts(p.consts().begin(), p.consts().end());
+                for (auto& in : code) {
+                    if (in.op != Op::LoadKnob) continue;
+                    const char* name = knob_name(static_cast<Knob>(in.arg));
+                    if (!kwargs.contains(name)) continue;
+                    if (consts.size() > std::numeric_limits<std::uint16_t>::max())
+                        throw py::value_error("Too many constants for explicit knob overrides");
+                    in.op = Op::LoadConst;
+                    in.arg = static_cast<std::uint16_t>(consts.size());
+                    consts.push_back(get(name, 0.0f));
+                }
+                return PolicyProgram(std::move(code), std::move(consts), p.n_params(), p.site()).eval(f, params);
             })
         .def("__repr__",
              [](const PolicyProgram& p) {
@@ -1054,7 +1097,7 @@ py::class_<Stats>(m, "Stats")
                 std::max(pcfg.todd.pool.keep, static_cast<Int>(0)) > 0 ||
                 std::max(pcfg.todd.pool.reserve, static_cast<Int>(0)) > 0;
             if (tohpe_mode < 0) {
-                tohpe_mode = todd_search_disabled(pcfg) ? 20 : 0;
+                tohpe_mode = default_tohpe_mode(pcfg, cur_mat.rows());
             }
             auto data = std::make_shared<MatrixWithData>(std::move(cur_mat), build_full_todd, tohpe_mode);
             return policy_iteration_impl(data, pcfg, seed, add_seed);
@@ -1066,8 +1109,7 @@ py::class_<Stats>(m, "Stats")
         "policy_iteration",
         [](std::shared_ptr<MatrixWithData> data, PolicyConfig pcfg, index_t seed, index_t add_seed, int tohpe_mode) {
             if (tohpe_mode < 0) {
-                if (todd_search_disabled(pcfg) && data->lazy_mode() == 0)
-                    tohpe_mode = 20;
+                tohpe_mode = default_tohpe_mode(pcfg, data->P().rows());
             }
             if (tohpe_mode >= 0 && tohpe_mode != data->lazy_mode()) {
                 data = std::make_shared<MatrixWithData>(

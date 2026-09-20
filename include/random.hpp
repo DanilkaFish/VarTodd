@@ -11,6 +11,7 @@
 #include <random>
 #include <stdexcept>
 #include <unordered_set>
+#include <type_traits>
 
 namespace todd {
 namespace detail {
@@ -155,9 +156,15 @@ void PyRNG::for_each_capped_bitvector_in_region(index_t full_dim, index_t region
     const index_t sparse_high   = std::min(region_dim, std::max<index_t>(2, sparse_max_weight));
     const index_t sparse_count =
         (region_dim >= 2) ? detail::sparse_space_bounded(region_dim, 2, sparse_high, sample_caps[1]) : 0;
-    const index_t dense_count = sample_caps[2];
     const bool    finite_universe = region_dim < std::numeric_limits<index_t>::digits;
     const index_t universe        = finite_universe ? (index_t{1} << region_dim) - 1 : 0;
+    // Test the requested budget before clamping the sparse weight classes.
+    // Saturation means exhaustive search, even if sparse_max_weight excludes
+    // part of the space. The dense phase emits the remaining vectors.
+    const bool cover_universe = finite_universe &&
+        detail::capped_add_count(detail::capped_add_count(one_hot_count, sample_caps[1], universe),
+                                 sample_caps[2], universe) == universe;
+    const index_t dense_count = cover_universe ? universe : sample_caps[2];
     const index_t reserve_count =
         finite_universe
             ? detail::capped_add_count(detail::capped_add_count(one_hot_count, sparse_count, universe), dense_count,
@@ -171,13 +178,17 @@ void PyRNG::for_each_capped_bitvector_in_region(index_t full_dim, index_t region
     seen.reserve(detail::reserve_twice(std::max<index_t>(16, reserve_count),
                                        "for_each_capped_bitvector reserve overflow"));
 
+    const char* sampling_source = "oh";
     auto emit_unique = [&](RowCView coefs) -> bool {
         if (coefs.none())
             return false;
         auto [it, inserted] = seen.emplace(coefs);
         if (!inserted)
             return false;
-        fn(it->cview());
+        if constexpr (std::is_invocable_v<Fn&, RowCView, const char*>)
+            fn(it->cview(), sampling_source);
+        else
+            fn(it->cview());
         return true;
     };
 
@@ -207,20 +218,45 @@ void PyRNG::for_each_capped_bitvector_in_region(index_t full_dim, index_t region
         return std::max(by_trials, by_slack);
     };
 
-    auto exhaustive_small_masks = [&](index_t target, bool sparse_only, index_t sparse_limit) {
-        constexpr index_t exhaustive_dim_limit = 20;
-        if (region_dim > exhaustive_dim_limit)
-            return index_t{0};
-
+    auto exhaustive_sparse = [&](index_t target) {
         index_t emitted = 0;
-        const index_t end = index_t{1} << region_dim;
-        for (index_t mask = 1; mask < end && emitted < target; ++mask) {
-            const index_t weight = popcount64(static_cast<std::uint64_t>(mask));
-            if (sparse_only && (weight < 2 || weight > sparse_limit))
-                continue;
+        // Enumerate combinations, not 2^dim masks: small weight classes remain
+        // tractable even when the basis spans multiple machine words.
+        for (index_t weight = 2; weight <= sparse_high && emitted < target; ++weight) {
+            std::vector<index_t> bits(weight);
+            for (index_t i = 0; i < weight; ++i)
+                bits[i] = i;
+            while (emitted < target) {
+                scratch_bitvec.reset();
+                for (auto bit : bits)
+                    scratch_bitvec.set(bit);
+                emitted += emit_unique(scratch_bitvec.cview()) ? 1 : 0;
+                index_t pos = weight;
+                while (pos > 0 && bits[pos - 1] == region_dim - weight + pos - 1)
+                    --pos;
+                if (pos == 0)
+                    break;
+                ++bits[pos - 1];
+                for (index_t i = pos; i < weight; ++i)
+                    bits[i] = bits[i - 1] + 1;
+            }
+        }
+        return emitted;
+    };
 
-            scratch_bitvec.reset();
-            scratch_bitvec.data()[0] = static_cast<std::uint64_t>(mask);
+    auto exhaustive_dense = [&](index_t target) {
+        index_t emitted = 0;
+        scratch_bitvec.reset();
+        while (emitted < target) {
+            // Binary counter with no native-integer dimension limit.
+            index_t bit = 0;
+            while (bit < region_dim && scratch_bitvec.test(bit)) {
+                scratch_bitvec.reset(bit);
+                ++bit;
+            }
+            if (bit == region_dim)
+                break;
+            scratch_bitvec.set(bit);
             emitted += emit_unique(scratch_bitvec.cview()) ? 1 : 0;
         }
         return emitted;
@@ -241,6 +277,7 @@ void PyRNG::for_each_capped_bitvector_in_region(index_t full_dim, index_t region
         }
     }
 
+    sampling_source = "sparse";
     if (sparse_count > 0) {
         index_t emitted = 0;
         for (index_t i = 0; emitted < sparse_count && i < random_attempts(sparse_count); ++i) {
@@ -248,9 +285,10 @@ void PyRNG::for_each_capped_bitvector_in_region(index_t full_dim, index_t region
             emitted += emit_unique(scratch_bitvec.cview()) ? 1 : 0;
         }
         if (emitted < sparse_count)
-            exhaustive_small_masks(sparse_count - emitted, true, sparse_high);
+            exhaustive_sparse(sparse_count - emitted);
     }
 
+    sampling_source = "dense";
     index_t dense_target = dense_count;
     if (finite_universe) {
         index_t seen_in_region = 0;
@@ -268,12 +306,12 @@ void PyRNG::for_each_capped_bitvector_in_region(index_t full_dim, index_t region
         dense_target = std::min<index_t>(dense_target, universe > seen_in_region ? universe - seen_in_region : 0);
     }
     index_t emitted = 0;
-    for (index_t i = 0; emitted < dense_target && i < random_attempts(dense_target); ++i) {
+    for (index_t i = 0; !cover_universe && emitted < dense_target && i < random_attempts(dense_target); ++i) {
         fill_dense();
         emitted += emit_unique(scratch_bitvec.cview()) ? 1 : 0;
     }
     if (emitted < dense_target)
-        exhaustive_small_masks(dense_target - emitted, false, sparse_high);
+        exhaustive_dense(dense_target - emitted);
 }
 
 } // namespace todd

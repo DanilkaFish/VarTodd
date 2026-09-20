@@ -15,7 +15,7 @@ from typing import Dict, Iterable, List, Sequence
 from .expr import PolicyError
 from .policy import BoundPolicy, PolicyExpr, _reference_eval
 
-# Raw knob ranges seen in practice. `bn`, `dn` and `wvwn` are the per-iteration
+# Raw knob ranges seen in practice. `dn` and `wvwn` are the per-iteration
 # normalizers and are always >= 1, which the engine guarantees.
 _RANGES: Dict[str, tuple] = {
     "red": (0, 400),
@@ -30,6 +30,7 @@ _RANGES: Dict[str, tuple] = {
     "rank_dim": (0, 100),
     "rank_score": (0, 100),
     "pool_size": (0, 64),
+    "population_size": (0, 256),
     "pool_tohpe": (0, 64),
     "pool_prefix": (0, 64),
     "pool_todd": (0, 64),
@@ -37,7 +38,6 @@ _RANGES: Dict[str, tuple] = {
     "bucket_id": (0, 100000),
     "k_idx": (0, 400),
     "l_idx": (0, 400),
-    "bn": (1, 5000),
     "dn": (1, 200),
     "wvwn": (1, 400),
 }
@@ -55,7 +55,7 @@ def probe_frames(seed: int = 20260830, random_frames: int = 64) -> List[Dict[str
     # Everything at its floor, with normalizers at their minimum of 1. This is
     # the frame that exposes unguarded division and log of zero.
     zero_frame = {name: float(lo) for name, (lo, _) in _RANGES.items()}
-    zero_frame.update(bn=1.0, dn=1.0, wvwn=1.0, zsize=1.0)
+    zero_frame.update(dn=1.0, wvwn=1.0, zsize=1.0)
     frames.append(zero_frame)
 
     # Everything at its ceiling: exposes overflow in exp() and pow().
@@ -64,7 +64,7 @@ def probe_frames(seed: int = 20260830, random_frames: int = 64) -> List[Dict[str
     # Large values divided by minimal normalizers -- the worst case for the
     # normalized knobs.
     skewed = {name: float(hi) for name, (_, hi) in _RANGES.items()}
-    skewed.update(bn=1.0, dn=1.0, wvwn=1.0, zsize=1.0, pool_size=0.0)
+    skewed.update(dn=1.0, wvwn=1.0, zsize=1.0, pool_size=0.0)
     frames.append(skewed)
 
     # A typical mid-range candidate.
@@ -75,6 +75,10 @@ def probe_frames(seed: int = 20260830, random_frames: int = 64) -> List[Dict[str
         frames.append(
             {name: float(rng.randint(lo, hi)) for name, (lo, hi) in _RANGES.items()}
         )
+    # Ranks count strictly better members of this same generated population.
+    for frame in frames:
+        largest_rank = max(frame["rank_red"], frame["rank_dim"], frame["rank_score"])
+        frame["population_size"] = max(frame["population_size"], largest_rank + 1)
     return frames
 
 

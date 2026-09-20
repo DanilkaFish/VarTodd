@@ -6,7 +6,7 @@ A policy is a plain function over named knobs::
 
     @policy.exploration
     def explore(k, p, fn):
-        return k.nred * p.w(0) + k.nbucket * p.w(1)
+        return k.red * p.w(0) + k.bucket * p.w(1)
 
 The decorator traces the function once, compiles it to a flat program, and
 returns a value. Free scalars declared with ``p.w(i)`` are supplied in

@@ -68,8 +68,8 @@ def explore_score(k, p, fn):
     band, never by this score, so the score only ever runs on the candidates
     that reach the pool.
     """
-    cheapness = fn.exp(-k.nbucket * fn.abs(p.w(1)))
-    return k.nred * p.w(0) * cheapness + k.ndim * p.w(2) - k.nzw * fn.abs(p.w(3))
+    cheapness = fn.exp(-k.bucket * fn.abs(p.w(1)))
+    return k.red * p.w(0) * cheapness + k.ndim * p.w(2) - k.nzw * fn.abs(p.w(3))
 
 
 @policy.final
@@ -85,7 +85,7 @@ def final_score(k, p, fn):
     tohpe_share = k.f_tohpe * p.w(2)
     offset = k.nzw - p.w(5)
     band = fn.exp(-(offset * offset) * 4.0) * p.w(3)
-    return (k.nred * p.w(0)
+    return (k.red * p.w(0)
             + k.ndim * p.w(1)
             + tohpe_share
             + band

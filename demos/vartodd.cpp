@@ -108,7 +108,7 @@ int main(int argc, char* argv[]) {
                       static_cast<float>(vm["z-random-fraction"].as<double>())}};
     auto wred_program = [](int wred, PolicySite site) {
         return PolicyProgram(
-            {Instr{Op::LoadKnob, static_cast<std::uint16_t>(Knob::nred)}, Instr{Op::LoadConst, 0},
+            {Instr{Op::LoadKnob, static_cast<std::uint16_t>(Knob::red)}, Instr{Op::LoadConst, 0},
              Instr{Op::Mul, 0}},
             {static_cast<float>(wred)}, 0, site);
     };

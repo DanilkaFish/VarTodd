@@ -11,7 +11,7 @@ candidate; exploration stays a weighted sum so the pool fills at the usual
 rate.
 
 The inner z search never consults the exploration score -- it ranks z by
-distance to the TOHPE reduction band below -- so reading k.nbucket here costs
+distance to the TOHPE reduction band below -- so reading k.bucket here costs
 nothing beyond the arithmetic. The score decides what enters the pool.
 """
 
@@ -69,7 +69,7 @@ TARGET_MAX_RED = 4
 @policy.exploration
 def explore_score(k, p, fn):
     """Plain linear, kept cheap so the pool fills at the usual rate."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+    return (k.red * p.w(0) + k.ndim * p.w(1) + k.bucket * p.w(2)
             + k.nyw * p.w(3) + k.nzw * p.w(4))
 
 
@@ -85,7 +85,7 @@ def final_score(k, p, fn):
     # cancel, so a ratio of the normalized knobs is the same quantity with a
     # redundant division. red/bucket is what is actually wanted.
     efficiency = k.red / fn.max(k.bucket, MIN_BUCKET)
-    return (k.nred * p.w(0)
+    return (k.red * p.w(0)
             + efficiency * p.w(1)
             + k.ndim * p.w(2)
             + k.ntohpe * p.w(3))

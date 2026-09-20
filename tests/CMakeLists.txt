@@ -22,3 +22,7 @@ target_link_libraries(vartodd_policy_expr
 )
 
 add_test(NAME vartodd_policy_expr COMMAND vartodd_policy_expr)
+
+add_executable(vartodd_algebra_regression algebra_regression.cpp)
+target_link_libraries(vartodd_algebra_regression PRIVATE vartodd cnpy++)
+add_test(NAME vartodd_algebra_regression COMMAND vartodd_algebra_regression)

@@ -60,7 +60,7 @@ def _make_seeds(count: int, base_seed: int) -> list[int]:
 
 @policy.exploration
 def _pool_score(k, p, fn):
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+    return (k.red * p.w(0) + k.ndim * p.w(1) + k.bucket * p.w(2)
             + k.nyw * p.w(3) + k.nzw * p.w(4))
 
 
@@ -68,7 +68,7 @@ def _pool_score(k, p, fn):
 def _final_score(k, p, fn):
     # The legacy weight vector's 6th slot (tohpe) was always fixed at 0.0, so
     # tohpe never contributed here; dropped rather than carried as dead weight.
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+    return (k.red * p.w(0) + k.ndim * p.w(1) + k.bucket * p.w(2)
             + k.nyw * p.w(3) + k.nzw * p.w(4))
 
 

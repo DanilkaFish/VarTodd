@@ -47,8 +47,8 @@ def explore_score(k, p, fn):
     weight on `nyw` forces a compromise that fits neither.
     """
     wide_band = k.dim >= DIM_SPLIT
-    wide = k.nred * p.w(0) + k.nyw * fn.abs(p.w(1))
-    narrow = k.nred * p.w(2) + k.nbucket * p.w(3)
+    wide = k.red * p.w(0) + k.nyw * fn.abs(p.w(1))
+    narrow = k.red * p.w(2) + k.bucket * p.w(3)
     return fn.where(wide_band, wide, narrow) + k.ndim * p.w(4)
 
 
@@ -64,8 +64,8 @@ def final_score(k, p, fn):
     threshold p.w(0) is searched, not fixed.
     """
     contested = k.nrank_red <= p.w(0)
-    tight = k.nred * p.w(1) + k.ntohpe * p.w(2)
-    spread = k.nred * p.w(3) - k.nrank_dim * fn.abs(p.w(4))
+    tight = k.red * p.w(1) + k.ntohpe * p.w(2)
+    spread = k.red * p.w(3) - k.nrank_dim * fn.abs(p.w(4))
     return fn.where(contested, tight, spread)
 
 

@@ -21,21 +21,18 @@
 namespace todd {
 
 // Every quantity a policy expression may read. Raw knobs carry the value as the
-// engine computes it; normalized knobs divide by the per-iteration normalizers
-// (bn, dn, wvwn) so a policy can be written scale-free.
+// engine computes it; the remaining normalized knobs use their local scales.
 //
 // The order here is the wire format shared with Python: appending is safe,
 // reordering is not.
 enum class Knob : std::uint16_t {
     // reduction
     red,
-    nred,
     // basis dimension
     dim,
     ndim,
     // bucket size
     bucket,
-    nbucket,
     // y (coefficient vector) weight
     yw,
     nyw,
@@ -45,7 +42,6 @@ enum class Knob : std::uint16_t {
     zsize,
     // theoretical reduction ceiling for the bucket
     max_red,
-    nmax_red,
     // TOHPE dimension of the resulting state (finalization only)
     tohpe,
     ntohpe,
@@ -69,10 +65,11 @@ enum class Knob : std::uint16_t {
     bucket_id,
     k_idx,
     l_idx,
-    // normalizers themselves
-    bn,
+    // normalizers for dimensions and weights
     dn,
     wvwn,
+    ysize, // y-vector width; alias of wvwn, appended to preserve knob IDs
+    population_size, // final-only rank denominator; appended to preserve existing IDs
 
     count_
 };
@@ -157,6 +154,7 @@ struct KnobFrame {
     float rank_dim   = 0.0f;
     float rank_score = 0.0f;
     float pool_size  = 0.0f;
+    float population_size = 0.0f; // all generated positive candidates, before pool truncation
     float pool_tohpe = 0.0f;
     float pool_prefix = 0.0f;
     float pool_todd  = 0.0f;
@@ -166,7 +164,6 @@ struct KnobFrame {
     float l_idx      = 0.0f;
 
     // normalizers, injected once per policy iteration
-    float bn   = 1.0f;
     float dn   = 1.0f;
     float wvwn = 1.0f;
 };

@@ -122,13 +122,13 @@ struct ExplorationScore {
     float evaluate_features(Int reduction, Int basis_dim, Int bucket_size, Int vec_weight, Int z_weight,
                             Int z_size) const {
         const std::array<float, 5> x = {
-            reduction / bn / 2.0f,
+            static_cast<float>(reduction),
             basis_dim / dn,
-            bucket_size / bn,
+            static_cast<float>(bucket_size),
             vec_weight / wvwn,
             z_weight / static_cast<float>(std::max<Int>(1, z_size)),
         };
-        return sc.evaluate(weights, centers, x, 1.0f / bn / 2.0f);
+        return sc.evaluate(weights, centers, x, 1.0f);
     }
 
 };
@@ -148,14 +148,14 @@ struct FinalizationScore {
     bool needs_tohpe_dim() const { return weights.size() > 5 && weights[5] != 0.0f; }
 
     float evaluate(const Candidate& cand) const {
-        const std::array<float, 6> x = {cand.reduction / bn / 2,
+        const std::array<float, 6> x = {static_cast<float>(cand.reduction),
                                         cand.basis_dim / dn,
-                                        cand.bucket_size / bn,
+                                        static_cast<float>(cand.bucket_size),
                                         cand.vec_weight / wvwn,
                                         cand.z_weight / static_cast<float>(cand.z_size),
                                         cand.tohpe_dim / dn};
         const std::size_t          n = needs_tohpe_dim() ? 6 : 5;
-        return sc.evaluate(weights, centers, std::span<const float>(x.data(), n), 1.0f / bn / 2.0f);
+        return sc.evaluate(weights, centers, std::span<const float>(x.data(), n), 1.0f);
     }
 };
 
@@ -201,13 +201,12 @@ void check_knob_normalization() {
     f.yw     = 4.0f;
     f.zw     = 3.0f;
     f.zsize  = 6.0f;
-    f.bn     = 5.0f;
     f.dn     = 4.0f;
     f.wvwn   = 2.0f;
 
-    require(close(make({knob(Knob::nred)}).eval(f, {}), 10.0f / 5.0f / 2.0f), "nred = red/bn/2");
+    require(close(make({knob(Knob::red)}).eval(f, {}), 10.0f), "red is raw");
     require(close(make({knob(Knob::ndim)}).eval(f, {}), 8.0f / 4.0f), "ndim = dim/dn");
-    require(close(make({knob(Knob::nbucket)}).eval(f, {}), 6.0f / 5.0f), "nbucket = bucket/bn");
+    require(close(make({knob(Knob::bucket)}).eval(f, {}), 6.0f), "bucket is raw");
     require(close(make({knob(Knob::nyw)}).eval(f, {}), 4.0f / 2.0f), "nyw = yw/wvwn");
     require(close(make({knob(Knob::nzw)}).eval(f, {}), 3.0f / 6.0f), "nzw = zw/max(1,zsize)");
 
@@ -223,14 +222,23 @@ void check_pool_fractions_and_ranks() {
     f.pool_prefix = 3.0f;
     f.pool_todd   = 12.0f;
     f.rank_red    = 4.0f;
+    f.rank_dim    = 9.0f;
+    f.rank_score  = 19.0f;
+    f.population_size = 100.0f;
 
     require(close(make({knob(Knob::f_tohpe)}).eval(f, {}), 0.25f), "f_tohpe = pool_tohpe/pool_size");
     require(close(make({knob(Knob::f_prefix)}).eval(f, {}), 0.15f), "f_prefix");
     require(close(make({knob(Knob::f_todd)}).eval(f, {}), 0.6f), "f_todd");
-    require(close(make({knob(Knob::nrank_red)}).eval(f, {}), 0.2f), "nrank_red = rank_red/pool_size");
+    require(close(make({knob(Knob::nrank_red)}).eval(f, {}), 0.04f), "nrank_red uses the generated population");
+    require(close(make({knob(Knob::nrank_dim)}).eval(f, {}), 0.09f), "nrank_dim uses the generated population");
+    require(close(make({knob(Knob::nrank_score)}).eval(f, {}), 0.19f), "nrank_score uses the generated population");
 
     f.pool_size = 0.0f;
+    require(close(make({knob(Knob::nrank_red)}).eval(f, {}), 0.04f), "nrank must not depend on pool_size");
     require(close(make({knob(Knob::f_todd)}).eval(f, {}), 12.0f), "pool fractions floor pool_size at 1");
+    f.population_size = 0;
+    f.rank_red = 0;
+    require(close(make({knob(Knob::nrank_red)}).eval(f, {}), 0), "empty population normalization must be finite");
 }
 
 void check_select_and_comparisons() {
@@ -268,7 +276,6 @@ void check_guarded_division_and_log() {
 void check_params() {
     KnobFrame f{};
     f.red = 3.0f;
-    f.bn  = 1.0f;
     // red * p0 + p1
     auto prog = make({knob(Knob::red), par(0), op(Op::Mul), par(1), op(Op::Add)}, {}, 2);
     const std::vector<float> params = {2.0f, 10.0f};
@@ -311,14 +318,14 @@ void check_site_availability_is_enforced() {
     make({knob(Knob::rank_red)}, {}, 0, PolicySite::Finalization);
 
     // Shared knobs work everywhere.
-    make({knob(Knob::nred)}, {}, 0, PolicySite::ExplorationZ);
-    make({knob(Knob::nred)}, {}, 0, PolicySite::Finalization);
+    make({knob(Knob::red)}, {}, 0, PolicySite::ExplorationZ);
+    make({knob(Knob::red)}, {}, 0, PolicySite::Finalization);
 }
 
 void check_used_knobs_reporting() {
-    auto prog = make({knob(Knob::nred), knob(Knob::nbucket), op(Op::Add)}, {}, 0, PolicySite::ExplorationPool);
-    require(prog.uses(Knob::nred), "used_knobs should report nred");
-    require(prog.uses(Knob::nbucket), "used_knobs should report nbucket");
+    auto prog = make({knob(Knob::red), knob(Knob::bucket), op(Op::Add)}, {}, 0, PolicySite::ExplorationPool);
+    require(prog.uses(Knob::red), "used_knobs should report nred");
+    require(prog.uses(Knob::bucket), "used_knobs should report nbucket");
     require(!prog.uses(Knob::ndim), "used_knobs should not report unused knobs");
 }
 
@@ -353,7 +360,7 @@ void check_linear_score_equivalence() {
     std::uniform_real_distribution<float> w_dist(-4.0f, 4.0f);
     std::uniform_int_distribution<int>    v_dist(0, 40);
 
-    const std::vector<Knob> knobs = {Knob::nred, Knob::ndim, Knob::nbucket, Knob::nyw, Knob::nzw};
+    const std::vector<Knob> knobs = {Knob::red, Knob::ndim, Knob::bucket, Knob::nyw, Knob::nzw};
 
     for (int trial = 0; trial < 200; ++trial) {
         std::vector<float> weights(5);
@@ -385,7 +392,6 @@ void check_linear_score_equivalence() {
         f.yw     = static_cast<float>(vec_w);
         f.zw     = static_cast<float>(z_w);
         f.zsize  = static_cast<float>(z_size);
-        f.bn     = bn;
         f.dn     = dn;
         f.wvwn   = wvwn;
 
@@ -395,14 +401,14 @@ void check_linear_score_equivalence() {
 }
 
 // POLYNOM with pow == 2: sum_i w[i] * (x[i] - c[i])^2, where the first center is
-// scaled by 1/bn/2 exactly as polynom_scoring does.
+// Centers are used directly in raw feature units.
 void check_polynom_score_equivalence() {
     std::mt19937                          rng(20260831);
     std::uniform_real_distribution<float> w_dist(-3.0f, 3.0f);
     std::uniform_real_distribution<float> c_dist(0.0f, 1.0f);
     std::uniform_int_distribution<int>    v_dist(0, 40);
 
-    const std::vector<Knob> knobs = {Knob::nred, Knob::ndim, Knob::nbucket, Knob::nyw, Knob::nzw};
+    const std::vector<Knob> knobs = {Knob::red, Knob::ndim, Knob::bucket, Knob::nyw, Knob::nzw};
 
     for (int trial = 0; trial < 200; ++trial) {
         std::vector<float> weights(5);
@@ -428,11 +434,11 @@ void check_polynom_score_equivalence() {
         legacy.wvwn = wvwn;
         const float expected = legacy.evaluate_features(reduction, basis_dim, bucket, vec_w, z_w, z_size);
 
-        // consts layout: [w0..w4, c0..c4] with c0 already scaled by 1/bn/2.
+        // consts layout: [w0..w4, c0..c4].
         std::vector<float> consts;
         consts.insert(consts.end(), weights.begin(), weights.end());
         for (int i = 0; i < 5; ++i)
-            consts.push_back(i == 0 ? centers[i] / bn / 2.0f : centers[i]);
+            consts.push_back(centers[i]);
 
         std::vector<Instr> code;
         bool               first = true;
@@ -466,7 +472,6 @@ void check_polynom_score_equivalence() {
         f.yw     = static_cast<float>(vec_w);
         f.zw     = static_cast<float>(z_w);
         f.zsize  = static_cast<float>(z_size);
-        f.bn     = bn;
         f.dn     = dn;
         f.wvwn   = wvwn;
 
@@ -480,7 +485,7 @@ void check_finalization_six_feature_equivalence() {
     std::uniform_real_distribution<float> w_dist(-4.0f, 4.0f);
     std::uniform_int_distribution<int>    v_dist(0, 40);
 
-    const std::vector<Knob> knobs = {Knob::nred,  Knob::ndim, Knob::nbucket,
+    const std::vector<Knob> knobs = {Knob::red,  Knob::ndim, Knob::bucket,
                                      Knob::nyw,   Knob::nzw,  Knob::ntohpe};
 
     for (int trial = 0; trial < 200; ++trial) {
@@ -520,7 +525,6 @@ void check_finalization_six_feature_equivalence() {
         f.zw     = static_cast<float>(cand.z_weight);
         f.zsize  = static_cast<float>(cand.z_size);
         f.tohpe  = static_cast<float>(cand.tohpe_dim);
-        f.bn     = bn;
         f.dn     = dn;
         f.wvwn   = wvwn;
 
@@ -536,7 +540,6 @@ void check_no_spurious_non_finite() {
     // cannot silently poison candidate ordering with NaN.
     KnobFrame f{};
     f.zsize     = 0.0f;
-    f.bn        = 1.0f;
     f.dn        = 1.0f;
     f.wvwn      = 1.0f;
     f.pool_size = 0.0f;
@@ -565,8 +568,8 @@ void dump_cross_check_vectors() {
     f.red = 12; f.dim = 7; f.bucket = 9; f.yw = 5; f.zw = 3; f.zsize = 8;
     f.max_red = 18; f.tohpe = 4; f.rank_red = 2; f.rank_dim = 3; f.rank_score = 1;
     f.pool_size = 20; f.pool_tohpe = 5; f.pool_prefix = 3; f.pool_todd = 12;
+    f.population_size = 100;
     f.source = 1; f.bucket_id = 42; f.k_idx = 2; f.l_idx = 6;
-    f.bn = 6; f.dn = 5; f.wvwn = 4;
 
     const std::vector<float> params = {1.5f, -0.75f, 0.25f};
 
@@ -577,38 +580,38 @@ void dump_cross_check_vectors() {
         std::size_t        n_params;
     };
     const std::vector<Case> cases = {
-        {"nred", {knob(Knob::nred)}, {}, 0},
+        {"nred", {knob(Knob::red)}, {}, 0},
         {"ndim", {knob(Knob::ndim)}, {}, 0},
         {"nzw", {knob(Knob::nzw)}, {}, 0},
         {"f_todd", {knob(Knob::f_todd)}, {}, 0},
         {"nrank_red", {knob(Knob::nrank_red)}, {}, 0},
         {"ntohpe", {knob(Knob::ntohpe)}, {}, 0},
-        {"nmax_red", {knob(Knob::nmax_red)}, {}, 0},
+        {"nmax_red", {knob(Knob::max_red)}, {}, 0},
         {"lin",
-         {knob(Knob::nred), par(0), op(Op::Mul), knob(Knob::ndim), par(1), op(Op::Mul), op(Op::Add)},
+         {knob(Knob::red), par(0), op(Op::Mul), knob(Knob::ndim), par(1), op(Op::Mul), op(Op::Add)},
          {},
          3},
         {"div0", {cst(0), cst(1), op(Op::Div)}, {1.0f, 0.0f}, 0},
         {"divneg", {cst(0), cst(1), op(Op::Div)}, {1.0f, -0.0001f}, 0},
         {"log0", {cst(0), op(Op::Log)}, {0.0f}, 0},
         {"sqrtneg", {cst(0), op(Op::Sqrt)}, {-4.0f}, 0},
-        {"sigmoid", {knob(Knob::nred), op(Op::Sigmoid)}, {}, 0},
-        {"tanh", {knob(Knob::nred), op(Op::Tanh)}, {}, 0},
+        {"sigmoid", {knob(Knob::red), op(Op::Sigmoid)}, {}, 0},
+        {"tanh", {knob(Knob::red), op(Op::Tanh)}, {}, 0},
         {"exp", {knob(Knob::nzw), op(Op::Exp)}, {}, 0},
-        {"floor", {knob(Knob::nred), op(Op::Floor)}, {}, 0},
-        {"sign", {knob(Knob::nred), op(Op::Neg), op(Op::Sign)}, {}, 0},
+        {"floor", {knob(Knob::red), op(Op::Floor)}, {}, 0},
+        {"sign", {knob(Knob::red), op(Op::Neg), op(Op::Sign)}, {}, 0},
         {"where",
          {knob(Knob::dim), cst(0), op(Op::Gt), knob(Knob::ndim), cst(1), op(Op::Select)},
          {5.0f, 0.0f},
          0},
-        {"pow", {knob(Knob::nred), cst(0), op(Op::Pow)}, {3.0f}, 0},
-        {"minmax", {knob(Knob::nred), cst(0), op(Op::Min), cst(1), op(Op::Max)}, {0.5f, 0.1f}, 0},
-        {"ratio", {knob(Knob::nred), knob(Knob::nbucket), cst(0), op(Op::Max), op(Op::Div)}, {0.05f}, 0},
+        {"pow", {knob(Knob::red), cst(0), op(Op::Pow)}, {3.0f}, 0},
+        {"minmax", {knob(Knob::red), cst(0), op(Op::Min), cst(1), op(Op::Max)}, {0.5f, 0.1f}, 0},
+        {"ratio", {knob(Knob::red), knob(Knob::bucket), cst(0), op(Op::Max), op(Op::Div)}, {0.05f}, 0},
         {"chain",
-         {knob(Knob::nred), cst(0), op(Op::Lt), knob(Knob::ndim), cst(1), op(Op::Lt), op(Op::And)},
+         {knob(Knob::red), cst(0), op(Op::Lt), knob(Knob::ndim), cst(1), op(Op::Lt), op(Op::And)},
          {5.0f, 10.0f},
          0},
-        {"notop", {knob(Knob::nred), cst(0), op(Op::Gt), op(Op::Not)}, {0.5f}, 0},
+        {"notop", {knob(Knob::red), cst(0), op(Op::Gt), op(Op::Not)}, {0.5f}, 0},
     };
 
     for (const Case& c : cases) {

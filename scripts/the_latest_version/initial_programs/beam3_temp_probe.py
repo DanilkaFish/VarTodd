@@ -55,7 +55,7 @@ def explore_score(k, p, fn):
     dim term that a large reduction outweighs.
     """
     room = fn.sigmoid((k.ndim - fn.abs(p.w(2))) * 4.0)
-    return k.nred * p.w(0) * room + k.ndim * p.w(1) - k.nzw * fn.abs(p.w(3))
+    return k.red * p.w(0) * room + k.ndim * p.w(1) - k.nzw * fn.abs(p.w(3))
 
 
 @policy.final
@@ -70,10 +70,10 @@ def final_score(k, p, fn):
     concentrating all the mass on one.
     """
     spread = fn.log(k.nrank_score + 0.05) * p.w(1)
-    return (k.nred * p.w(0)
+    return (k.red * p.w(0)
             + spread
             + k.ntohpe * p.w(2)
-            + fn.where(k.dim > 3, k.ndim * p.w(3), k.nred * p.w(4)))
+            + fn.where(k.dim > 3, k.ndim * p.w(3), k.red * p.w(4)))
 
 
 class Evaluator(BaseEvaluator):

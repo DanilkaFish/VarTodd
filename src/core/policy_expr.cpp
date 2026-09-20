@@ -14,18 +14,15 @@ struct KnobInfo {
 // Indexed by Knob value; kept in enum order.
 constexpr std::array<KnobInfo, k_knob_count> k_knob_table = {{
     {Knob::red, "red"},
-    {Knob::nred, "nred"},
     {Knob::dim, "dim"},
     {Knob::ndim, "ndim"},
     {Knob::bucket, "bucket"},
-    {Knob::nbucket, "nbucket"},
     {Knob::yw, "yw"},
     {Knob::nyw, "nyw"},
     {Knob::zw, "zw"},
     {Knob::nzw, "nzw"},
     {Knob::zsize, "zsize"},
     {Knob::max_red, "max_red"},
-    {Knob::nmax_red, "nmax_red"},
     {Knob::tohpe, "tohpe"},
     {Knob::ntohpe, "ntohpe"},
     {Knob::rank_red, "rank_red"},
@@ -45,9 +42,10 @@ constexpr std::array<KnobInfo, k_knob_count> k_knob_table = {{
     {Knob::bucket_id, "bucket_id"},
     {Knob::k_idx, "k_idx"},
     {Knob::l_idx, "l_idx"},
-    {Knob::bn, "bn"},
     {Knob::dn, "dn"},
     {Knob::wvwn, "wvwn"},
+    {Knob::ysize, "ysize"},
+    {Knob::population_size, "population_size"},
 }};
 
 // Divide with the same floor the legacy polynom scoring used, so a zero
@@ -62,16 +60,12 @@ inline float knob_value(const KnobFrame& f, Knob knob) noexcept {
     switch (knob) {
     case Knob::red:
         return f.red;
-    case Knob::nred:
-        return f.red / f.bn / 2.0f;
     case Knob::dim:
         return f.dim;
     case Knob::ndim:
         return f.dim / f.dn;
     case Knob::bucket:
         return f.bucket;
-    case Knob::nbucket:
-        return f.bucket / f.bn;
     case Knob::yw:
         return f.yw;
     case Knob::nyw:
@@ -84,8 +78,6 @@ inline float knob_value(const KnobFrame& f, Knob knob) noexcept {
         return f.zsize;
     case Knob::max_red:
         return f.max_red;
-    case Knob::nmax_red:
-        return f.max_red / f.bn / 2.0f;
     case Knob::tohpe:
         return f.tohpe;
     case Knob::ntohpe:
@@ -93,15 +85,17 @@ inline float knob_value(const KnobFrame& f, Knob knob) noexcept {
     case Knob::rank_red:
         return f.rank_red;
     case Knob::nrank_red:
-        return f.rank_red / std::max(1.0f, f.pool_size);
+        return f.rank_red / std::max(1.0f, f.population_size);
     case Knob::rank_dim:
         return f.rank_dim;
     case Knob::nrank_dim:
-        return f.rank_dim / std::max(1.0f, f.pool_size);
+        return f.rank_dim / std::max(1.0f, f.population_size);
     case Knob::rank_score:
         return f.rank_score;
     case Knob::nrank_score:
-        return f.rank_score / std::max(1.0f, f.pool_size);
+        return f.rank_score / std::max(1.0f, f.population_size);
+    case Knob::population_size:
+        return f.population_size;
     case Knob::pool_size:
         return f.pool_size;
     case Knob::pool_tohpe:
@@ -124,10 +118,9 @@ inline float knob_value(const KnobFrame& f, Knob knob) noexcept {
         return f.k_idx;
     case Knob::l_idx:
         return f.l_idx;
-    case Knob::bn:
-        return f.bn;
     case Knob::dn:
         return f.dn;
+    case Knob::ysize:
     case Knob::wvwn:
         return f.wvwn;
     case Knob::count_:
@@ -212,9 +205,9 @@ const char* policy_site_name(PolicySite site) noexcept {
 KnobMask site_available_knobs(PolicySite site) noexcept {
     // Knobs known before finalization at either exploration site.
     static const KnobMask exploration = make_mask({
-        Knob::red, Knob::nred, Knob::dim, Knob::ndim, Knob::bucket, Knob::nbucket, Knob::yw, Knob::nyw,
-        Knob::zw, Knob::nzw, Knob::zsize, Knob::max_red, Knob::nmax_red, Knob::source, Knob::bucket_id,
-        Knob::bn, Knob::dn, Knob::wvwn,
+        Knob::red, Knob::dim, Knob::ndim, Knob::bucket, Knob::yw, Knob::nyw,
+        Knob::zw, Knob::nzw, Knob::zsize, Knob::max_red, Knob::source, Knob::bucket_id,
+        Knob::dn, Knob::wvwn, Knob::ysize,
     });
     // Finalization additionally sees tohpe_dim, the SeenValues ranks, the pool
     // composition and the k/l indices.
@@ -222,6 +215,7 @@ KnobMask site_available_knobs(PolicySite site) noexcept {
         Knob::tohpe, Knob::ntohpe, Knob::rank_red, Knob::nrank_red, Knob::rank_dim, Knob::nrank_dim,
         Knob::rank_score, Knob::nrank_score, Knob::pool_size, Knob::pool_tohpe, Knob::pool_prefix,
         Knob::pool_todd, Knob::f_tohpe, Knob::f_prefix, Knob::f_todd, Knob::k_idx, Knob::l_idx,
+        Knob::population_size,
     });
 
     switch (site) {

@@ -448,6 +448,9 @@ class MatrixWithData {
     const ToddIndex& index() const;
     bool has_index() const noexcept { return index_.has_value(); }
     int lazy_mode() const noexcept { return lazy_mode_; }
+    // Lazy construction already rejects zero/repeated rows. The materialized
+    // index records the same property during its single-row insertion pass.
+    bool has_canonical_rows() const { return lazy_mode_ != 0 || index().has_canonical_rows(); }
     mutable std::size_t row_bucket_calls = 0;
     mutable std::size_t source_cache_hits = 0;
     mutable std::size_t topk_cache_entries = 0;
@@ -494,6 +497,7 @@ class Witness {
     virtual auto get_Y() const -> const Matrix& = 0;
 
     auto vector() const -> const auto& { return z_; }
+    // Input row count minus canonical output row count (not GF(2) matrix rank).
     auto rank_divergence(RowCView y) const -> int;
     auto get_special() const -> index_t { return special_; }
     auto get_pairs() const -> const std::vector<std::pair<index_t, index_t>>& { return pairs_; }

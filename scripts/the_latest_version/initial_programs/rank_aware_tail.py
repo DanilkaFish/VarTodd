@@ -76,14 +76,14 @@ TARGET_MAX_RED = 10
 @policy.exploration
 def explore_score(k, p, fn):
     """Linear in the five exploration knobs, shared by both rank bands."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+    return (k.red * p.w(0) + k.ndim * p.w(1) + k.bucket * p.w(2)
             + k.nyw * p.w(3) + k.nzw * p.w(4))
 
 
 @policy.final
 def final_head(k, p, fn):
     """Head: reduction and basis dimension, while reductions are still large."""
-    return k.nred * p.w(0) + k.ndim * p.w(1) + k.ntohpe * p.w(2)
+    return k.red * p.w(0) + k.ndim * p.w(1) + k.ntohpe * p.w(2)
 
 
 @policy.final
@@ -96,7 +96,7 @@ def final_tail(k, p, fn):
     """
     rank_term = k.nrank_red * p.w(1) + k.nrank_score * p.w(2)
     source_term = k.f_todd * p.w(3) + k.f_tohpe * p.w(4)
-    return k.nred * p.w(0) + rank_term + source_term + k.ntohpe * p.w(5)
+    return k.red * p.w(0) + rank_term + source_term + k.ntohpe * p.w(5)
 
 
 class Evaluator(BaseEvaluator):

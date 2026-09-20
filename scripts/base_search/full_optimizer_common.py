@@ -187,7 +187,7 @@ def _pool_score(k, p, fn):
     and pow=1, polynom_scoring reduces to plain w[i]*x[i] for these
     non-negative knobs.
     """
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+    return (k.red * p.w(0) + k.ndim * p.w(1) + k.bucket * p.w(2)
             + k.nyw * p.w(3) + k.nzw * p.w(4))
 
 
@@ -196,14 +196,12 @@ def _final_score(k, p, fn):
     """Squared distance from tuned centers.
 
     Replaces the legacy FinalizationScore(weights, centers, pow=2). The
-    reduction center (p.w(6)) is a raw target-reduction count, so it is
-    divided by bn and 2 before comparing against nred, matching the legacy
-    first_center_scale applied to the reduction term only.
+    The reduction center (p.w(6)) is compared directly in raw reduction units.
     """
     return (
-        p.w(0) * (k.nred - p.w(6) / k.bn / 2) ** 2
+        p.w(0) * (k.red - p.w(6)) ** 2
         + p.w(1) * (k.ndim - p.w(7)) ** 2
-        + p.w(2) * (k.nbucket - p.w(8)) ** 2
+        + p.w(2) * (k.bucket - p.w(8)) ** 2
         + p.w(3) * (k.nyw - p.w(9)) ** 2
         + p.w(4) * (k.nzw - p.w(10)) ** 2
         + p.w(5) * (k.ntohpe - p.w(11)) ** 2

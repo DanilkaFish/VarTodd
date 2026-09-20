@@ -16,12 +16,12 @@ MAX_DEPTH = max(500, RANK_SPAN + 64)
 
 @policy.exploration
 def explore_score(k, p, fn):
-    return fn.where(k.nred < 0.05, k.nbucket * p.w(0), k.nred * p.w(1)) + k.ndim * p.w(2) + k.nyw * p.w(3) + k.nzw * p.w(4)
+    return fn.where(k.red < 0.05, k.bucket * p.w(0), k.red * p.w(1)) + k.ndim * p.w(2) + k.nyw * p.w(3) + k.nzw * p.w(4)
 
 
 @policy.final
 def final_score(k, p, fn):
-    return k.nred * p.w(0) + k.ndim * p.w(1) + k.ntohpe * p.w(2)
+    return k.red * p.w(0) + k.ndim * p.w(1) + k.ntohpe * p.w(2)
 
 
 def disabled_todd():

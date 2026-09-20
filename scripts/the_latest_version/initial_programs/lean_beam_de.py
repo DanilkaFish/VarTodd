@@ -56,7 +56,7 @@ def explore_score(k, p, fn):
     damped rather than merely penalized by an additive term it can outweigh
     with a large reduction.
     """
-    saturating = fn.tanh(k.nred * fn.abs(p.w(1)) + 0.01) * p.w(0)
+    saturating = fn.tanh(k.red * fn.abs(p.w(1)) + 0.01) * p.w(0)
     sparsity = fn.sigmoid(p.w(2) - (k.nyw + k.nzw) * fn.abs(p.w(3)))
     return saturating * sparsity + k.ndim * p.w(4)
 
@@ -71,7 +71,7 @@ def final_score(k, p, fn):
     of bucket -- and it is a quotient no weighted sum over the two can express.
     """
     realized = k.red / fn.max(k.bucket, 1.0)
-    return (k.nred * p.w(0)
+    return (k.red * p.w(0)
             + realized * p.w(1)
             + fn.sqrt(fn.max(k.ndim, 0.0)) * p.w(2)
             + k.ntohpe * p.w(3)

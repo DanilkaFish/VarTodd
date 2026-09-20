@@ -15,7 +15,7 @@ from .policy import PolicyExpr, from_expression
 
 # Feature order of the legacy scores, from ExplorationScore::evaluate_features
 # and FinalizationScore::operator() in include/todd_generator.hpp.
-EXPLORATION_FEATURES = ("nred", "ndim", "nbucket", "nyw", "nzw")
+EXPLORATION_FEATURES = ("red", "ndim", "bucket", "nyw", "nzw")
 FINALIZATION_FEATURES = EXPLORATION_FEATURES + ("ntohpe",)
 
 
@@ -55,28 +55,21 @@ def polynom_score(
     pow: float = 2.0,
     *,
     site: str = SITE_EXPLORATION,
-    bn: float = None,
 ) -> PolicyExpr:
     """sum_i w[i] * |x[i] - c[i]|^pow -- ScoringFunction::POLYNOM.
 
-    The legacy form scales the *first* center by ``1 / bn / 2`` so that a center
-    expressed in raw reduction units lands in normalized space. `bn` varies per
-    iteration, so it is read as a knob rather than baked in.
+    Centers are interpreted directly in the same raw feature units as the
+    candidate knobs.
     """
     n = min(len(weights), len(centers))
     xs = _features(site, n)
     total = None
-    knobs = Knobs(site)
     for i in range(n):
         w = float(weights[i])
         if w == 0.0:
             continue
         c = float(centers[i])
-        if i == 0:
-            # first_center_scale = 1 / bn / 2
-            center = c / knobs.bn / 2.0 if bn is None else Expr._coerce(c / bn / 2.0)
-        else:
-            center = Expr._coerce(c)
+        center = Expr._coerce(c)
         d = FN.abs(xs[i] - center)
         if pow >= 0:
             term = (d * d) if pow == 2.0 else FN.pow(d, float(pow))
@@ -137,12 +130,12 @@ def log_score(weights: Sequence[float], *, site: str = SITE_EXPLORATION) -> Poli
 
 def greedy(site: str = SITE_EXPLORATION) -> PolicyExpr:
     """Pure reduction-greedy: the fixed policy the benchmarks mimic."""
-    return _LiteralExpr("greedy", site, Knobs(site).nred)
+    return _LiteralExpr("greedy", site, Knobs(site).red)
 
 
 def anti_greedy(site: str = SITE_EXPLORATION) -> PolicyExpr:
     """Reduction-averse; the counterpart used to probe the search space."""
-    return _LiteralExpr("anti_greedy", site, -Knobs(site).nred)
+    return _LiteralExpr("anti_greedy", site, -Knobs(site).red)
 
 
 def weighted(n: int, site: str = SITE_EXPLORATION) -> PolicyExpr:

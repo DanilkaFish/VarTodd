@@ -55,15 +55,15 @@ TARGET_MAX_RED = 10
 @policy.exploration
 def explore_score(k, p, fn):
     """Linear in the five exploration knobs."""
-    return (k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2)
+    return (k.red * p.w(0) + k.ndim * p.w(1) + k.bucket * p.w(2)
             + k.nyw * p.w(3) + k.nzw * p.w(4))
 
 
 @policy.final
 def final_score(k, p, fn):
     """Linear, with tuned centers on the basis dimension and the y weight."""
-    return (k.nred * p.w(0) + fn.abs(k.ndim - p.w(6)) * p.w(1)
-            + k.nbucket * p.w(2) + fn.abs(k.nyw - p.w(7)) * p.w(3)
+    return (k.red * p.w(0) + fn.abs(k.ndim - p.w(6)) * p.w(1)
+            + k.bucket * p.w(2) + fn.abs(k.nyw - p.w(7)) * p.w(3)
             + k.nzw * p.w(4) + k.ntohpe * p.w(5))
 
 

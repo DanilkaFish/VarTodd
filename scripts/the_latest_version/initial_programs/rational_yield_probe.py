@@ -49,7 +49,7 @@ def explore_score(k, p, fn):
     """
     yield_per_dim = k.red / fn.max(k.dim, 1.0)
     relative_z = k.zsize / fn.max(k.wvwn, 1.0)
-    return yield_per_dim * p.w(0) + k.nred * p.w(1) - relative_z * fn.abs(p.w(2))
+    return yield_per_dim * p.w(0) + k.red * p.w(1) - relative_z * fn.abs(p.w(2))
 
 
 @policy.final
@@ -65,7 +65,7 @@ def final_score(k, p, fn):
     sources = k.pool_todd + k.pool_tohpe + k.pool_prefix
     crowding = k.pool_size / fn.max(sources, 1.0)
     return (
-        k.nred * p.w(0) * fn.clip(crowding, 0.25, 4.0)
+        k.red * p.w(0) * fn.clip(crowding, 0.25, 4.0)
         + k.ntohpe * p.w(1)
         + (1.0 - k.nrank_score) * p.w(2)
     )

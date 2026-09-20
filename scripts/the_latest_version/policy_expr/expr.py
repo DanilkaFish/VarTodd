@@ -44,18 +44,15 @@ OP_SELECT = 27
 # Knob names in the order of the Knob enum in include/policy_expr.hpp.
 KNOB_NAMES: Tuple[str, ...] = (
     "red",
-    "nred",
     "dim",
     "ndim",
     "bucket",
-    "nbucket",
     "yw",
     "nyw",
     "zw",
     "nzw",
     "zsize",
     "max_red",
-    "nmax_red",
     "tohpe",
     "ntohpe",
     "rank_red",
@@ -75,9 +72,10 @@ KNOB_NAMES: Tuple[str, ...] = (
     "bucket_id",
     "k_idx",
     "l_idx",
-    "bn",
     "dn",
     "wvwn",
+    "ysize",
+    "population_size",
 )
 
 KNOB_INDEX: Dict[str, int] = {name: i for i, name in enumerate(KNOB_NAMES)}
@@ -86,26 +84,24 @@ KNOB_INDEX: Dict[str, int] = {name: i for i, name in enumerate(KNOB_NAMES)}
 # sees is generated from this file rather than maintained separately.
 KNOB_DOC: Dict[str, str] = {
     "red": "raw T-count reduction this action achieves (the primary objective signal)",
-    "nred": "red / bn / 2 -- reduction as a fraction of the largest reduction possible this iteration; use in sums, but see the ratio note below",
     "dim": "raw dimension of the solution basis at this bucket",
     "ndim": "basis dimension normalized: dim / dn",
     "bucket": "raw size of the collision bucket the candidate came from",
-    "nbucket": "bucket size normalized: bucket / bn",
     "yw": "raw Hamming weight of the candidate vector y",
-    "nyw": "y weight normalized by the number of parity rows: yw / wvwn",
+    "nyw": "y weight normalized by the number of parity rows: yw / ysize",
     "zw": "raw Hamming weight of the z vector",
     "nzw": "density of z: zw / max(1, zsize)",
     "zsize": "length of the z vector",
     "max_red": "theoretical reduction ceiling for this bucket; always 2 * bucket",
-    "nmax_red": "max_red / bn / 2 -- IDENTICAL to nbucket (both are bucket/bn), prefer nbucket",
     "tohpe": "TOHPE dimension of the resulting state (finalization only)",
     "ntohpe": "TOHPE dimension normalized: tohpe / dn (finalization only)",
-    "rank_red": "how many candidates in the population beat this reduction (finalization only)",
-    "nrank_red": "rank_red as a fraction of the pool (finalization only)",
-    "rank_dim": "how many candidates beat this basis dimension (finalization only)",
-    "nrank_dim": "rank_dim as a fraction of the pool (finalization only)",
-    "rank_score": "how many candidates beat this pool score (finalization only)",
-    "nrank_score": "rank_score as a fraction of the pool (finalization only)",
+    "rank_red": "number of generated positive candidates with strictly greater reduction (finalization only)",
+    "nrank_red": "rank_red / max(1, population_size), using the same generated population (finalization only)",
+    "rank_dim": "number of generated positive candidates with strictly greater basis dimension (finalization only)",
+    "nrank_dim": "rank_dim / max(1, population_size), using the same generated population (finalization only)",
+    "rank_score": "number of generated positive candidates with strictly greater exploration score (finalization only)",
+    "nrank_score": "rank_score / max(1, population_size), using the same generated population (finalization only)",
+    "population_size": "number of generated positive candidates before pool truncation and state deduplication (finalization only)",
     "pool_size": "number of candidates in the finalized pool (finalization only)",
     "pool_tohpe": "how many pool candidates came from the standalone TOHPE source",
     "pool_prefix": "how many pool candidates came from the TOHPE-prefix source",
@@ -117,9 +113,9 @@ KNOB_DOC: Dict[str, str] = {
     "bucket_id": "identifier of the originating bucket",
     "k_idx": "first index of the action pair (finalization only)",
     "l_idx": "second index of the action pair (finalization only)",
-    "bn": "normalizer: the largest bucket size this iteration",
     "dn": "normalizer: TOHPE dimension plus five",
-    "wvwn": "normalizer: number of rows in the parity matrix",
+    "wvwn": "legacy alias of ysize: number of rows in the parity matrix",
+    "ysize": "y-vector width: number of rows in the parity matrix; nyw = yw / ysize",
 }
 
 # Knobs readable at each site. Mirrors site_available_knobs() in
@@ -130,16 +126,15 @@ SITE_FINAL = "final"
 
 _EXPLORATION_KNOBS = frozenset(
     {
-        "red", "nred", "dim", "ndim", "bucket", "nbucket", "yw", "nyw",
-        "zw", "nzw", "zsize", "max_red", "nmax_red", "source", "bucket_id",
-        "bn", "dn", "wvwn",
+        "red", "dim", "ndim", "bucket", "yw", "nyw", "zw", "nzw",
+        "zsize", "max_red", "source", "bucket_id", "dn", "wvwn", "ysize",
     }
 )
 _FINAL_ONLY_KNOBS = frozenset(
     {
         "tohpe", "ntohpe", "rank_red", "nrank_red", "rank_dim", "nrank_dim",
         "rank_score", "nrank_score", "pool_size", "pool_tohpe", "pool_prefix",
-        "pool_todd", "f_tohpe", "f_prefix", "f_todd", "k_idx", "l_idx",
+        "pool_todd", "f_tohpe", "f_prefix", "f_todd", "k_idx", "l_idx", "population_size",
     }
 )
 SITE_KNOBS: Dict[str, frozenset] = {
@@ -180,7 +175,7 @@ class Expr:
     """A symbolic value. Operators build nodes instead of computing numbers."""
 
     __slots__ = ("_node",)
-    # Beat numpy's array operators: `2.0 * k.nred` with a numpy scalar on the
+    # Beat numpy's array operators: `2.0 * k.red` with a numpy scalar on the
     # left must build a node, not an elementwise array.
     __array_priority__ = 1000.0
 
@@ -557,8 +552,6 @@ def describe_knobs(site: str = None) -> str:
     lines.append("      fn.abs fn.min fn.max fn.pow fn.clip fn.where fn.not_")
     lines.append("free scalars: p.w(0), p.w(1), ... supplied by policy_mapping()")
     lines.append("")
-    lines.append("Ratios: every n* knob divides by the same per-iteration normalizer, so a")
-    lines.append("ratio of two of them cancels it and is the raw ratio with a redundant")
-    lines.append("division -- write k.red / k.bucket, not k.nred / k.nbucket. The n* forms")
-    lines.append("are for sums, where a shared scale keeps terms comparable across ranks.")
+    lines.append("Reduction and bucket features are exposed in raw units; use k.red and k.bucket")
+    lines.append("directly or form an explicit ratio for reduction efficiency.")
     return "\n".join(lines)
