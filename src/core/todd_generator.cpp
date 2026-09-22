@@ -500,6 +500,57 @@ std::vector<Candidate> merge_source_candidates(std::vector<Candidate> tohpe, std
     return out;
 }
 
+FinalizedActions limit_unique_actions(FinalizedActions all, std::size_t final_size, std::size_t tohpe_reserve,
+                                      std::size_t tohpeprefix_reserve, std::size_t todd_reserve) {
+    if (all.size() <= final_size && tohpe_reserve == 0 && tohpeprefix_reserve == 0 && todd_reserve == 0)
+        return all;
+
+    std::vector<bool> selected(all.size(), false);
+    std::vector<std::size_t> order;
+    order.reserve(std::min(final_size, all.size()));
+
+    auto take_source_quota = [&](Int source, std::size_t desired) {
+        if (desired == 0 || order.size() >= final_size)
+            return;
+        std::vector<std::size_t> candidates;
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            if (!selected[i] && all[i].candidate.source == source)
+                candidates.push_back(i);
+        }
+        std::ranges::sort(candidates, [&](std::size_t a, std::size_t b) {
+            return pool_preferred(all[a].candidate, all[b].candidate);
+        });
+        const auto n = std::min({desired, final_size - order.size(), candidates.size()});
+        for (std::size_t i = 0; i < n; ++i) {
+            selected[candidates[i]] = true;
+            order.push_back(candidates[i]);
+        }
+    };
+
+    take_source_quota(CandidateSourceTohpe, tohpe_reserve);
+    take_source_quota(CandidateSourceTohpePrefix, tohpeprefix_reserve);
+    take_source_quota(CandidateSourceTodd, todd_reserve);
+
+    std::vector<std::size_t> rest;
+    rest.reserve(all.size() - order.size());
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        if (!selected[i])
+            rest.push_back(i);
+    }
+    std::ranges::sort(rest, [&](std::size_t a, std::size_t b) {
+        return pool_preferred(all[a].candidate, all[b].candidate);
+    });
+    const auto remaining = std::min(final_size - order.size(), rest.size());
+    for (std::size_t i = 0; i < remaining; ++i)
+        order.push_back(rest[i]);
+
+    FinalizedActions out;
+    out.reserve(order.size());
+    for (const auto i : order)
+        out.push_back(std::move(all[i]));
+    return out;
+}
+
 Row linear_combination_from_basis(const Matrix& basis, RowCView coefs) {
     if (coefs.size() > basis.rows()) {
         throw std::runtime_error("Number of coefs more than basis size");
@@ -875,12 +926,18 @@ void generate_bucket_candidates(PolicyIterationContext& ctx, const NormalizedPol
 
 FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, const NormalizedPolicyConfig& config,
                                                GenerationOutput& out) {
-    auto merged_candidates =
-        merge_source_candidates(out.pools.tohpe_pool.release_unsorted(), out.pools.tohpeprefix_pool.release_unsorted(),
-                                out.pools.todd_pool.release_unsorted(), config.pool.final_size,
-                                static_cast<std::size_t>(config.tohpe.pool.reserve),
-                                static_cast<std::size_t>(config.tohpeprefix.pool.reserve),
-                                static_cast<std::size_t>(config.todd.pool.reserve));
+    auto tohpe_candidates       = out.pools.tohpe_pool.release_unsorted();
+    auto tohpeprefix_candidates = out.pools.tohpeprefix_pool.release_unsorted();
+    auto todd_candidates        = out.pools.todd_pool.release_unsorted();
+    const auto all_candidates   = tohpe_candidates.size() + tohpeprefix_candidates.size() + todd_candidates.size();
+    // Do not apply final_size before canonical-state deduplication. Different
+    // coefficient vectors can produce the same parity state, so an early cap
+    // can discard a state that would have survived after deduplication.
+    auto merged_candidates = merge_source_candidates(
+        std::move(tohpe_candidates), std::move(tohpeprefix_candidates), std::move(todd_candidates), all_candidates,
+        static_cast<std::size_t>(config.tohpe.pool.reserve),
+        static_cast<std::size_t>(config.tohpeprefix.pool.reserve),
+        static_cast<std::size_t>(config.todd.pool.reserve));
     if (!ctx.data->has_index()) {
         std::vector<Row> keys;
         for (const auto& c : merged_candidates) if (c.is_tohpe()) keys.push_back(c.z);
@@ -896,14 +953,13 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
     auto       get_tohpe_gen  = [&]() -> TohpeGenerator& { return ctx.get_tohpe_gen(); };
     auto       get_full_gen   = [&]() -> FullToddGenerator& { return ctx.get_full_gen(); };
 
-    // Group equivalent parity states before scoring. Keep every member until
-    // the unique pool composition is known, since final policies can read it.
-    // Metadata comes from a deterministic representative independent of the
-    // final score, avoiding a circular dependency through pool source counts.
-    FinalizedActions finalized;
-    finalized.reserve(merged_candidates.size());
-    std::vector<std::vector<Candidate>> duplicates;
-    duplicates.reserve(merged_candidates.size());
+    // Group equivalent parity states before applying final_size. Keep the
+    // representative with the greatest exploration score: this makes the
+    // deduplication decision independent of the final policy score and avoids
+    // averaging or retaining a weaker candidate merely because it was seen
+    // first.
+    FinalizedActions unique;
+    unique.reserve(merged_candidates.size());
     std::vector<std::uint8_t> scratch_killed;
     for (auto& cand : merged_candidates) {
         auto ns    = make_candidate_nullspace(cand, get_tohpe_gen, get_full_gen);
@@ -915,17 +971,18 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
         cand.num_better_dim        = out.svs.better_dim(cand.basis_dim);
         cand.num_better_red        = out.svs.better_red(cand.reduction);
         cand.num_better_pool_score = out.svs.better_score(cand.pool_score);
-        auto same_state = std::find_if(finalized.begin(), finalized.end(),
+        auto same_state = std::find_if(unique.begin(), unique.end(),
                                        [&](const FinalizedAction& action) { return action.state == state; });
-        if (same_state == finalized.end()) {
-            finalized.push_back(FinalizedAction{std::move(cand), std::move(state)});
-            duplicates.emplace_back();
-        } else {
-            if (candidate_tie_preferred(cand, same_state->candidate))
-                std::swap(cand, same_state->candidate);
-            duplicates[static_cast<std::size_t>(same_state - finalized.begin())].push_back(std::move(cand));
+        if (same_state == unique.end()) {
+            unique.push_back(FinalizedAction{std::move(cand), std::move(state)});
+        } else if (pool_preferred(cand, same_state->candidate)) {
+            same_state->candidate = std::move(cand);
         }
     }
+
+    auto finalized = limit_unique_actions(
+        std::move(unique), config.pool.final_size, static_cast<std::size_t>(config.tohpe.pool.reserve),
+        static_cast<std::size_t>(config.tohpeprefix.pool.reserve), static_cast<std::size_t>(config.todd.pool.reserve));
 
     const Int pool_size = detail::checked_int_from_index(finalized.size(), "Candidate pool size overflow");
     Int       pool_tohpe_size       = 0;
@@ -957,15 +1014,10 @@ FinalizedActions merge_and_finalize_candidates(PolicyIterationContext& ctx, cons
         return static_cast<double>(cand.final_score);
     };
 
-    // Average scores, not features: finalization expressions may be nonlinear.
-    // Use a sum and the full group size, rather than successive pairwise means.
     index_t n = 0;
     for (auto& action : finalized) {
         Candidate& cand = action.candidate;
-        double sum = score_member(cand);
-        for (auto& duplicate : duplicates[n])
-            sum += score_member(duplicate);
-        cand.final_score = static_cast<float>(sum / (duplicates[n].size() + 1));
+        cand.final_score = score_member(cand);
         ++n;
         const float tohpe = static_cast<float>(cand.tohpe_dim);
         out.stats.max_final_tohpe_dim = std::max(out.stats.max_final_tohpe_dim, tohpe);

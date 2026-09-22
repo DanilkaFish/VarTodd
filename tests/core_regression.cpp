@@ -742,7 +742,7 @@ void check_policy_iteration_merges_equivalent_parity_states() {
     require(first.stats.accepted > 1 && first.stats.accepted < 256,
             "collision fixture must admit all generated candidates without truncation");
     require(std::abs(chosen.final_score - first.stats.mean_reduction) < 1e-6f,
-            "equivalent parity states should average all finalization scores");
+            "equivalent parity states should retain the winning representative score");
     require(chosen.pool_size == 1 && chosen.pool_tohpe_size == 1 && chosen.pool_tohpeprefix_size == 0 &&
                 chosen.pool_todd_size == 0,
             "final pool metadata should describe unique state representatives");
@@ -752,22 +752,26 @@ void check_policy_iteration_merges_equivalent_parity_states() {
                 second.chosen[0].final_score == chosen.final_score && second.chosen[0].source == chosen.source,
             "equivalent-state finalization should remain fixed-seed repeatable");
 
-    // A nonlinear source score plus pool metadata checks that each colliding
-    // candidate is scored using the settled unique pool, before averaging.
+    // A nonlinear source score plus pool metadata checks that the retained
+    // exploration-score winner is scored using the settled unique pool.
     cfg.scores.final = PolicyProgram({
         {Op::LoadKnob, static_cast<std::uint16_t>(Knob::source)},
         {Op::LoadKnob, static_cast<std::uint16_t>(Knob::source)}, {Op::Mul, 0},
         {Op::LoadKnob, static_cast<std::uint16_t>(Knob::pool_size)},
         {Op::LoadConst, 0}, {Op::Mul, 0}, {Op::Add, 0}}, {10.0f}, 0, PolicySite::Finalization);
+    cfg.scores.exploration = PolicyProgram(
+        {{Op::LoadKnob, static_cast<std::uint16_t>(Knob::source)}}, {}, 0, PolicySite::ExplorationPool);
     const auto mixed = policy_iteration_impl(data, cfg, 123, 0);
     const auto& stats = mixed.stats;
-    const double expected_score = 10.0 + (stats.accepted_tohpe + 4.0 * stats.accepted_tohpeprefix +
-                                         9.0 * stats.accepted_todd) / stats.accepted;
     require(mixed.chosen.size() == 1 && stats.accepted_tohpe > 0 &&
                 stats.accepted_tohpeprefix + stats.accepted_todd > 0,
             "collision fixture must exercise multiple sources");
-    require(std::abs(mixed.chosen[0].final_score - expected_score) < 1e-6,
-            "collisions must average individual scores after pool composition is known");
+    const auto& mixed_chosen = mixed.chosen[0];
+    require(mixed_chosen.source == CandidateSourceTodd,
+            "equivalent states must retain the candidate with the greatest exploration score");
+    const double expected_score = 10.0 + static_cast<double>(mixed_chosen.source * mixed_chosen.source);
+    require(std::abs(mixed_chosen.final_score - expected_score) < 1e-6,
+            "collisions must score only the retained exploration-score winner");
 }
 
 void check_tohpe_only_policy_continues_after_todd_stops() {
